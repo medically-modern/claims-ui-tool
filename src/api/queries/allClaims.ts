@@ -71,15 +71,22 @@ const SUB_COL = {
 } as const;
 
 // ---------- HCPCS → product label ----------
+// HCPC code is authoritative for the product category. Monday subitem names
+// drift (sometimes "Cartridge" vs "Cartridges", sometimes "Infusion Set" on
+// an A4225 row); the HCPC code is the source of truth.
 const HCPC_TO_PRODUCT: Record<string, string> = {
-  A4230: "Infusion Set",
+  // Infusion sets
+  A4224: "Infusion Sets",
+  A4230: "Infusion Sets",
+  A4231: "Infusion Sets",
+  // Cartridges / reservoirs for the pump
+  A4225: "Cartridges",
   A4232: "Cartridges",
+  // CGM
   A4239: "CGM Sensors",
-  E0784: "Insulin Pump",
   E2103: "CGM Monitor",
-  A4224: "Insulin Pump Supplies",
-  A4225: "Insulin Pump Supplies",
-  A4231: "Infusion Set",
+  // Pump itself
+  E0784: "Insulin Pump",
 };
 
 // ---------- GraphQL ----------
@@ -257,8 +264,9 @@ function mapDenialAnalysis(label: string): DenialAnalysis {
   return map[t] ?? null;
 }
 
+/** Returns the product label for a known HCPC, or empty string when unmapped. */
 function productFromHcpc(hcpc: string): string {
-  return HCPC_TO_PRODUCT[hcpc.toUpperCase()] ?? hcpc;
+  return HCPC_TO_PRODUCT[hcpc.toUpperCase()] ?? "";
 }
 
 // ---------- subitem mapper ----------
@@ -271,10 +279,10 @@ function mapSubitemToLine(sub: MondaySubitem): ServiceLine {
   const carcCodes = arr(sub, SUB_COL.CARC);
   const rarcCodes = arr(sub, SUB_COL.RARC);
   const adjustmentReasons = arr(sub, SUB_COL.PARSED_ADJUSTMENT_REASONS);
-  // Prefer the subitem name from Monday — the data team labels each line
-  // (e.g. "Infusion Set", "Cartridge", "CGM Sensors") which is more accurate
-  // than a generic HCPC→product lookup (multiple HCPCs can share a category).
-  const product = sub.name?.trim() || productFromHcpc(hcpc) || hcpc;
+  // HCPC code is authoritative — the data team's subitem names drift, but
+  // the HCPC column is a controlled status field. Fall back to subitem name
+  // only when the HCPC code is missing or unrecognized.
+  const product = productFromHcpc(hcpc) || sub.name?.trim() || hcpc;
   return {
     id: sub.id,
     product,
