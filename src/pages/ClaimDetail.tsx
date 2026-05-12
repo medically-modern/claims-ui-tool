@@ -21,6 +21,8 @@ import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { getClaim } from "@/lib/claims/mockData";
+import { useAllClaims } from "@/hooks/useAllClaims";
+import { hasMondayToken } from "@/api/monday";
 import {
   carcMeaning, claimAge, eraReceived, fmtDate, fmtMoney, lineStatus,
   suggestedOutcome, variance, variancePretty,
@@ -58,7 +60,32 @@ const DENIAL_ACTION_OPTIONS: NonNullable<DenialAction>[] = [
 const ClaimDetail = () => {
   const { claimId } = useParams<{ claimId: string }>();
   const navigate = useNavigate();
-  const initial = claimId ? getClaim(claimId) : undefined;
+
+  // Look up the claim from real Monday data first; fall back to mock when
+  // no token is configured (local dev). Match by Claim ID column or by the
+  // Monday item id, since some claims don't have a Claim ID set yet.
+  const { data: mondayClaims, isLoading: claimsLoading } = useAllClaims();
+  const initial = (() => {
+    if (!claimId) return undefined;
+    if (hasMondayToken()) {
+      if (!mondayClaims) return undefined; // still loading
+      return mondayClaims.find(
+        (c) => c.id === claimId || c.mondayItemId === claimId,
+      );
+    }
+    return getClaim(claimId);
+  })();
+
+  if (hasMondayToken() && claimsLoading && !initial) {
+    return (
+      <div className="min-h-screen bg-background">
+        <AppHeader title="Loading…" showBack />
+        <main className="mx-auto max-w-[1440px] px-6 py-12">
+          <p className="text-muted-foreground">Fetching claim {claimId} from Monday…</p>
+        </main>
+      </div>
+    );
+  }
 
   if (!initial) {
     return (

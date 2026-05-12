@@ -42,6 +42,11 @@ export function PrimaryStatusBadge({ status }: { status: PrimaryStatus }) {
     Outstanding: "warning",
     "Bad Debt": "neutral",
     "Request Rejected": "danger",
+    "Submit Claim": "info",
+    Late: "danger",
+    Appeals: "warning",
+    "Future Claim": "neutral",
+    "Not Started Yet": "neutral",
   };
   return <StatusBadge tone={map[status]}>{status}</StatusBadge>;
 }

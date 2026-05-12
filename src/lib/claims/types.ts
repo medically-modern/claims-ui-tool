@@ -1,11 +1,16 @@
 export type PrimaryStatus =
+  | "Submit Claim"
   | "Submitted"
   | "Outstanding"
+  | "Late"
   | "Review"
+  | "Appeals"
   | "Paid"
   | "Denied (Or Partly)"
   | "Bad Debt"
-  | "Request Rejected";
+  | "Request Rejected"
+  | "Future Claim"
+  | "Not Started Yet";
 
 export type ClaimStatusCategory =
   | "Paid"

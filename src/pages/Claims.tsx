@@ -16,7 +16,9 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { MOCK_CLAIMS } from "@/lib/claims/mockData";
+import { MOCK_CLAIMS as MOCK_CLAIMS_FALLBACK } from "@/lib/claims/mockData";
+import { useAllClaims } from "@/hooks/useAllClaims";
+import { hasMondayToken } from "@/api/monday";
 import {
   claimAge, eraReceived, fmtDate, fmtMoney, priorityOf, shortIssue, variance,
 } from "@/lib/claims/logic";
@@ -258,6 +260,15 @@ const Claims = () => {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [expandedThread, setExpandedThread] = useState<string | null>(null);
   const { claims: threadClaims } = useThreadClaims();
+
+  // Real claims from Monday (the Primary Board's data source). Fall back to
+  // mock data when no Monday token is configured so local dev still works.
+  const { data: mondayClaims, isFetching: claimsLoading, refetch: refetchClaims } =
+    useAllClaims();
+  const MOCK_CLAIMS = hasMondayToken()
+    ? mondayClaims ?? []
+    : MOCK_CLAIMS_FALLBACK;
+
   // Local in-row state for "Run Status Check" on Late ERAs
   const [statusChecks, setStatusChecks] = useState<Record<string, StatusCheckRecord>>(() => {
     const seed: Record<string, StatusCheckRecord> = {};
@@ -279,7 +290,7 @@ const Claims = () => {
     outstanding: MOCK_CLAIMS.filter(inOutstanding).length,
     paid: MOCK_CLAIMS.filter(inPaid).length,
     all: MOCK_CLAIMS.filter(inAllOpen).length,
-  }), []);
+  }), [MOCK_CLAIMS]);
 
   const eraStats = useMemo(() => {
     const list = MOCK_CLAIMS.filter(inEraReview);
@@ -294,7 +305,7 @@ const Claims = () => {
         return new Date(c.rawEraDate) < new Date(acc) ? c.rawEraDate : acc;
       }, null),
     };
-  }, []);
+  }, [MOCK_CLAIMS]);
 
   const lateEraStats = useMemo(() => {
     const list = MOCK_CLAIMS.filter(inLateEra);
@@ -307,7 +318,7 @@ const Claims = () => {
       }).length,
       estPay: list.reduce((s, c) => s + c.estPay, 0),
     };
-  }, []);
+  }, [MOCK_CLAIMS]);
 
   const denialStats = useMemo(() => {
     const list = MOCK_CLAIMS.filter(inDenied);
@@ -321,7 +332,7 @@ const Claims = () => {
         return new Date(c.rawEraDate) < new Date(acc) ? c.rawEraDate : acc;
       }, null),
     };
-  }, []);
+  }, [MOCK_CLAIMS]);
 
   const outstandingStats = useMemo(() => {
     const list = MOCK_CLAIMS.filter(inOutstanding);
@@ -333,7 +344,7 @@ const Claims = () => {
       avgEstPay: list.length ? estPay / list.length : 0,
       avgDays: ages.length ? Math.round(ages.reduce((s, a) => s + a, 0) / ages.length) : 0,
     };
-  }, []);
+  }, [MOCK_CLAIMS]);
 
   const paidStats = useMemo(() => {
     const list = MOCK_CLAIMS.filter(inPaid);
@@ -342,7 +353,7 @@ const Claims = () => {
       estPay: list.reduce((s, c) => s + c.estPay, 0),
       paid: list.reduce((s, c) => s + c.primaryPaid, 0),
     };
-  }, []);
+  }, [MOCK_CLAIMS]);
 
   const allStats = useMemo(() => {
     const list = MOCK_CLAIMS.filter(inAllOpen);
@@ -351,11 +362,11 @@ const Claims = () => {
       estPay: list.reduce((s, c) => s + c.estPay, 0),
       paid: list.reduce((s, c) => s + c.primaryPaid, 0),
     };
-  }, []);
+  }, [MOCK_CLAIMS]);
 
   const payers = useMemo(
     () => Array.from(new Set(MOCK_CLAIMS.map((c) => c.primaryPayor))).sort(),
-    [],
+    [MOCK_CLAIMS],
   );
 
   const rows = useMemo(() => {
@@ -374,7 +385,7 @@ const Claims = () => {
         }
         return true;
       });
-  }, [category, search, payerFilter, statusFilter]);
+  }, [MOCK_CLAIMS, category, search, payerFilter, statusFilter]);
 
   const columns = CATEGORY_COLUMNS[category];
 
