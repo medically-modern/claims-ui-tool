@@ -271,9 +271,13 @@ function mapSubitemToLine(sub: MondaySubitem): ServiceLine {
   const carcCodes = arr(sub, SUB_COL.CARC);
   const rarcCodes = arr(sub, SUB_COL.RARC);
   const adjustmentReasons = arr(sub, SUB_COL.PARSED_ADJUSTMENT_REASONS);
+  // Prefer the subitem name from Monday — the data team labels each line
+  // (e.g. "Infusion Set", "Cartridge", "CGM Sensors") which is more accurate
+  // than a generic HCPC→product lookup (multiple HCPCs can share a category).
+  const product = sub.name?.trim() || productFromHcpc(hcpc) || hcpc;
   return {
     id: sub.id,
-    product: productFromHcpc(hcpc || sub.name),
+    product,
     hcpcs: hcpc || sub.name,
     modifiers: arr(sub, SUB_COL.MODIFIERS),
     units: num(sub, SUB_COL.CLAIM_QTY) || num(sub, SUB_COL.ORDER_QTY),
