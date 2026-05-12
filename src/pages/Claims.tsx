@@ -298,6 +298,7 @@ const Claims = () => {
       count: list.length,
       estPay: list.reduce((s, c) => s + c.estPay, 0),
       paid: list.reduce((s, c) => s + c.primaryPaid, 0),
+      pr: list.reduce((s, c) => s + c.prAmount, 0),
       diff: list.reduce((s, c) => s + variance(c), 0),
       oldest: list.reduce<string | null>((acc, c) => {
         if (!c.dos) return acc;
@@ -325,6 +326,8 @@ const Claims = () => {
     return {
       count: list.length,
       estPay: list.reduce((s, c) => s + c.estPay, 0),
+      paid: list.reduce((s, c) => s + c.primaryPaid, 0),
+      pr: list.reduce((s, c) => s + c.prAmount, 0),
       diff: list.reduce((s, c) => s + variance(c), 0),
       oldest: list.reduce<string | null>((acc, c) => {
         if (!c.dos) return acc;
@@ -357,10 +360,13 @@ const Claims = () => {
 
   const allStats = useMemo(() => {
     const list = MOCK_CLAIMS.filter(inAllOpen);
+    const estPay = list.reduce((s, c) => s + c.estPay, 0);
+    const paid = list.reduce((s, c) => s + c.primaryPaid, 0);
     return {
       count: list.length,
-      estPay: list.reduce((s, c) => s + c.estPay, 0),
-      paid: list.reduce((s, c) => s + c.primaryPaid, 0),
+      estPay,
+      paid,
+      unpaid: estPay - paid,
     };
   }, [MOCK_CLAIMS]);
 
@@ -446,6 +452,7 @@ const Claims = () => {
                 lines={[
                   { label: "Est. pay", value: fmtMoney0(eraStats.estPay) },
                   { label: "Paid", value: fmtMoney0(eraStats.paid) },
+                  { label: "PR", value: fmtMoney0(eraStats.pr) },
                   { label: "Variance", value: fmtMoney0(eraStats.diff) },
                   { label: "Oldest DOS", value: eraStats.oldest ? fmtDate(eraStats.oldest) : "—" },
                 ]}
@@ -472,6 +479,8 @@ const Claims = () => {
                 value={String(denialStats.count)}
                 lines={[
                   { label: "Est. pay", value: fmtMoney0(denialStats.estPay) },
+                  { label: "Paid", value: fmtMoney0(denialStats.paid) },
+                  { label: "PR", value: fmtMoney0(denialStats.pr) },
                   { label: "Variance", value: fmtMoney0(denialStats.diff) },
                   { label: "Oldest DOS", value: denialStats.oldest ? fmtDate(denialStats.oldest) : "—" },
                 ]}
@@ -511,6 +520,7 @@ const Claims = () => {
                 lines={[
                   { label: "Est. pay", value: fmtMoney0(allStats.estPay) },
                   { label: "Paid", value: fmtMoney0(allStats.paid) },
+                  { label: "Unpaid amount", value: fmtMoney0(allStats.unpaid) },
                 ]}
               />
             </section>

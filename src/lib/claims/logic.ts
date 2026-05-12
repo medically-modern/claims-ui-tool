@@ -23,10 +23,9 @@ export function eraReceived(claim: Claim): boolean {
 }
 
 export function variance(claim: Claim): number {
-  // Delta between what we expected to be paid and what the primary paid.
-  // Patient responsibility is NOT subtracted — PR is a separate balance the
-  // patient owes us, not a reason the primary paid less.
-  return claim.estPay - claim.primaryPaid;
+  // Variance = what's still missing after the primary paid AND the patient
+  // owes their share. estPay − primaryPaid − prAmount.
+  return claim.estPay - claim.primaryPaid - claim.prAmount;
 }
 
 export function variancePretty(claim: Claim): { label: string; tone: "balanced" | "short" | "over" } {
