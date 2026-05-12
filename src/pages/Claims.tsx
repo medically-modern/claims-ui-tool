@@ -628,14 +628,23 @@ const Claims = () => {
                                         );
                                       }
                                     }
+                                    // Labels (DOB:/ID:) are bold but un-selectable so a click on
+                                    // the value selects only the value. user-select:all on the
+                                    // value makes a single click highlight the entire string
+                                    // (incl. the slashes in the date) for clean copy-paste.
                                     return (
                                       <TableCell key={col} className="font-medium">
                                         <Link to={`/claims/${c.id}`} className="hover:underline">
                                           {c.patientName}
                                         </Link>
-                                        <div className="text-xs text-muted-foreground leading-tight">{fmtDate(c.dob)}</div>
-                                        <div className="text-xs text-muted-foreground leading-tight">{c.memberId}</div>
-                                        <div className="text-xs text-muted-foreground leading-tight">{c.claimId}</div>
+                                        <div className="text-xs text-muted-foreground leading-tight">
+                                          <span className="font-bold select-none">DOB: </span>
+                                          <span className="[user-select:all]">{fmtDate(c.dob)}</span>
+                                        </div>
+                                        <div className="text-xs text-muted-foreground leading-tight">
+                                          <span className="font-bold select-none">ID: </span>
+                                          <span className="[user-select:all]">{c.memberId}</span>
+                                        </div>
                                         {chip}
                                       </TableCell>
                                     );
