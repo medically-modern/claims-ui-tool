@@ -119,6 +119,16 @@ interface QueryResponse {
   next?: { cursor: string | null; items: MondayItem[] };
 }
 
+// Only request the columns we actually map. The board has ~66 parent columns
+// and ~54 subitem columns; we use ~21+16. Restricting projection cuts the
+// response size 3-4× and the API responds noticeably faster.
+const PARENT_COLUMN_IDS = Object.values(COL)
+  .map((id) => `"${id}"`)
+  .join(", ");
+const SUBITEM_COLUMN_IDS = Object.values(SUB_COL)
+  .map((id) => `"${id}"`)
+  .join(", ");
+
 const PAGE_QUERY = `
   query AllClaims($cursor: String) {
     boards(ids: [${CLAIMS_BOARD_ID}]) {
@@ -128,7 +138,7 @@ const PAGE_QUERY = `
           id
           name
           created_at
-          column_values {
+          column_values(ids: [${PARENT_COLUMN_IDS}]) {
             id
             text
             value
@@ -137,7 +147,7 @@ const PAGE_QUERY = `
           subitems {
             id
             name
-            column_values {
+            column_values(ids: [${SUBITEM_COLUMN_IDS}]) {
               id
               text
               value
