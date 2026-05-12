@@ -9,6 +9,7 @@ import NotFound from "./pages/NotFound.tsx";
 import Claims from "./pages/Claims.tsx";
 import ClaimDetail from "./pages/ClaimDetail.tsx";
 import { ThreadClaimsProvider } from "@/lib/claims/threadStore";
+import { BuildBadge } from "@/components/BuildBadge";
 
 const queryClient = new QueryClient();
 
@@ -26,6 +27,7 @@ const App = () => (
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
+          <BuildBadge />
         </ThreadClaimsProvider>
       </BrowserRouter>
     </TooltipProvider>

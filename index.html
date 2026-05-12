@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Don't cache the HTML — content-hashed JS/CSS assets are still long-cacheable.
+         This is the GitHub Pages workaround for the "blank page after deploy"
+         problem: the HTML references content-hashed asset filenames, so a stale
+         cached HTML points at JS files that no longer exist. -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>Claims Command Center</title>
     <meta name="description" content="Claims Command Center — operational dashboard for managing DME claim submission, ERAs, denials, and follow-ups.">
     <meta name="author" content="Medically Modern" />

@@ -33,6 +33,10 @@ jobs:
         run: npm run build
         env:
           VITE_MONDAY_API_TOKEN: ${{ secrets.VITE_MONDAY_API_TOKEN }}
+          # Surface the deployed commit in the UI so it's easy to tell which
+          # build is live after a deploy. Short SHA + timestamp.
+          VITE_BUILD_SHA: ${{ github.sha }}
+          VITE_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
