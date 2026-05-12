@@ -16,6 +16,9 @@ dist-ssr
 # Internal handoff doc — not for public repo
 CLAIMS_COMMAND_CENTER_HANDOFF.md
 
+# Local Monday board schema reference — regenerable via scripts/refresh-monday-schema.sh
+MONDAY_BOARD_SCHEMA.md
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
