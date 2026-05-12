@@ -332,15 +332,30 @@ function ClaimCard({
         </Field>
 
         <div className="col-span-2 flex justify-end">
-          <Button
-            size="sm"
-            className="h-7 w-full bg-emerald-700 text-white hover:bg-emerald-800"
-            onClick={onSubmit}
-            disabled={isLocked}
-          >
-            <Send className="mr-1 h-3.5 w-3.5" />
-            {isLocked ? "Submitted" : "Submit"}
-          </Button>
+          {/*
+            Submit button intentionally disabled while we verify real Monday
+            data end-to-end. Re-enable once the Monday write-back + Stedi 837
+            chain is ready. See the project handoff doc for the flow.
+          */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="w-full">
+                <Button
+                  size="sm"
+                  className="h-7 w-full bg-emerald-700 text-white hover:bg-emerald-800"
+                  disabled
+                  aria-disabled="true"
+                >
+                  <Send className="mr-1 h-3.5 w-3.5" />
+                  {isLocked ? "Submitted" : "Submit"}
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              Submission not yet wired — disabled while we verify real Monday
+              data. Will be enabled once the Stedi write-back is ready.
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
