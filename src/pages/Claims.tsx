@@ -211,7 +211,7 @@ function rowCta(c: Claim): string {
 }
 
 type ColumnKey =
-  | "patient" | "dos" | "products" | "productsDenied" | "payer" | "sent" | "age"
+  | "patient" | "dos" | "products" | "payer" | "sent" | "age"
   | "primary" | "s277" | "claimStatus" | "claimStatusLate"
   | "estPay" | "paid" | "pr" | "difference"
   | "issue" | "nextAction" | "action";
@@ -219,7 +219,7 @@ type ColumnKey =
 const CATEGORY_COLUMNS: Record<CategoryKey, ColumnKey[]> = {
   era:        ["patient", "dos", "products", "payer", "estPay", "paid", "pr", "difference", "action"],
   late:       ["patient", "dos", "products", "payer", "sent", "age", "s277", "estPay", "paid", "pr", "claimStatusLate"],
-  denied:     ["patient", "dos", "products", "productsDenied", "payer", "sent", "age", "estPay", "paid", "pr", "difference", "action"],
+  denied:     ["patient", "dos", "products", "payer", "sent", "age", "estPay", "paid", "pr", "difference", "action"],
   outstanding:["patient", "dos", "products", "payer", "sent", "age", "s277", "estPay", "paid", "pr", "action"],
   paid:       ["patient", "dos", "products", "payer", "sent", "estPay", "paid", "pr", "difference", "action"],
   
@@ -230,7 +230,6 @@ const COLUMN_LABELS: Record<ColumnKey, { label: string; align?: "right" }> = {
   patient: { label: "Patient" },
   dos: { label: "DOS" },
   products: { label: "Products" },
-  productsDenied: { label: "Products Denied" },
   payer: { label: "Primary Payor" },
   sent: { label: "Sent" },
   age: { label: "Age" },
@@ -635,18 +634,31 @@ const Claims = () => {
                                     return <TableCell key={col} className="text-sm">{fmtDate(c.dos)}</TableCell>;
                                   case "products": {
                                     const [row0, row1] = groupProductRows(c.lines);
-                                    const Chip = ({ label, product }: { label: string; product: string }) => {
-                                      const code = hcpcsForProduct(product);
+                                    const Chip = ({ line }: { line: ServiceLine }) => {
+                                      const code = hcpcsForProduct(line.product);
+                                      // Red pill for any denied/partial line; grey for paid.
+                                      const state = lineDenialState(line);
+                                      const isDenied = state !== "paid";
                                       const node = (
-                                        <span className="inline-flex h-6 items-center rounded-md bg-muted px-1.5 text-xs font-medium text-foreground whitespace-nowrap cursor-default">
-                                          {label}
+                                        <span
+                                          className={cn(
+                                            "inline-flex h-6 items-center rounded-md px-1.5 text-xs font-medium whitespace-nowrap cursor-default",
+                                            isDenied
+                                              ? "bg-danger-soft text-danger-soft-foreground"
+                                              : "bg-muted text-foreground",
+                                          )}
+                                        >
+                                          {productAbbr(line.product)}
                                         </span>
                                       );
                                       if (!code) return node;
+                                      const tooltip = isDenied
+                                        ? `${code} — ${state === "denied" ? "Denied" : "Partial"}`
+                                        : code;
                                       return (
                                         <Tooltip>
                                           <TooltipTrigger asChild>{node}</TooltipTrigger>
-                                          <TooltipContent>{code}</TooltipContent>
+                                          <TooltipContent>{tooltip}</TooltipContent>
                                         </Tooltip>
                                       );
                                     };
@@ -656,63 +668,15 @@ const Claims = () => {
                                           <div className="flex flex-col gap-1">
                                             {row0.length > 0 && (
                                               <div className="flex flex-nowrap gap-1">
-                                                {row0.map((l) => <Chip key={l.id} label={productAbbr(l.product)} product={l.product} />)}
+                                                {row0.map((l) => <Chip key={l.id} line={l} />)}
                                               </div>
                                             )}
                                             {row1.length > 0 && (
                                               <div className="flex flex-nowrap gap-1">
-                                                {row1.map((l) => <Chip key={l.id} label={productAbbr(l.product)} product={l.product} />)}
+                                                {row1.map((l) => <Chip key={l.id} line={l} />)}
                                               </div>
                                             )}
                                           </div>
-                                        </TooltipProvider>
-                                      </TableCell>
-                                    );
-                                  }
-                                  case "productsDenied": {
-                                    const flagged = c.lines
-                                      .map((l) => ({ l, s: lineDenialState(l) }))
-                                      .filter((x) => x.s !== "paid");
-                                    return (
-                                      <TableCell key={col} className="text-sm">
-                                        <TooltipProvider delayDuration={150}>
-                                          {flagged.length === 0 ? (
-                                            <span className="text-muted-foreground">—</span>
-                                          ) : (
-                                            <Tooltip>
-                                              <TooltipTrigger asChild>
-                                                {(() => {
-                                                  const [r0, r1] = groupProductRows(flagged.map(({ l, s }) => ({ ...l, _s: s })));
-                                                  const renderChip = (item: typeof r0[number]) => (
-                                                    <span
-                                                      key={item.id}
-                                                      className={cn(
-                                                        "inline-flex h-6 items-center rounded-md px-1.5 text-xs font-medium whitespace-nowrap",
-                                                        item._s === "denied"
-                                                          ? "bg-danger-soft text-danger-soft-foreground"
-                                                          : "bg-warning-soft text-warning-soft-foreground",
-                                                      )}
-                                                    >
-                                                      {productAbbr(item.product)}
-                                                    </span>
-                                                  );
-                                                  return (
-                                                    <div className="flex flex-col gap-1 cursor-default">
-                                                      {r0.length > 0 && <div className="flex flex-nowrap gap-1">{r0.map(renderChip)}</div>}
-                                                      {r1.length > 0 && <div className="flex flex-nowrap gap-1">{r1.map(renderChip)}</div>}
-                                                    </div>
-                                                  );
-                                                })()}
-                                              </TooltipTrigger>
-                                              <TooltipContent>
-                                                <ul className="space-y-0.5">
-                                                  {flagged.map(({ l, s }) => (
-                                                    <li key={l.id}>{l.product} — {s === "denied" ? "Denied" : "Partial"}</li>
-                                                  ))}
-                                                </ul>
-                                              </TooltipContent>
-                                            </Tooltip>
-                                          )}
                                         </TooltipProvider>
                                       </TableCell>
                                     );
