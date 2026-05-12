@@ -1,0 +1,1456 @@
+import { useMemo, useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { StatusBadge } from "@/components/claims/StatusBadge";
+import { cn } from "@/lib/utils";
+import { toast } from "@/hooks/use-toast";
+import {
+  ArrowUpDown, Search, Send, ChevronDown, ChevronRight,
+  ExternalLink, FileText, CheckCircle2, Clock, FileSearch, UserRound, Info,
+} from "lucide-react";
+
+export type SecondaryMode = "submit" | "review";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Local types & fixtures — Secondary Board only
+// ─────────────────────────────────────────────────────────────────────────────
+
+type SecondaryStatus =
+  | "Primary Paid - Forwarded"
+  | "Primary Paid - Submit Secondary"
+  | "Secondary Submitted"
+  | "Secondary ERA Received"
+  | "Secondary Paid"
+  | "Sent to Patient"
+  | "Patient Paid"
+  | "Bad Debt";
+
+type SubmitBucket = "insurance" | "patient";
+type ReviewBucket = "outstanding" | "era";
+type AnyBucket = SubmitBucket | ReviewBucket;
+
+type PrReason = "Deductible" | "Coinsurance" | "Copay" | "Non-covered service" | "Bad debt (write off)";
+
+interface SecLine {
+  id: string;
+  product: string;
+  hcpcs: string;
+  modifiers: string[];
+  charge: number;
+  primaryPaid: number;
+  primaryAdj: number;
+  remaining: number;          // for submit / forwarded (= coinsuranceCopay + deductible)
+  coinsuranceCopay?: number;  // PR-2 + PR-3 per subitem
+  deductible?: number;        // PR-1 per subitem
+  // Secondary ERA results (era bucket)
+  secondaryPaid?: number;
+  secondaryAdj?: number;
+  patientResp?: number;       // remaining after secondary
+  amountOwed?: number;        // for patient
+  reason?: string;            // for patient line
+  status: "Pending" | "Pending — denied by primary" | "Paid" | "Denied/Partial";
+}
+
+interface SecClaim {
+  id: string;
+  parentClaimId: string;
+  status: SecondaryStatus;
+  patientName: string;
+  primaryPayor: string;
+  secondaryPayer: string | null;     // null = patient bucket with no secondary; "Other" = custom
+  secondaryPayerOther?: string | null; // free-text payor name when secondaryPayer === "Other"
+  primaryMemberId: string;
+  secondaryMemberId: string;
+  dos: string;
+  diagnosis: string;
+  type: "Original" | "Corrected";
+  primaryPaid: number;
+  primaryAdj: number;
+  primaryPayDate: string;
+  primarySentDate?: string;
+  primaryIcn: string;
+  remaining: number;
+  // Deductible attributed at the claim level (not per-subitem). Common when the
+  // payer applies the patient's annual deductible to the claim as a whole rather
+  // than splitting it across line items.
+  claimLevelDeductible?: number;
+  expectedCrossoverEra?: string;
+  forwardedFlag?: boolean;
+  // Secondary ERA fields (era bucket)
+  secondarySentDate?: string;
+  secondaryEraDate?: string;
+  secondaryPayDate?: string;
+  secondaryIcn?: string;
+  secondaryPaid?: number;
+  secondaryAdj?: number;
+  patientResp?: number;
+  prReason?: PrReason;
+  prBreakdown?: { coinsurance: number; copay: number; deductible: number };
+  patientNote?: string;
+  lines: SecLine[];
+}
+
+const SECONDARY_PAYER_OPTIONS = ["NY Medicaid", "Medicaid", "AARP Supplement", "BCBS Supplement", "Tricare", "None"];
+const OTHER_PAYER = "Other";
+const DIAGNOSIS_OPTIONS = ["E10.65", "E11.9", "E10.9", "E11.65"];
+
+const displaySecondary = (c: SecClaim) =>
+  c.secondaryPayer === OTHER_PAYER ? (c.secondaryPayerOther?.trim() || "Custom payor") : (c.secondaryPayer ?? "—");
+
+const today = new Date();
+function dAgo(n: number) { const d = new Date(today); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
+function dAhead(n: number) { const d = new Date(today); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+
+const INITIAL_SEC_CLAIMS: SecClaim[] = [
+  // FORWARDED — Medicare crossover
+  {
+    id: "claim_sec_001",
+    parentClaimId: "claim_001",
+    status: "Primary Paid - Forwarded",
+    patientName: "Maria Gonzalez",
+    primaryPayor: "Medicare A&B",
+    secondaryPayer: "NY Medicaid",
+    primaryMemberId: "1EG4-TE5-MK73",
+    secondaryMemberId: "MED12345",
+    dos: dAgo(28),
+    diagnosis: "E11.9",
+    type: "Original",
+    primaryPaid: 850,
+    primaryAdj: 200,
+    primaryPayDate: dAgo(8),
+
+    primarySentDate: dAgo(15),
+    primaryIcn: "ABC123",
+    remaining: 150,
+    claimLevelDeductible: 150, // payer applied annual deductible at claim level, not per item
+    expectedCrossoverEra: "10–14 days after primary",
+    forwardedFlag: true,
+    lines: [
+      { id: "L1", product: "Insulin Pump", hcpcs: "E0784", modifiers: ["NU"],
+        charge: 4500, primaryPaid: 850, primaryAdj: 200, remaining: 0,
+        coinsuranceCopay: 0, deductible: 0, status: "Pending" },
+    ],
+  },
+  {
+    id: "claim_sec_004",
+    parentClaimId: "claim_004",
+    status: "Primary Paid - Forwarded",
+    patientName: "Harold Becker",
+    primaryPayor: "Medicare A&B",
+    secondaryPayer: "AARP Supplement",
+    primaryMemberId: "2QW8-RN1-LP44",
+    secondaryMemberId: "AARP-771199",
+    dos: dAgo(35),
+    diagnosis: "E10.65",
+    type: "Original",
+    primaryPaid: 620,
+    primaryAdj: 130,
+    primaryPayDate: dAgo(12),
+
+    primarySentDate: dAgo(19),
+    primaryIcn: "MED9981",
+    remaining: 90,
+    expectedCrossoverEra: "10–14 days after primary",
+    forwardedFlag: true,
+    lines: [
+      { id: "L1", product: "CGM Sensors", hcpcs: "A4239", modifiers: ["KX"],
+        charge: 312, primaryPaid: 220, primaryAdj: 30, remaining: 60,
+        coinsuranceCopay: 20, deductible: 40, status: "Pending" },
+      { id: "L2", product: "Cartridges", hcpcs: "A4232", modifiers: ["NU"],
+        charge: 95, primaryPaid: 50, primaryAdj: 15, remaining: 30,
+        coinsuranceCopay: 10, deductible: 20, status: "Pending" },
+    ],
+  },
+  // SUBMIT TO SECONDARY — non-Medicare primary
+  {
+    id: "claim_sec_002",
+    parentClaimId: "claim_002",
+    status: "Primary Paid - Submit Secondary",
+    patientName: "Maria Gonzalez",
+    primaryPayor: "Aetna",
+    secondaryPayer: "Medicaid",
+    primaryMemberId: "1EG4-TE5-MK73",
+    secondaryMemberId: "MED12345",
+    dos: dAgo(20),
+    diagnosis: "E11.9",
+    type: "Original",
+    primaryPaid: 850,
+    primaryAdj: 200,
+    primaryPayDate: dAgo(5),
+
+    primarySentDate: dAgo(12),
+    primaryIcn: "ABC123",
+    remaining: 350,
+    lines: [
+      { id: "L1", product: "Insulin Pump", hcpcs: "E0784", modifiers: ["NU"],
+        charge: 1200, primaryPaid: 850, primaryAdj: 200, remaining: 150,
+        coinsuranceCopay: 30, deductible: 120, status: "Pending" },
+      { id: "L2", product: "CGM Sensors", hcpcs: "A4239", modifiers: [],
+        charge: 200, primaryPaid: 0, primaryAdj: 200, remaining: 200,
+        coinsuranceCopay: 50, deductible: 150,
+        status: "Pending — denied by primary" },
+    ],
+  },
+  {
+    id: "claim_sec_005",
+    parentClaimId: "claim_005",
+    status: "Primary Paid - Submit Secondary",
+    patientName: "Tomas Rivera",
+    primaryPayor: "United Healthcare",
+    secondaryPayer: OTHER_PAYER,
+    secondaryPayerOther: "Cigna Supplement Plan F",
+    primaryMemberId: "UHC-998112-03",
+    secondaryMemberId: "NYM-22041",
+    dos: dAgo(16),
+    diagnosis: "E10.9",
+    type: "Original",
+    primaryPaid: 410,
+    primaryAdj: 90,
+    primaryPayDate: dAgo(3),
+
+    primarySentDate: dAgo(10),
+    primaryIcn: "UHC-552014",
+    remaining: 120,
+    lines: [
+      { id: "L1", product: "Infusion Sets", hcpcs: "A4230", modifiers: ["NU"],
+        charge: 185, primaryPaid: 100, primaryAdj: 20, remaining: 65,
+        coinsuranceCopay: 25, deductible: 40, status: "Pending" },
+      { id: "L2", product: "Cartridges", hcpcs: "A4232", modifiers: ["NU"],
+        charge: 95, primaryPaid: 35, primaryAdj: 5, remaining: 55,
+        coinsuranceCopay: 20, deductible: 35, status: "Pending" },
+    ],
+  },
+  // PATIENT
+  {
+    id: "claim_pat_001",
+    parentClaimId: "claim_003",
+    status: "Sent to Patient",
+    patientName: "Maria Gonzalez",
+    primaryPayor: "UHC",
+    secondaryPayer: "Medicaid",
+    primaryMemberId: "1EG4-TE5-MK73",
+    secondaryMemberId: "MED12345",
+    dos: dAgo(45),
+    diagnosis: "E11.9",
+    type: "Original",
+    primaryPaid: 850,
+    primaryAdj: 200,
+    primaryPayDate: dAgo(25),
+
+    primarySentDate: dAgo(32),
+    primaryIcn: "UHC-44871",
+    remaining: 150,
+    prReason: "Deductible",
+    prBreakdown: { coinsurance: 0, copay: 0, deductible: 150 },
+    patientNote: "Patient deductible — please remit by " + dAhead(14),
+    lines: [
+      { id: "L1", product: "Insulin Pump", hcpcs: "E0784", modifiers: ["NU"],
+        charge: 1200, primaryPaid: 850, primaryAdj: 200, remaining: 150,
+        coinsuranceCopay: 0, deductible: 150,
+        amountOwed: 150, reason: "Annual deductible", status: "Pending" },
+    ],
+  },
+  {
+    id: "claim_pat_002",
+    parentClaimId: "claim_006",
+    status: "Sent to Patient",
+    patientName: "Lina Park",
+    primaryPayor: "Cigna",
+    secondaryPayer: null,
+    primaryMemberId: "CIG-44-882201",
+    secondaryMemberId: "—",
+    dos: dAgo(33),
+    diagnosis: "E11.65",
+    type: "Original",
+    primaryPaid: 280,
+    primaryAdj: 60,
+    primaryPayDate: dAgo(15),
+
+    primarySentDate: dAgo(22),
+    primaryIcn: "CIG-88102",
+    remaining: 60,
+    prReason: "Copay",
+    prBreakdown: { coinsurance: 0, copay: 60, deductible: 0 },
+    patientNote: "Patient copay due.",
+    lines: [
+      { id: "L1", product: "CGM Sensors", hcpcs: "A4239", modifiers: ["KX"],
+        charge: 340, primaryPaid: 280, primaryAdj: 60, remaining: 60,
+        coinsuranceCopay: 60, deductible: 0,
+        amountOwed: 60, reason: "Plan copay", status: "Pending" },
+    ],
+  },
+  {
+    id: "claim_pat_003",
+    parentClaimId: "claim_010",
+    status: "Sent to Patient",
+    patientName: "Renee Alvarez",
+    primaryPayor: "BCBS",
+    secondaryPayer: "AARP Supplement",
+    primaryMemberId: "BCBS-7782-AA",
+    secondaryMemberId: "AARP-994412",
+    dos: dAgo(38),
+    diagnosis: "E10.65",
+    type: "Original",
+    primaryPaid: 540,
+    primaryAdj: 110,
+    primaryPayDate: dAgo(18),
+    primarySentDate: dAgo(25),
+    primaryIcn: "BCBS-553311",
+    remaining: 220,
+    prReason: "Coinsurance",
+    prBreakdown: { coinsurance: 95, copay: 0, deductible: 125 },
+    patientNote: "Remaining balance after BCBS and AARP — please remit by " + dAhead(14),
+    lines: [
+      { id: "L1", product: "CGM Sensors", hcpcs: "A4239", modifiers: ["KX"],
+        charge: 312, primaryPaid: 220, primaryAdj: 30, remaining: 130,
+        coinsuranceCopay: 50, deductible: 80,
+        amountOwed: 130, reason: "Deductible + 20% coinsurance", status: "Pending" },
+      { id: "L2", product: "Insulin Pump Supplies", hcpcs: "A4230", modifiers: ["NU"],
+        charge: 200, primaryPaid: 130, primaryAdj: 20, remaining: 90,
+        coinsuranceCopay: 45, deductible: 45,
+        amountOwed: 90, reason: "20% coinsurance", status: "Pending" },
+    ],
+  },
+  // OUTSTANDING (review) — secondary already submitted, awaiting payer response
+  {
+    id: "claim_sec_006",
+    parentClaimId: "claim_007",
+    status: "Secondary Submitted",
+    patientName: "Devon Wright",
+    primaryPayor: "Aetna",
+    secondaryPayer: "Medicaid",
+    primaryMemberId: "AET-771-29A",
+    secondaryMemberId: "MED77231",
+    dos: dAgo(22),
+    diagnosis: "E10.9",
+    type: "Original",
+    primaryPaid: 540,
+    primaryAdj: 110,
+    primaryPayDate: dAgo(9),
+
+    primarySentDate: dAgo(16),
+    primaryIcn: "AET-99812",
+    remaining: 110,
+    lines: [
+      { id: "L1", product: "CGM Sensors", hcpcs: "A4239", modifiers: ["KX"],
+        charge: 312, primaryPaid: 220, primaryAdj: 50, remaining: 60,
+        coinsuranceCopay: 50, deductible: 10, status: "Pending" },
+      { id: "L2", product: "Cartridges", hcpcs: "A4232", modifiers: ["NU"],
+        charge: 95, primaryPaid: 60, primaryAdj: 15, remaining: 50,
+        coinsuranceCopay: 40, deductible: 10, status: "Pending" },
+    ],
+  },
+  // ERA REVIEW — secondary paid, ready to post
+  {
+    id: "claim_sec_era_001",
+    parentClaimId: "claim_008",
+    status: "Secondary ERA Received",
+    patientName: "Harold Becker",
+    primaryPayor: "Medicare A&B",
+    secondaryPayer: "AARP Supplement",
+    primaryMemberId: "2QW8-RN1-LP44",
+    secondaryMemberId: "AARP-771199",
+    dos: dAgo(40),
+    diagnosis: "E10.65",
+    type: "Original",
+    primaryPaid: 620,
+    primaryAdj: 130,
+    primaryPayDate: dAgo(20),
+    primarySentDate: dAgo(27),
+    primaryIcn: "MED-44218",
+    remaining: 90,
+    secondarySentDate: dAgo(18),
+    secondaryEraDate: dAgo(3),
+    secondaryPayDate: dAgo(2),
+    secondaryIcn: "AARP-ERA-55129",
+    secondaryPaid: 80,
+    secondaryAdj: 0,
+    patientResp: 10,
+    lines: [
+      { id: "L1", product: "CGM Sensors", hcpcs: "A4239", modifiers: ["KX"],
+        charge: 312, primaryPaid: 220, primaryAdj: 30, remaining: 60,
+        coinsuranceCopay: 20, deductible: 40,
+        secondaryPaid: 55, secondaryAdj: 0, patientResp: 5, status: "Paid" },
+      { id: "L2", product: "Cartridges", hcpcs: "A4232", modifiers: ["NU"],
+        charge: 95, primaryPaid: 50, primaryAdj: 15, remaining: 30,
+        coinsuranceCopay: 10, deductible: 20,
+        secondaryPaid: 25, secondaryAdj: 0, patientResp: 5, status: "Paid" },
+    ],
+  },
+  // ERA REVIEW — secondary partially paid, leaves patient balance
+  {
+    id: "claim_sec_era_002",
+    parentClaimId: "claim_009",
+    status: "Secondary ERA Received",
+    patientName: "Devon Wright",
+    primaryPayor: "Aetna",
+    secondaryPayer: "Medicaid",
+    primaryMemberId: "AET-771-29A",
+    secondaryMemberId: "MED77231",
+    dos: dAgo(31),
+    diagnosis: "E10.9",
+    type: "Original",
+    primaryPaid: 540,
+    primaryAdj: 110,
+    primaryPayDate: dAgo(14),
+    primarySentDate: dAgo(21),
+    primaryIcn: "AET-99812",
+    remaining: 110,
+    secondarySentDate: dAgo(11),
+    secondaryEraDate: dAgo(2),
+    secondaryPayDate: dAgo(1),
+    secondaryIcn: "MCD-ERA-77001",
+    secondaryPaid: 75,
+    secondaryAdj: 20,
+    patientResp: 15,
+    lines: [
+      { id: "L1", product: "CGM Sensors", hcpcs: "A4239", modifiers: ["KX"],
+        charge: 312, primaryPaid: 220, primaryAdj: 50, remaining: 60,
+        coinsuranceCopay: 50, deductible: 10,
+        secondaryPaid: 45, secondaryAdj: 10, patientResp: 5, status: "Paid" },
+      { id: "L2", product: "Cartridges", hcpcs: "A4232", modifiers: ["NU"],
+        charge: 95, primaryPaid: 60, primaryAdj: 15, remaining: 50,
+        coinsuranceCopay: 40, deductible: 10,
+        secondaryPaid: 30, secondaryAdj: 10, patientResp: 10, status: "Paid" },
+    ],
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+const $ = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+const fmt = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" });
+
+const STATUS_TONE: Record<SecLine["status"], "warning" | "danger" | "success" | "neutral"> = {
+  "Pending": "warning",
+  "Pending — denied by primary": "danger",
+  "Paid": "success",
+  "Denied/Partial": "danger",
+};
+
+function bucketOf(c: SecClaim): AnyBucket | null {
+  if (c.status === "Primary Paid - Submit Secondary") return "insurance";
+  if (c.status === "Sent to Patient") return "patient";
+  if (c.status === "Primary Paid - Forwarded" || c.status === "Secondary Submitted") return "outstanding";
+  if (c.status === "Secondary ERA Received") return "era";
+  return null;
+}
+
+const BUCKET_META: Record<AnyBucket, { label: string; icon: React.ReactNode; tone: string }> = {
+  insurance:   { label: "Insurance",        icon: <Send className="h-4 w-4" />,      tone: "text-warning-soft-foreground" },
+  patient:     { label: "Patient",          icon: <UserRound className="h-4 w-4" />, tone: "text-primary" },
+  outstanding: { label: "Outstanding",      icon: <Clock className="h-4 w-4" />,     tone: "text-info-soft-foreground" },
+  era:         { label: "ERA Review",       icon: <FileSearch className="h-4 w-4" />, tone: "text-info-soft-foreground" },
+};
+
+const MODE_BUCKETS: Record<SecondaryMode, AnyBucket[]> = {
+  submit: ["insurance", "patient"],
+  review: ["outstanding", "era"],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main board
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
+  const [claims, setClaims] = useState<SecClaim[]>(INITIAL_SEC_CLAIMS);
+  const buckets = MODE_BUCKETS[mode];
+  const [bucket, setBucket] = useState<AnyBucket>(buckets[0]);
+  const [search, setSearch] = useState("");
+  const [payerFilter, setPayerFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<"dos" | "patient" | "payer">("dos");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  // Reset bucket when mode changes
+  useMemo(() => {
+    if (!buckets.includes(bucket)) setBucket(buckets[0]);
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const counts = useMemo(() => {
+    const out: Record<AnyBucket, number> = { insurance: 0, patient: 0, outstanding: 0, era: 0 };
+    for (const c of claims) {
+      const b = bucketOf(c);
+      if (b) out[b] += 1;
+    }
+    return out;
+  }, [claims]);
+
+  const visible = useMemo(() => {
+    return claims
+      .filter((c) => bucketOf(c) === bucket)
+      .filter((c) => payerFilter === "all" || c.primaryPayor === payerFilter || c.secondaryPayer === payerFilter)
+      .filter((c) => {
+        if (!search) return true;
+        const q = search.toLowerCase();
+        return (
+          c.patientName.toLowerCase().includes(q) ||
+          c.primaryPayor.toLowerCase().includes(q) ||
+          (c.secondaryPayer ?? "").toLowerCase().includes(q) ||
+          c.parentClaimId.toLowerCase().includes(q) ||
+          c.primaryIcn.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        if (sortBy === "patient") return a.patientName.localeCompare(b.patientName);
+        if (sortBy === "payer") return (a.secondaryPayer ?? "").localeCompare(b.secondaryPayer ?? "");
+        return a.dos.localeCompare(b.dos);
+      });
+  }, [claims, bucket, payerFilter, search, sortBy]);
+
+  const allPayers = useMemo(
+    () => Array.from(new Set(claims.flatMap((c) => [c.primaryPayor, c.secondaryPayer ?? ""]))).filter(Boolean).sort(),
+    [claims],
+  );
+
+  const updateClaim = (id: string, patch: Partial<SecClaim>) =>
+    setClaims((arr) => arr.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+
+  const submitSecondary = (c: SecClaim, manual = false) => {
+    updateClaim(c.id, { status: "Secondary Submitted" });
+    const name = displaySecondary(c);
+    toast({
+      title: `Secondary ${manual ? "marked submitted manually" : "submitted"}: ${c.patientName}`,
+      description: manual
+        ? `Tracked outside Stedi (paper / fax / portal) → ${name}.`
+        : `837 sent to ${name}.`,
+    });
+  };
+  const generateStatement = (c: SecClaim) => {
+    updateClaim(c.id, { status: "Patient Paid" });
+    toast({ title: `Statement generated: ${c.patientName}`, description: `Patient owes ${$(c.remaining)}.` });
+  };
+  const markPatientPaid = (c: SecClaim) => {
+    updateClaim(c.id, { status: "Patient Paid" });
+    toast({ title: `Marked paid: ${c.patientName}` });
+  };
+  const markPosted = (c: SecClaim) => {
+    updateClaim(c.id, { status: "Secondary Paid" });
+    toast({ title: `Crossover posted: ${c.patientName}` });
+  };
+
+  const gridCols = buckets.length === 2 ? "md:grid-cols-2" : "md:grid-cols-3";
+
+  return (
+    <div className="space-y-4">
+      {/* Buckets */}
+      <section className={cn("grid grid-cols-1 gap-3", gridCols)}>
+        {buckets.map((k) => (
+          <button
+            key={k}
+            onClick={() => setBucket(k)}
+            className={cn(
+              "rounded-lg border bg-card p-4 text-left transition-colors hover:bg-accent",
+              bucket === k && "ring-2 ring-primary",
+            )}
+          >
+            <div className={cn("flex items-center gap-2 text-xs uppercase tracking-wide", BUCKET_META[k].tone)}>
+              {BUCKET_META[k].icon}
+              {BUCKET_META[k].label}
+            </div>
+            <div className="mt-1 text-2xl font-semibold">{counts[k]}</div>
+          </button>
+        ))}
+      </section>
+
+      {/* Filters */}
+      <Card className="flex flex-wrap items-center gap-2 p-4">
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Patient, payer, claim ID"
+            className="h-9 w-64 pl-8"
+          />
+        </div>
+        <Select value={payerFilter} onValueChange={setPayerFilter}>
+          <SelectTrigger className="h-9 w-48"><SelectValue placeholder="All payers" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All payers</SelectItem>
+            {allPayers.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
+          <SelectTrigger className="h-9 w-44">
+            <ArrowUpDown className="mr-1 h-3.5 w-3.5" />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="dos">Sort by DOS</SelectItem>
+            <SelectItem value="patient">Sort by Patient</SelectItem>
+            <SelectItem value="payer">Sort by Secondary Payer</SelectItem>
+          </SelectContent>
+        </Select>
+        <div className="ml-auto text-xs text-muted-foreground">
+          Showing {visible.length} of {counts[bucket]} {BUCKET_META[bucket].label.toLowerCase()}
+        </div>
+      </Card>
+
+      {/* Rows */}
+      <section className="space-y-3">
+        {visible.length === 0 ? (
+          <Card className="px-6 py-16 text-center">
+            <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-success-soft text-success-soft-foreground">
+              <CheckCircle2 className="h-6 w-6" />
+            </div>
+            <p className="text-base font-medium">Nothing in this bucket.</p>
+            <p className="text-sm text-muted-foreground">All caught up.</p>
+          </Card>
+        ) : (
+          visible.map((c) => (
+            <SecondaryRow
+              key={c.id}
+              c={c}
+              expanded={!!expanded[c.id]}
+              onToggle={() => setExpanded((p) => ({ ...p, [c.id]: !p[c.id] }))}
+              onUpdate={(patch) => updateClaim(c.id, patch)}
+              onSubmitSecondary={(manual) => submitSecondary(c, manual)}
+              onGenerateStatement={() => generateStatement(c)}
+              onMarkPatientPaid={() => markPatientPaid(c)}
+              onMarkPosted={() => markPosted(c)}
+            />
+          ))
+        )}
+      </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Row
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SecondaryRow({
+  c, expanded, onToggle, onUpdate,
+  onSubmitSecondary, onGenerateStatement, onMarkPatientPaid, onMarkPosted,
+}: {
+  c: SecClaim;
+  expanded: boolean;
+  onToggle: () => void;
+  onUpdate: (p: Partial<SecClaim>) => void;
+  onSubmitSecondary: (manual?: boolean) => void;
+  onGenerateStatement: () => void;
+  onMarkPatientPaid: () => void;
+  onMarkPosted: () => void;
+}) {
+  const b = bucketOf(c);
+
+  const accent =
+    b === "outstanding" ? "border-l-info" :
+    b === "insurance"   ? "border-l-warning-soft-foreground" :
+    b === "era"         ? "border-l-info" :
+                          "border-l-primary";
+
+  const totalCoins = c.lines.reduce((s, l) => s + (l.coinsuranceCopay ?? 0), 0);
+  const totalDed = c.lines.reduce((s, l) => s + (l.deductible ?? 0), 0) + (c.claimLevelDeductible ?? 0);
+  const hasBreakdown = totalCoins > 0 || totalDed > 0;
+
+  return (
+    <Card className={cn("overflow-hidden border-l-4", accent)}>
+      <button
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/30"
+      >
+        {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold">{c.patientName}</span>
+            <span className="text-xs text-muted-foreground">
+              {c.primaryPayor}
+              {c.secondaryPayer && (
+                <> {" → "}
+                  <span className={cn(c.secondaryPayer === OTHER_PAYER && "italic")}>
+                    {displaySecondary(c)}
+                  </span>
+                </>
+              )}
+            </span>
+            <span className="text-xs text-muted-foreground">· DOS {fmt(c.dos)}</span>
+          </div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            Primary paid: <span className="tabular-nums text-foreground">{$(c.primaryPaid)}</span>
+            {hasBreakdown ? (
+              <>
+                {totalCoins > 0 && <>{"  ·  "}Coinsurance: <span className="tabular-nums text-foreground">{$(totalCoins)}</span></>}
+                {totalDed > 0 && <>{"  ·  "}Deductible: <span className="tabular-nums text-foreground">{$(totalDed)}</span></>}
+              </>
+            ) : c.remaining > 0 ? (
+              <>{"  ·  "}Remaining: <span className="tabular-nums text-foreground">{$(c.remaining)}</span></>
+            ) : (
+              <>{"  ·  "}No remaining balance</>
+            )}
+          </div>
+        </div>
+        <StatusPill status={c.status} bucket={b} />
+      </button>
+
+      {expanded && (
+        <div className="border-t bg-muted/20 px-4 py-4">
+          {b === "insurance" && (
+            <SubmitSecondaryBody c={c} onUpdate={onUpdate} onSubmit={onSubmitSecondary} />
+          )}
+          {b === "patient" && (
+            <SendToPatientBody
+              c={c}
+              onUpdate={onUpdate}
+              onGenerate={onGenerateStatement}
+              onMarkPaid={onMarkPatientPaid}
+            />
+          )}
+          {b === "outstanding" && (
+            <ForwardedBody c={c} onMarkPosted={onMarkPosted} />
+          )}
+          {b === "era" && (
+            <EraReviewBody c={c} onMarkPosted={onMarkPosted} />
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function StatusPill({ status, bucket }: { status: SecondaryStatus; bucket: AnyBucket | null }) {
+  const tone: "info" | "warning" | "success" | "neutral" | "danger" =
+    status === "Secondary Paid" || status === "Patient Paid" ? "success" :
+    status === "Secondary ERA Received" ? "info" :
+    status === "Primary Paid - Forwarded" ? "info" :
+    status === "Bad Debt" ? "neutral" :
+    status === "Sent to Patient" ? "warning" :
+    "warning";
+  return (
+    <StatusBadge tone={tone} className={cn(bucket === "outstanding" && "animate-pulse")}>
+
+      {status === "Primary Paid - Forwarded" ? "Awaiting Crossover ERA" : status}
+    </StatusBadge>
+  );
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBMIT TO SECONDARY body
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SubmitSecondaryBody({
+  c, onUpdate, onSubmit,
+}: {
+  c: SecClaim;
+  onUpdate: (p: Partial<SecClaim>) => void;
+  onSubmit: (manual?: boolean) => void;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const isOther = c.secondaryPayer === OTHER_PAYER;
+  const otherName = c.secondaryPayerOther?.trim() ?? "";
+  const otherInvalid = isOther && otherName.length === 0;
+
+  // Totals — line-level breakdowns
+  const sum = (fn: (l: SecLine) => number) => c.lines.reduce((s, l) => s + fn(l), 0);
+  const totalCharge = sum((l) => l.charge);
+  const totalPrimaryPaid = sum((l) => l.primaryPaid);
+  const totalCoins = sum((l) => l.coinsuranceCopay ?? 0);
+  const totalDed = sum((l) => l.deductible ?? 0) + (c.claimLevelDeductible ?? 0);
+  const totalExpected = totalCoins + totalDed;
+  const claimDed = c.claimLevelDeductible ?? 0;
+
+  const handleSelect = (v: string) => {
+    if (v === OTHER_PAYER) {
+      onUpdate({ secondaryPayer: OTHER_PAYER });
+    } else {
+      onUpdate({ secondaryPayer: v, secondaryPayerOther: null });
+    }
+  };
+
+  const submitBtn = isOther ? (
+    <div className="flex items-center gap-1 self-end">
+      <Button
+        onClick={() => setConfirmOpen(true)}
+        disabled={otherInvalid}
+        className="bg-emerald-700 text-white hover:bg-emerald-800"
+      >
+        <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark as Submitted Manually →
+      </Button>
+      <TooltipProvider delayDuration={150}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" className="text-muted-foreground hover:text-foreground" aria-label="Why manual?">
+              <Info className="h-3.5 w-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs text-xs">
+            Custom secondaries aren't submitted through Stedi. Track them manually (paper, fax, payer portal).
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </div>
+  ) : (
+    <Button onClick={() => onSubmit(false)} className="self-end bg-emerald-700 text-white hover:bg-emerald-800">
+      <Send className="mr-1 h-3.5 w-3.5" /> Submit Secondary
+    </Button>
+  );
+
+  return (
+    <div className="space-y-5">
+      {/* Header form */}
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-[1.2fr_0.9fr_0.9fr_0.9fr_0.9fr_0.7fr_0.7fr_auto]">
+          <Field label="Name"><div className="text-sm font-semibold">{c.patientName}</div></Field>
+          <Field label="Primary Payor">
+            <div className="rounded bg-muted px-2 py-1 text-xs">{c.primaryPayor}</div>
+          </Field>
+          <Field label="Member ID (Pri.)">
+            <div className="rounded bg-muted px-2 py-1 text-xs tabular-nums">{c.primaryMemberId}</div>
+          </Field>
+          <Field label="Secondary Payor">
+            <Select value={c.secondaryPayer ?? ""} onValueChange={handleSelect}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select…" /></SelectTrigger>
+              <SelectContent>
+                {SECONDARY_PAYER_OPTIONS.map((p) => (
+                  <SelectItem key={p} value={p}>{p}</SelectItem>
+                ))}
+                <SelectItem value={OTHER_PAYER}>Other…</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="Member ID (Sec.)">
+            <Input value={c.secondaryMemberId} onChange={(e) => onUpdate({ secondaryMemberId: e.target.value })} className="h-8 text-xs" />
+          </Field>
+          <Field label="DOS">
+            <Input value={fmt(c.dos)} readOnly className="h-8 text-xs" />
+          </Field>
+          <Field label="Dx">
+            <Select value={c.diagnosis} onValueChange={(v) => onUpdate({ diagnosis: v })}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {DIAGNOSIS_OPTIONS.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </Field>
+          {submitBtn}
+        </div>
+
+        {/* Animated free-text payor name when "Other" is selected */}
+        <div
+          className={cn(
+            "grid overflow-hidden transition-all duration-200 ease-out",
+            isOther ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+          )}
+        >
+          <div className="min-h-0">
+            <div className="rounded-md border border-dashed bg-background p-3">
+              <Field
+                label={
+                  <>Secondary Payor Name <span className="text-destructive">*</span></>
+                }
+              >
+                <Input
+                  value={c.secondaryPayerOther ?? ""}
+                  onChange={(e) => onUpdate({ secondaryPayerOther: e.target.value })}
+                  placeholder="e.g. Cigna Supplement Plan F"
+                  className={cn("h-8 text-xs", otherInvalid && "border-destructive")}
+                  aria-invalid={otherInvalid}
+                />
+              </Field>
+              <div className="mt-1.5 text-[10px] text-muted-foreground">
+                This payor isn't in our routing list. You'll submit it manually (paper, fax, payer portal).
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── FROM THE PRIMARY ── */}
+      <SectionDivider label="From the Primary" />
+
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        <Stat label="Primary Paid" value={$(c.primaryPaid)} />
+        <Stat label="Primary Paid Date" value={fmt(c.primaryPayDate)} />
+        <Stat
+          label={
+            <span className="inline-flex items-center gap-1">
+              Primary ICN
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button type="button" className="hover:text-foreground" aria-label="What is ICN?">
+                      <Info className="h-3 w-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-xs text-xs">
+                    Internal Control Number — the unique claim ID the primary payer assigned on its ERA.
+                    Required when billing the secondary so they can link back to the primary's adjudication.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </span>
+          }
+          value={c.primaryIcn}
+        />
+      </div>
+
+      {/* ── WHAT WE'RE BILLING THE SECONDARY ── */}
+      <SectionDivider label="What We're Billing the Secondary" />
+
+      <div className="rounded-lg border bg-background px-4 py-3">
+        <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[2fr_1fr]">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Total Expected from Secondary
+            </div>
+            <div className="mt-1 text-3xl font-semibold tabular-nums text-foreground">{$(totalExpected)}</div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground">
+              Sum of patient responsibility the primary left for {displaySecondary(c)}.
+            </div>
+          </div>
+          <div className="grid grid-cols-2 divide-x rounded-md border bg-muted/30">
+            <div className="px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Coinsurance/Copay</div>
+              <div className="text-sm font-semibold tabular-nums">{$(totalCoins)}</div>
+            </div>
+            <div className="px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Deductible</div>
+              <div className="text-sm font-semibold tabular-nums">{$(totalDed)}</div>
+              {claimDed > 0 && (
+                <div className="text-[10px] text-muted-foreground">incl. {$(claimDed)} claim-level</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Subitems table — 7 columns */}
+      <SubmitItemsTable c={c}
+        totals={{ totalCharge, totalPrimaryPaid, totalCoins, totalDed, claimDed }} />
+
+      {/* Manual submit confirmation */}
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Mark as submitted manually?</DialogTitle>
+            <DialogDescription>
+              This claim has a custom secondary payor ({otherName || "unnamed"}). We can't submit
+              through Stedi automatically. Confirm you've submitted it manually (paper, fax, payer
+              portal) and we'll flag it as Submitted in the system.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+            <Button
+              className="bg-emerald-700 text-white hover:bg-emerald-800"
+              onClick={() => { setConfirmOpen(false); onSubmit(true); }}
+            >
+              Yes, mark as submitted
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function SubmitItemsTable({
+  c,
+  totals,
+}: {
+  c: SecClaim;
+  totals: { totalCharge: number; totalPrimaryPaid: number; totalCoins: number; totalDed: number; claimDed: number };
+}) {
+  const cols = "grid-cols-[1.4fr_0.7fr_0.6fr_0.5fr_1fr_1fr_1fr_1fr]";
+  const { totalCharge, totalPrimaryPaid, totalCoins, totalDed, claimDed } = totals;
+  return (
+    <div className="overflow-hidden rounded-md border bg-background">
+      <div className={`grid ${cols} border-b bg-muted/40 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground`}>
+        <div>Subitem</div>
+        <div>HCPC</div>
+        <div>Mods</div>
+        <div className="text-right">Qty</div>
+        <div className="text-right">Charge</div>
+        <div className="text-right">Primary Paid</div>
+        <div className="text-right">Coinsur/Copay</div>
+        <div className="text-right">Deductible</div>
+      </div>
+      {c.lines.map((l) => (
+        <div key={l.id} className={`grid ${cols} border-b px-3 py-1.5 text-xs last:border-b-0`}>
+          <div className="truncate">{l.product}</div>
+          <div className="truncate">{l.hcpcs}</div>
+          <div className="truncate">{l.modifiers.join(", ") || "—"}</div>
+          <div className="text-right tabular-nums">1</div>
+          <div className="text-right tabular-nums">{$(l.charge)}</div>
+          <div className="text-right tabular-nums">{$(l.primaryPaid)}</div>
+          <div className="text-right tabular-nums">{$(l.coinsuranceCopay ?? 0)}</div>
+          <div className="text-right tabular-nums">{$(l.deductible ?? 0)}</div>
+        </div>
+      ))}
+      {claimDed > 0 && (
+        <div className={`grid ${cols} border-b bg-amber-50 px-3 py-1.5 text-xs italic text-muted-foreground dark:bg-amber-950/20`}>
+          <div className="truncate">Claim-level deductible</div>
+          <div>—</div><div>—</div>
+          <div className="text-right">—</div>
+          <div className="text-right">—</div>
+          <div className="text-right">—</div>
+          <div className="text-right">—</div>
+          <div className="text-right font-medium tabular-nums text-foreground">{$(claimDed)}</div>
+        </div>
+      )}
+      <div className={`grid ${cols} border-t-2 bg-muted/40 px-3 py-1.5 text-xs font-semibold`}>
+        <div>Total</div>
+        <div /><div /><div />
+        <div className="text-right tabular-nums">{$(totalCharge)}</div>
+        <div className="text-right tabular-nums">{$(totalPrimaryPaid)}</div>
+        <div className="text-right tabular-nums">{$(totalCoins)}</div>
+        <div className="text-right tabular-nums">{$(totalDed)}</div>
+      </div>
+    </div>
+  );
+}
+
+function SectionDivider({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-px flex-1 bg-border" />
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEND TO PATIENT body
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PR_REASONS: PrReason[] = ["Deductible", "Coinsurance", "Copay", "Non-covered service", "Bad debt (write off)"];
+
+function SendToPatientBody({
+  c, onGenerate, onMarkPaid,
+}: {
+  c: SecClaim;
+  onUpdate: (p: Partial<SecClaim>) => void;
+  onGenerate: () => void;
+  onMarkPaid: () => void;
+}) {
+  const allowed = c.primaryPaid + c.remaining;
+  const insurancePaid = c.primaryPaid;
+  const youOwe = c.remaining;
+
+  // Per-line ded / coins-copay (fall back to claim-level breakdown if missing)
+  const lineDed = (l: SecLine) => l.deductible ?? 0;
+  const lineCoins = (l: SecLine) => l.coinsuranceCopay ?? 0;
+  const totalDed = c.lines.reduce((s, l) => s + lineDed(l), 0)
+    || ((c.prBreakdown?.deductible) ?? 0);
+  const totalCoins = c.lines.reduce((s, l) => s + lineCoins(l), 0)
+    || (((c.prBreakdown?.coinsurance ?? 0) + (c.prBreakdown?.copay ?? 0)));
+
+  return (
+    <div className="space-y-3">
+      {/* Compact header strip */}
+      <div className="rounded-lg border bg-background px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold truncate">{c.patientName}</div>
+            <div className="text-[11px] text-muted-foreground">
+              DOS {fmt(c.dos)} · {c.primaryPayor}{c.secondaryPayer ? ` → ${displaySecondary(c)}` : ""}
+            </div>
+          </div>
+          <div className="flex items-center gap-3 text-xs">
+            <span><span className="text-muted-foreground">Allowed </span><span className="font-medium tabular-nums">{$(allowed)}</span></span>
+            <span className="text-muted-foreground">−</span>
+            <span><span className="text-muted-foreground">Ins. paid </span><span className="font-medium tabular-nums text-emerald-700">{$(insurancePaid)}</span></span>
+            <span className="text-muted-foreground">=</span>
+            <div className="flex flex-col items-end leading-tight">
+              <span><span className="text-muted-foreground">Patient owes </span><span className="text-base font-semibold tabular-nums text-primary">{$(youOwe)}</span></span>
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                Ded. {$(totalDed)} · Co-ins/Copay {$(totalCoins)}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Items table — Ins. paid split into Deductible + Co-ins/Copay */}
+      <div className="rounded-lg border bg-background">
+        <div className="grid grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_0.9fr_0.8fr] gap-2 border-b bg-muted/30 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div>Item</div>
+          <div className="text-right">Allowed</div>
+          <div className="text-right">Ins. paid</div>
+          <div className="text-right">Deductible</div>
+          <div className="text-right">Co-ins / Copay</div>
+          <div className="text-right">Patient owes</div>
+        </div>
+        <div className="divide-y">
+          {c.lines.map((l) => {
+            const lineAllowed = l.primaryPaid + l.remaining;
+            const owed = l.amountOwed ?? l.remaining;
+            return (
+              <div key={l.id} className="grid grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_0.9fr_0.8fr] gap-2 px-3 py-1.5 text-xs">
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{l.product}</div>
+                  {l.reason && <div className="truncate text-[10px] text-muted-foreground">{l.reason}</div>}
+                </div>
+                <div className="text-right tabular-nums">{$(lineAllowed)}</div>
+                <div className="text-right tabular-nums text-emerald-700">{$(l.primaryPaid)}</div>
+                <div className="text-right tabular-nums">{$(lineDed(l))}</div>
+                <div className="text-right tabular-nums">{$(lineCoins(l))}</div>
+                <div className="text-right font-semibold tabular-nums text-primary">{$(owed)}</div>
+              </div>
+            );
+          })}
+          <div className="grid grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_0.9fr_0.8fr] gap-2 bg-muted/20 px-3 py-1.5 text-xs font-semibold">
+            <div>Total</div>
+            <div className="text-right tabular-nums">{$(allowed)}</div>
+            <div className="text-right tabular-nums text-emerald-700">{$(insurancePaid)}</div>
+            <div className="text-right tabular-nums">{$(totalDed)}</div>
+            <div className="text-right tabular-nums">{$(totalCoins)}</div>
+            <div className="text-right tabular-nums text-primary">{$(youOwe)}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center justify-end gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onMarkPaid}
+          className="h-8 hover:bg-emerald-600 hover:text-white hover:border-emerald-600"
+        >
+          <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
+        </Button>
+        <Button
+          size="sm"
+          onClick={onGenerate}
+          className="h-8 bg-blue-600 text-white hover:bg-blue-700"
+        >
+          <FileText className="mr-1 h-3.5 w-3.5" /> Generate Statement
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function MoneyCard({
+  label, value, sub, tone,
+}: { label: string; value: string; sub?: string; tone?: "success" | "primary" }) {
+  const valueClass =
+    tone === "success" ? "text-success-soft-foreground" :
+    tone === "primary" ? "text-primary" :
+    "text-foreground";
+  return (
+    <div className="rounded-lg border bg-background px-4 py-3">
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className={cn("mt-1 text-2xl font-semibold tabular-nums", valueClass)}>{value}</div>
+      {sub && <div className="mt-0.5 text-xs text-muted-foreground">{sub}</div>}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FORWARDED body
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ForwardedBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => void }) {
+  const totalPaid = c.lines.reduce((s, l) => s + l.primaryPaid, 0);
+  const itemDed = c.lines.reduce((s, l) => s + (l.deductible ?? 0), 0);
+  const totalCoins = c.lines.reduce((s, l) => s + (l.coinsuranceCopay ?? 0), 0);
+  const claimDed = c.claimLevelDeductible ?? 0;
+  const totalDed = itemDed + claimDed;
+  const totalPR = totalDed + totalCoins;
+
+  const cols = "grid-cols-[1.4fr_0.7fr_1fr_1fr_1.1fr_1.1fr]";
+
+  return (
+    <div className="space-y-4">
+      {/* Key facts */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_2fr_1fr_1fr]">
+        <Stat label="Primary Paid" value={$(totalPaid)} />
+
+        {/* Wider Secondary Amount card with sub-breakdown */}
+        <div className="rounded border bg-background px-2 py-1.5">
+          <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Total Patient Responsibility
+          </div>
+          <div className="mt-1 grid grid-cols-2 divide-x">
+            <div className="pr-3">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Deductible</div>
+              <div className="text-xs font-semibold tabular-nums">{$(totalDed)}</div>
+              {claimDed > 0 && (
+                <div className="text-[10px] text-muted-foreground">
+                  incl. {$(claimDed)} claim-level
+                </div>
+              )}
+            </div>
+            <div className="pl-3">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Coinsurance/Copay</div>
+              <div className="text-xs font-semibold tabular-nums">{$(totalCoins)}</div>
+            </div>
+          </div>
+          <div className="mt-1 border-t pt-1 text-[10px] text-muted-foreground">
+            Total: <span className="font-semibold tabular-nums text-foreground">{$(totalPR)}</span>
+          </div>
+        </div>
+
+        <Stat label="Primary Sent" value={c.primarySentDate ? fmt(c.primarySentDate) : "—"} />
+        <Stat label="Primary Paid Date" value={fmt(c.primaryPayDate)} />
+      </div>
+
+      {/* Forwarded confirmation */}
+      <div className="flex items-center gap-2 rounded-md border bg-info-soft px-3 py-2 text-xs text-info-soft-foreground">
+        <CheckCircle2 className="h-4 w-4" />
+        <span>
+          {c.forwardedFlag
+            ? "Forwarded to secondary — confirmed via CARC 19 on primary ERA."
+            : "Forwarded flag not yet confirmed on primary ERA."}
+        </span>
+      </div>
+
+      {/* Items */}
+      <div className="overflow-hidden rounded-md border bg-background">
+        <div className={`grid ${cols} border-b bg-muted/40 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground`}>
+          <div>Subitem</div>
+          <div>HCPC</div>
+          <div className="text-right">Primary Paid</div>
+          <div className="text-right">Deductible</div>
+          <div className="text-right">Coinsurance/Copay</div>
+          <div className="text-right">Total Patient Resp.</div>
+        </div>
+        {c.lines.map((l) => {
+          const ded = l.deductible ?? 0;
+          const coins = l.coinsuranceCopay ?? 0;
+          return (
+            <div key={l.id} className={`grid ${cols} border-b px-3 py-1.5 text-xs last:border-b-0`}>
+              <div className="truncate">{l.product}</div>
+              <div className="truncate">{l.hcpcs}</div>
+              <div className="text-right tabular-nums">{$(l.primaryPaid)}</div>
+              <div className="text-right tabular-nums">{$(ded)}</div>
+              <div className="text-right tabular-nums">{$(coins)}</div>
+              <div className="text-right tabular-nums">{$(ded + coins)}</div>
+            </div>
+          );
+        })}
+        {claimDed > 0 && (
+          <div className={`grid ${cols} border-b bg-amber-50 px-3 py-1.5 text-xs italic text-muted-foreground dark:bg-amber-950/20`}>
+            <div className="truncate">Claim-level deductible</div>
+            <div className="truncate">—</div>
+            <div className="text-right tabular-nums">—</div>
+            <div className="text-right font-medium tabular-nums text-foreground">{$(claimDed)}</div>
+            <div className="text-right tabular-nums">—</div>
+            <div className="text-right font-medium tabular-nums text-foreground">{$(claimDed)}</div>
+          </div>
+        )}
+        <div className={`grid ${cols} border-t-2 bg-muted/40 px-3 py-1.5 text-xs font-semibold`}>
+          <div>Total</div>
+          <div />
+          <div className="text-right tabular-nums">{$(totalPaid)}</div>
+          <div className="text-right tabular-nums">{$(totalDed)}</div>
+          <div className="text-right tabular-nums">{$(totalCoins)}</div>
+          <div className="text-right tabular-nums">{$(totalPR)}</div>
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button variant="outline">
+          <ExternalLink className="mr-1 h-4 w-4" /> Open in Monday
+        </Button>
+        <Button onClick={onMarkPosted} className="bg-emerald-700 text-white hover:bg-emerald-800">
+          <CheckCircle2 className="mr-1 h-4 w-4" /> Mark as Posted
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tiny shared
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ERA REVIEW body — secondary ERA has been received, ready to post
+// ─────────────────────────────────────────────────────────────────────────────
+
+function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => void }) {
+  const totalPrimaryPaid = c.lines.reduce((s, l) => s + l.primaryPaid, 0);
+  const itemDed = c.lines.reduce((s, l) => s + (l.deductible ?? 0), 0);
+  const totalCoins = c.lines.reduce((s, l) => s + (l.coinsuranceCopay ?? 0), 0);
+  const claimDed = c.claimLevelDeductible ?? 0;
+  const totalDed = itemDed + claimDed;
+  const expected = totalDed + totalCoins;
+
+  const totalSecPaid = c.secondaryPaid ?? c.lines.reduce((s, l) => s + (l.secondaryPaid ?? 0), 0);
+  const totalSecAdj = c.secondaryAdj ?? c.lines.reduce((s, l) => s + (l.secondaryAdj ?? 0), 0);
+  const totalPatientResp = c.patientResp ?? c.lines.reduce((s, l) => s + (l.patientResp ?? 0), 0);
+
+  const fullyCovered = totalPatientResp === 0;
+  const cols = "grid-cols-[1.4fr_0.7fr_1fr_1fr_1fr_1fr]";
+
+  return (
+    <div className="space-y-4">
+      {/* Key facts */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1fr_1fr_1fr]">
+        <Stat label="Primary Paid" value={$(totalPrimaryPaid)} />
+        <Stat label="Expected from Secondary" value={$(expected)} />
+        <div className="rounded border bg-success-soft px-2 py-1.5">
+          <div className="text-[10px] font-medium uppercase tracking-wide text-success-soft-foreground">
+            Secondary Paid
+          </div>
+          <div className="mt-0.5 text-sm font-semibold tabular-nums text-success-soft-foreground">
+            {$(totalSecPaid)}
+          </div>
+          {totalSecAdj > 0 && (
+            <div className="text-[10px] text-success-soft-foreground/80">
+              adj. {$(totalSecAdj)}
+            </div>
+          )}
+        </div>
+        <div className={cn(
+          "rounded border px-2 py-1.5",
+          fullyCovered ? "bg-success-soft" : "bg-warning-soft",
+        )}>
+          <div className={cn(
+            "text-[10px] font-medium uppercase tracking-wide",
+            fullyCovered ? "text-success-soft-foreground" : "text-warning-soft-foreground",
+          )}>
+            Patient Owes
+          </div>
+          <div className={cn(
+            "mt-0.5 text-sm font-semibold tabular-nums",
+            fullyCovered ? "text-success-soft-foreground" : "text-warning-soft-foreground",
+          )}>
+            {$(totalPatientResp)}
+          </div>
+        </div>
+        <Stat label="Secondary ERA Date" value={c.secondaryEraDate ? fmt(c.secondaryEraDate) : "—"} />
+      </div>
+
+      {/* Confirmation banner */}
+      <div className={cn(
+        "flex items-center gap-2 rounded-md border px-3 py-2 text-xs",
+        fullyCovered ? "bg-success-soft text-success-soft-foreground" : "bg-info-soft text-info-soft-foreground",
+      )}>
+        <CheckCircle2 className="h-4 w-4" />
+        <span>
+          {fullyCovered
+            ? `Secondary fully covered patient responsibility — ICN ${c.secondaryIcn ?? "—"}.`
+            : `Secondary ERA posted — ${$(totalPatientResp)} remaining will move to patient. ICN ${c.secondaryIcn ?? "—"}.`}
+        </span>
+      </div>
+
+      {/* Items */}
+      <div className="overflow-hidden rounded-md border bg-background">
+        <div className={`grid ${cols} border-b bg-muted/40 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground`}>
+          <div>Subitem</div>
+          <div>HCPC</div>
+          <div className="text-right">Primary Paid</div>
+          <div className="text-right">Expected</div>
+          <div className="text-right">Secondary Paid</div>
+          <div className="text-right">Patient Owes</div>
+        </div>
+        {c.lines.map((l) => {
+          const exp = (l.deductible ?? 0) + (l.coinsuranceCopay ?? 0);
+          return (
+            <div key={l.id} className={`grid ${cols} border-b px-3 py-1.5 text-xs last:border-b-0`}>
+              <div className="truncate">{l.product}</div>
+              <div className="truncate">{l.hcpcs}</div>
+              <div className="text-right tabular-nums">{$(l.primaryPaid)}</div>
+              <div className="text-right tabular-nums">{$(exp)}</div>
+              <div className="text-right tabular-nums text-success-soft-foreground">{$(l.secondaryPaid ?? 0)}</div>
+              <div className="text-right tabular-nums">{$(l.patientResp ?? 0)}</div>
+            </div>
+          );
+        })}
+        {claimDed > 0 && (
+          <div className={`grid ${cols} border-b bg-amber-50 px-3 py-1.5 text-xs italic text-muted-foreground dark:bg-amber-950/20`}>
+            <div className="truncate">Claim-level deductible</div>
+            <div className="truncate">—</div>
+            <div className="text-right tabular-nums">—</div>
+            <div className="text-right font-medium tabular-nums text-foreground">{$(claimDed)}</div>
+            <div className="text-right tabular-nums">—</div>
+            <div className="text-right tabular-nums">—</div>
+          </div>
+        )}
+        <div className={`grid ${cols} border-t-2 bg-muted/40 px-3 py-1.5 text-xs font-semibold`}>
+          <div>Total</div>
+          <div />
+          <div className="text-right tabular-nums">{$(totalPrimaryPaid)}</div>
+          <div className="text-right tabular-nums">{$(expected)}</div>
+          <div className="text-right tabular-nums text-success-soft-foreground">{$(totalSecPaid)}</div>
+          <div className="text-right tabular-nums">{$(totalPatientResp)}</div>
+        </div>
+      </div>
+
+      {/* Secondary ERA detail strip */}
+      <div className="rounded-md border bg-background px-3 py-2">
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Secondary ERA Detail
+        </div>
+        <div className="mt-1 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+          <Stat label="Secondary Sent" value={c.secondarySentDate ? fmt(c.secondarySentDate) : "—"} />
+          <Stat label="ERA Received" value={c.secondaryEraDate ? fmt(c.secondaryEraDate) : "—"} />
+          <Stat label="Pay Date" value={c.secondaryPayDate ? fmt(c.secondaryPayDate) : "—"} />
+          <Stat label="Secondary ICN" value={c.secondaryIcn ?? "—"} />
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button variant="outline">
+          <ExternalLink className="mr-1 h-4 w-4" /> Open in Monday
+        </Button>
+        {!fullyCovered && (
+          <Button variant="outline">
+            <UserRound className="mr-1 h-4 w-4" /> Move to Patient
+          </Button>
+        )}
+        <Button onClick={onMarkPosted} className="bg-emerald-700 text-white hover:bg-emerald-800">
+          <CheckCircle2 className="mr-1 h-4 w-4" /> Mark as Posted
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: React.ReactNode; value: React.ReactNode }) {
+  return (
+    <div className="rounded border bg-background px-2 py-1.5">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-xs font-semibold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function LineTable({ headers, rows }: { headers: string[]; rows: React.ReactNode[][] }) {
+  return (
+    <div className="overflow-hidden rounded-md border bg-background">
+      <div
+        className="grid border-b bg-muted/40 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+        style={{ gridTemplateColumns: `repeat(${headers.length}, minmax(0, 1fr))` }}
+      >
+        {headers.map((h) => <div key={h}>{h}</div>)}
+      </div>
+      {rows.map((r, i) => (
+        <div
+          key={i}
+          className="grid items-center border-b px-3 py-1.5 text-xs last:border-b-0"
+          style={{ gridTemplateColumns: `repeat(${headers.length}, minmax(0, 1fr))` }}
+        >
+          {r.map((cell, j) => <div key={j} className="min-w-0 truncate">{cell}</div>)}
+        </div>
+      ))}
+    </div>
+  );
+}

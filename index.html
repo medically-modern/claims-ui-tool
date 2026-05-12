@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- TODO: Set the document title to the name of your application -->
+    <title>Lovable App</title>
+    <meta name="description" content="Claim Clarity provides a guided Claims Command Center UI for billing employees to manage and resolve insurance claims efficiently.">
+    <meta name="author" content="Lovable" />
+
+    <!-- TODO: Update og:title to match your application name -->
+    
+    
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/7eae8b42-ad59-4a65-879b-3aabd0031cdc/id-preview-9c287e97--7e7c29e8-8ce8-45e9-bdcd-56bf8c972d1a.lovable.app-1778277375760.png">
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@Lovable" />
+    <meta name="twitter:image" content="https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/7eae8b42-ad59-4a65-879b-3aabd0031cdc/id-preview-9c287e97--7e7c29e8-8ce8-45e9-bdcd-56bf8c972d1a.lovable.app-1778277375760.png">
+    <meta property="og:title" content="Lovable App">
+  <meta name="twitter:title" content="Lovable App">
+  <meta property="og:description" content="Claim Clarity provides a guided Claims Command Center UI for billing employees to manage and resolve insurance claims efficiently.">
+  <meta name="twitter:description" content="Claim Clarity provides a guided Claims Command Center UI for billing employees to manage and resolve insurance claims efficiently.">
+</head>
+
+  <body>
+    <div id="root"></div>
+    <script>
+      // Single Page Apps for GitHub Pages
+      // https://github.com/rafgraph/spa-github-pages
+      // This restores the original URL after the 404.html redirect.
+      (function (l) {
+        if (l.search[1] === "/") {
+          var decoded = l.search
+            .slice(1)
+            .split("&")
+            .map(function (s) {
+              return s.replace(/~and~/g, "&");
+            })
+            .join("?");
+          window.history.replaceState(
+            null,
+            null,
+            l.pathname.slice(0, -1) + decoded + l.hash
+          );
+        }
+      })(window.location);
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
