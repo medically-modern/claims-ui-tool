@@ -634,11 +634,15 @@ const Claims = () => {
                                     return <TableCell key={col} className="text-sm">{fmtDate(c.dos)}</TableCell>;
                                   case "products": {
                                     const [row0, row1] = groupProductRows(c.lines);
+                                    // Only the Denials tab colors pills by line state. Every
+                                    // other tab (ERA Review, Late, Outstanding, Paid, All)
+                                    // keeps all pills grey regardless of denial state.
+                                    const colorByDenialState = category === "denied";
                                     const Chip = ({ line }: { line: ServiceLine }) => {
                                       const code = hcpcsForProduct(line.product);
-                                      // Red pill for any denied/partial line; grey for paid.
                                       const state = lineDenialState(line);
-                                      const isDenied = state !== "paid";
+                                      const isDenied =
+                                        colorByDenialState && state !== "paid";
                                       const node = (
                                         <span
                                           className={cn(
