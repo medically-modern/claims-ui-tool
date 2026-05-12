@@ -300,9 +300,9 @@ const Claims = () => {
       paid: list.reduce((s, c) => s + c.primaryPaid, 0),
       diff: list.reduce((s, c) => s + variance(c), 0),
       oldest: list.reduce<string | null>((acc, c) => {
-        if (!c.rawEraDate) return acc;
-        if (!acc) return c.rawEraDate;
-        return new Date(c.rawEraDate) < new Date(acc) ? c.rawEraDate : acc;
+        if (!c.dos) return acc;
+        if (!acc) return c.dos;
+        return new Date(c.dos) < new Date(acc) ? c.dos : acc;
       }, null),
     };
   }, [MOCK_CLAIMS]);
@@ -327,9 +327,9 @@ const Claims = () => {
       estPay: list.reduce((s, c) => s + c.estPay, 0),
       diff: list.reduce((s, c) => s + variance(c), 0),
       oldest: list.reduce<string | null>((acc, c) => {
-        if (!c.rawEraDate) return acc;
-        if (!acc) return c.rawEraDate;
-        return new Date(c.rawEraDate) < new Date(acc) ? c.rawEraDate : acc;
+        if (!c.dos) return acc;
+        if (!acc) return c.dos;
+        return new Date(c.dos) < new Date(acc) ? c.dos : acc;
       }, null),
     };
   }, [MOCK_CLAIMS]);
@@ -447,7 +447,7 @@ const Claims = () => {
                   { label: "Est. pay", value: fmtMoney0(eraStats.estPay) },
                   { label: "Paid", value: fmtMoney0(eraStats.paid) },
                   { label: "Variance", value: fmtMoney0(eraStats.diff) },
-                  { label: "Oldest ERA", value: eraStats.oldest ? fmtDate(eraStats.oldest) : "—" },
+                  { label: "Oldest DOS", value: eraStats.oldest ? fmtDate(eraStats.oldest) : "—" },
                 ]}
               />
               <SummaryTile
@@ -473,7 +473,7 @@ const Claims = () => {
                 lines={[
                   { label: "Est. pay", value: fmtMoney0(denialStats.estPay) },
                   { label: "Variance", value: fmtMoney0(denialStats.diff) },
-                  { label: "Oldest ERA", value: denialStats.oldest ? fmtDate(denialStats.oldest) : "—" },
+                  { label: "Oldest DOS", value: denialStats.oldest ? fmtDate(denialStats.oldest) : "—" },
                 ]}
               />
               <SummaryTile

@@ -323,7 +323,13 @@ function mapSubitemToLine(sub: MondaySubitem): ServiceLine {
 
 export function mapMondayItemToClaim(item: MondayItem): Claim {
   const lines = (item.subitems ?? []).map(mapSubitemToLine);
-  const primaryPaid = num(item, COL.PRIMARY_PAID);
+  // Prefer the parent Primary Paid (A) column when set, otherwise fall back
+  // to summing each subitem's Primary Paid. The Monday data team enters this
+  // inconsistently — Review-status claims fill the parent, Paid-status
+  // claims often only fill subitems.
+  const parentPrimaryPaid = num(item, COL.PRIMARY_PAID);
+  const subitemPrimaryPaidSum = lines.reduce((sum, l) => sum + l.primaryPaid, 0);
+  const primaryPaid = parentPrimaryPaid || subitemPrimaryPaidSum;
   const prAmount = num(item, COL.PR_AMOUNT);
   const estPay = lines.reduce((sum, l) => sum + l.estPay, 0);
   const rawEraDate = isoOrNull(txt(item, COL.RAW_ERA_DATE));
