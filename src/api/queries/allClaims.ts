@@ -132,7 +132,7 @@ const SUBITEM_COLUMN_IDS = Object.values(SUB_COL)
 const PAGE_QUERY = `
   query AllClaims($cursor: String) {
     boards(ids: [${CLAIMS_BOARD_ID}]) {
-      items_page(limit: 100, cursor: $cursor) {
+      items_page(limit: 500, cursor: $cursor) {
         cursor
         items {
           id

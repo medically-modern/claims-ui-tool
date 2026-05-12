@@ -19,6 +19,7 @@ import {
 import { MOCK_CLAIMS as MOCK_CLAIMS_FALLBACK } from "@/lib/claims/mockData";
 import { useAllClaims } from "@/hooks/useAllClaims";
 import { hasMondayToken } from "@/api/monday";
+import { LoadingOverlay } from "@/components/claims/LoadingOverlay";
 import {
   claimAge, eraReceived, fmtDate, fmtMoney, priorityOf, shortIssue, variance,
 } from "@/lib/claims/logic";
@@ -389,8 +390,14 @@ const Claims = () => {
 
   const columns = CATEGORY_COLUMNS[category];
 
+  // Initial-load overlay: only when we expect Monday data but it hasn't
+  // arrived yet. Hidden once data lands; refetches (Refresh button) don't
+  // re-trigger this — they show inline elsewhere.
+  const showInitialLoading = hasMondayToken() && !mondayClaims && claimsLoading;
+
   return (
     <div className="min-h-screen bg-background">
+      {showInitialLoading && <LoadingOverlay />}
       <AppHeader
         title="Claims Command Center"
         subtitle="Review ERAs, check unpaid claims, and resolve claim issues."
