@@ -868,6 +868,10 @@ const Claims = () => {
                                       </TableCell>
                                     );
                                   case "difference":
+                                    // Difference = estPay - paid - PR. Negative means we got
+                                    // paid MORE than projected → that's good, color green.
+                                    // Positive means we got paid less than projected → red if
+                                    // material, grey if small. Near-zero is balanced (green).
                                     return (
                                       <TableCell
                                         key={col}
@@ -875,9 +879,11 @@ const Claims = () => {
                                           "text-right tabular-nums",
                                           Math.abs(d) <= 0.5
                                             ? "text-success font-medium"
-                                            : Math.abs(d) > 5
-                                              ? "text-danger"
-                                              : "text-muted-foreground",
+                                            : d < 0
+                                              ? "text-success"
+                                              : d > 5
+                                                ? "text-danger"
+                                                : "text-muted-foreground",
                                         )}
                                       >
                                         {fmtMoney(d)}
