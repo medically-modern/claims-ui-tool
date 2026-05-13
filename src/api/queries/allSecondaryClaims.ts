@@ -224,6 +224,11 @@ function deriveStatus(
   if (hasEra) return "Secondary ERA Received";
 
   switch (secondaryStatus) {
+    case "Forwarded":
+      // Backend spawns Forwarded-type secondaries at this status. Don't
+      // care about Submission Type at this point — Forwarded means
+      // "waiting for the crossover ERA from Medigap." Goes in Outstanding.
+      return "Primary Paid - Forwarded";
     case "Submitted":
       return "Secondary Submitted";
     case "Paid":
@@ -235,8 +240,10 @@ function deriveStatus(
     case "Bad Debt":
       return "Bad Debt";
     default:
-      // status is "Submit", "Forwarded", "Outstanding", "Late", "Review" —
-      // route by Submission Type
+      // status is "Submit", "Outstanding", "Late", "Review" — route
+      // by Submission Type. Insurance + Patient types spawn at "Submit"
+      // because they need operator review before any action; Forwarded
+      // never lands here anymore (the case above catches it first).
       switch (submissionType) {
         case "Insurance":
           return "Primary Paid - Submit Secondary";
