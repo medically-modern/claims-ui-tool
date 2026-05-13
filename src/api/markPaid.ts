@@ -94,3 +94,40 @@ export async function markPrimaryPaid(
 export function secondaryItemUrl(secondaryItemId: string): string {
   return `https://medicallymodern-force.monday.com/boards/18413019028/pulses/${secondaryItemId}`;
 }
+
+// ─── Submission-type prediction (mirrors the backend classifier) ─────────────
+// Used by the Mark Paid confirmation dialog to tell the operator what kind
+// of secondary item is about to be created.
+
+const MEDICARE_PRIMARY_PAYORS = new Set([
+  "Medicare A&B",
+  "Fidelis Medicare",
+  "Anthem BCBS Medicare",
+  "United Medicare",
+  "Aetna Medicare",
+]);
+
+export type SubmissionType = "Forwarded" | "Insurance" | "Patient";
+
+export function predictSubmissionType(
+  primaryPayor: string | null | undefined,
+  secondaryPayer: string | null | undefined,
+): SubmissionType {
+  if (!(secondaryPayer || "").trim()) return "Patient";
+  if (MEDICARE_PRIMARY_PAYORS.has((primaryPayor || "").trim())) return "Forwarded";
+  return "Insurance";
+}
+
+/**
+ * Short string for the confirmation dialog:
+ *   - "None"          when no secondary will be created (PR <= 0)
+ *   - "Forwarded" | "Insurance" | "Patient"  when one will
+ */
+export function summarizeSecondary(
+  prAmount: number,
+  primaryPayor: string | null | undefined,
+  secondaryPayer: string | null | undefined,
+): string {
+  if (prAmount <= 0) return "None";
+  return predictSubmissionType(primaryPayor, secondaryPayer);
+}

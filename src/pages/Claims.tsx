@@ -31,6 +31,7 @@ import {
   isMarkPaidConfigured,
   MarkPaidError,
   secondaryItemUrl,
+  summarizeSecondary,
 } from "@/api/markPaid";
 import {
   claimAge, eraReceived, fmtDate, fmtMoney, priorityOf, shortIssue, variance,
@@ -1053,26 +1054,24 @@ const Claims = () => {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Mark this primary claim Paid?</AlertDialogTitle>
+            <AlertDialogTitle>Mark fully paid?</AlertDialogTitle>
             <AlertDialogDescription asChild>
-              <div className="space-y-2 text-sm">
-                <p>
-                  This will set Primary status to <strong>Paid</strong> on
-                  Monday for <strong>{markPaidTarget?.patientName}</strong>.
+              <div className="space-y-1 text-sm">
+                <p className="font-medium text-foreground">
+                  {markPaidTarget?.patientName}
                 </p>
-                {markPaidTarget && markPaidTarget.prAmount > 0 ? (
-                  <p>
-                    PR Amount is <strong>{fmtMoney0(markPaidTarget.prAmount)}</strong>
-                    {" "}— a corresponding item will be created on the
-                    Secondary Claims Board (Submit Claim group), with
-                    Submission Type pre-filled based on the payer combo.
-                  </p>
-                ) : (
-                  <p>
-                    PR Amount is $0 — nothing will be created on Secondary
-                    (primary fully covered the claim).
-                  </p>
-                )}
+                <p>
+                  Secondary:{" "}
+                  <span className="font-medium text-foreground">
+                    {markPaidTarget
+                      ? summarizeSecondary(
+                          markPaidTarget.prAmount,
+                          markPaidTarget.primaryPayor,
+                          markPaidTarget.secondaryPayer,
+                        )
+                      : "None"}
+                  </span>
+                </p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1082,7 +1081,7 @@ const Claims = () => {
               disabled={markPaidBusy}
               onClick={(e) => { e.preventDefault(); void confirmMarkPaidFromRow(); }}
             >
-              {markPaidBusy ? "Marking…" : "Confirm Mark Paid"}
+              {markPaidBusy ? "Marking…" : "Confirm"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

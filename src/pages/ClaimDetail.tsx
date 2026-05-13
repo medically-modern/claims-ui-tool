@@ -52,6 +52,7 @@ import {
   isMarkPaidConfigured,
   MarkPaidError,
   secondaryItemUrl,
+  summarizeSecondary,
 } from "@/api/markPaid";
 
 type LineUserStatus = "Paid" | "Underpaid" | "Denied";
@@ -558,27 +559,20 @@ const ClaimDetail = () => {
       <AlertDialog open={markPaidOpen} onOpenChange={setMarkPaidOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Mark this primary claim Paid?</AlertDialogTitle>
+            <AlertDialogTitle>Mark fully paid?</AlertDialogTitle>
             <AlertDialogDescription asChild>
-              <div className="space-y-2 text-sm">
+              <div className="space-y-1 text-sm">
+                <p className="font-medium text-foreground">{claim.patientName}</p>
                 <p>
-                  This will set Primary status to <strong>Paid</strong> on
-                  Monday for <strong>{claim.patientName}</strong>.
+                  Secondary:{" "}
+                  <span className="font-medium text-foreground">
+                    {summarizeSecondary(
+                      claim.prAmount,
+                      claim.primaryPayor,
+                      claim.secondaryPayer,
+                    )}
+                  </span>
                 </p>
-                {claim.prAmount > 0 ? (
-                  <p>
-                    PR Amount is <strong>{fmtMoney(claim.prAmount)}</strong> —
-                    a corresponding item will be created on the Secondary
-                    Claims Board (Submit Claim group), with Submission Type
-                    pre-filled based on the payer combo. You'll confirm the
-                    type from there before the next action fires.
-                  </p>
-                ) : (
-                  <p>
-                    PR Amount is $0 — nothing will be created on Secondary
-                    (primary fully covered the claim).
-                  </p>
-                )}
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -588,7 +582,7 @@ const ClaimDetail = () => {
               disabled={markPaidBusy}
               onClick={(e) => { e.preventDefault(); void confirmMarkPaid(); }}
             >
-              {markPaidBusy ? "Marking…" : "Confirm Mark Paid"}
+              {markPaidBusy ? "Marking…" : "Confirm"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
