@@ -42,6 +42,17 @@ import { carcPlaybookText, rarcPlaybookText, lookupDenialAnalysis } from "@/lib/
 import { useThreadClaims } from "@/lib/claims/threadStore";
 import { Send } from "lucide-react";
 import type { ItemStatus, ThreadClaim, ThreadClaimType } from "@/lib/claims/threads";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  markPrimaryPaid as apiMarkPrimaryPaid,
+  isMarkPaidConfigured,
+  MarkPaidError,
+  secondaryItemUrl,
+} from "@/api/markPaid";
 
 type LineUserStatus = "Paid" | "Underpaid" | "Denied";
 
@@ -145,25 +156,93 @@ const ClaimDetail = () => {
     });
   }
 
-  function markPrimaryPaid() {
+  // ─── Mark Paid wiring ─────────────────────────────────────────────────────
+  // The button opens a confirmation dialog; on confirm we call the
+  // POST /claims/mark-paid endpoint on the Stedi-Monday backend, which
+  // (a) sets the primary's status to Paid on Monday, and (b) if PR > 0,
+  // spawns a corresponding item on the Secondary Claims Board with all
+  // patient + primary-snapshot data and a copy of each subitem. The
+  // local UI state is updated optimistically so the page reflects the
+  // change immediately; if the API call fails we surface the error and
+  // revert.
+  const [markPaidOpen, setMarkPaidOpen] = useState(false);
+  const [markPaidBusy, setMarkPaidBusy] = useState(false);
+
+  function openMarkPaid() {
     const v = Math.abs(variance(claim));
     if (v > 5 && !overrideReason.trim()) {
       toast.error("Variance exceeds tolerance — manager override reason required.");
       return;
     }
+    setMarkPaidOpen(true);
+  }
+
+  async function confirmMarkPaid() {
+    if (markPaidBusy) return;
+    const v = Math.abs(variance(claim));
     const note = v > 5
       ? `Marked primary paid with manager override: ${overrideReason}`
       : "Marked primary paid via Command Center.";
+
+    // Optimistic local update so the UI feels instant
+    const previous = claim;
     setClaim({
       ...claim, primaryStatus: "Paid", denialAction: "Action Complete",
       subscriptionClearance: claim.secondaryPayer || claim.prAmount > 0 ? "Manager Review" : "Clear",
       claimsHoldReason: claim.secondaryPayer ? "Secondary outstanding" : (claim.prAmount > 0 ? "Patient balance" : null),
       activity: appendActivity(note),
     });
-    writeback("Primary Paid / Resolved", {
-      Primary: "Paid", "Denial Action": "Action Complete",
-      "Notes & Activity": note,
-    });
+
+    // No backend configured (local dev) — leave the optimistic update in place
+    // and inform the user we didn't write back.
+    if (!isMarkPaidConfigured()) {
+      toast.warning(
+        "Mark Paid not wired — VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+        { description: "Local state updated; Monday NOT touched." },
+      );
+      setMarkPaidOpen(false);
+      return;
+    }
+
+    setMarkPaidBusy(true);
+    try {
+      const result = await apiMarkPrimaryPaid(claim.mondayItemId);
+      setMarkPaidOpen(false);
+
+      if (result.spawned && result.secondary_item_id) {
+        toast.success("Marked Paid — secondary item created.", {
+          description: result.reason ?? undefined,
+          action: {
+            label: "Open in Monday",
+            onClick: () => {
+              window.open(secondaryItemUrl(result.secondary_item_id!), "_blank");
+            },
+          },
+        });
+      } else if (result.secondary_item_id) {
+        // idempotency hit — secondary already existed
+        toast.success("Marked Paid.", {
+          description: result.reason ?? "Existing secondary item found; not duplicated.",
+          action: {
+            label: "Open existing secondary",
+            onClick: () => {
+              window.open(secondaryItemUrl(result.secondary_item_id!), "_blank");
+            },
+          },
+        });
+      } else {
+        toast.success("Marked Paid.", {
+          description: result.reason ?? "No secondary item created — PR = 0.",
+        });
+      }
+    } catch (e) {
+      // Revert optimistic update so the UI doesn't lie
+      setClaim(previous);
+      const msg = e instanceof MarkPaidError ? e.message : (e as Error).message;
+      toast.error("Mark Paid failed.", { description: msg });
+    } finally {
+      setMarkPaidBusy(false);
+    }
   }
 
   function saveDenial() {
@@ -458,7 +537,7 @@ const ClaimDetail = () => {
                 tone="success" icon={<CheckCircle2 className="h-5 w-5" />}
                 title="Paid"
                 desc="Primary paid correctly. Remainder is PR or going to secondary."
-                cta="Mark Paid" onClick={markPrimaryPaid}
+                cta="Mark Paid" onClick={openMarkPaid}
                 disabled={linesWithIssues.length > 0}
               />
               <DecisionCard
@@ -478,6 +557,47 @@ const ClaimDetail = () => {
           </CardContent>
         </Card>
       </main>
+
+      {/* Mark Paid confirmation. Spawns a Secondary item if PR > 0; otherwise
+          just flips Primary status to Paid. Idempotent on the backend. */}
+      <AlertDialog open={markPaidOpen} onOpenChange={setMarkPaidOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Mark this primary claim Paid?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  This will set Primary status to <strong>Paid</strong> on
+                  Monday for <strong>{claim.patientName}</strong>.
+                </p>
+                {claim.prAmount > 0 ? (
+                  <p>
+                    PR Amount is <strong>{fmtMoney(claim.prAmount)}</strong> —
+                    a corresponding item will be created on the Secondary
+                    Claims Board (Submit Claim group), with Submission Type
+                    pre-filled based on the payer combo. You'll confirm the
+                    type from there before the next action fires.
+                  </p>
+                ) : (
+                  <p>
+                    PR Amount is $0 — nothing will be created on Secondary
+                    (primary fully covered the claim).
+                  </p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={markPaidBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={markPaidBusy}
+              onClick={(e) => { e.preventDefault(); void confirmMarkPaid(); }}
+            >
+              {markPaidBusy ? "Marking…" : "Confirm Mark Paid"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
