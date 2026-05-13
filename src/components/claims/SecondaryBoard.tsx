@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
 import { hasMondayToken } from "@/api/monday";
+import { setSecondaryStatus } from "@/api/setSecondaryStatus";
 import {
   ArrowUpDown, Search, Send, ChevronDown, ChevronRight,
   ExternalLink, FileText, CheckCircle2, Clock, FileSearch, UserRound, Info,
@@ -666,19 +667,21 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
             <p className="text-base font-medium">Nothing in this bucket.</p>
             <p className="text-sm text-muted-foreground">All caught up.</p>
           </Card>
-        ) : bucket === "era" ? (
-          // ERA Review bucket renders as a primary-style table so the operator
-          // can scan Paid vs PR vs Difference across rows at a glance, instead
-          // of card-by-card. Other buckets still use the per-row card layout
-          // because their workflows (submit / send to patient / etc) need more
-          // inline form controls.
-          <EraReviewTable
+        ) : bucket === "era" || bucket === "outstanding" ? (
+          // ERA Review + Outstanding both render as a primary-style table.
+          // ERA Review (showActions=true): Status dropdown + Submit button.
+          // Outstanding (showActions=false): identical column layout, but
+          // read-only — operator just needs to see what's in flight.
+          // Insurance and Patient buckets still use SecondaryRow's card
+          // layout because their workflows need inline form controls.
+          <SecondaryClaimsTable
             rows={visible}
             expanded={expanded}
             onToggle={(id) =>
               setExpanded((p) => ({ ...p, [id]: !p[id] }))
             }
             onMarkPosted={(c) => markPosted(c)}
+            showActions={bucket === "era"}
           />
         ) : (
           visible.map((c) => (
@@ -832,27 +835,66 @@ function StatusPill({ status, bucket }: { status: SecondaryStatus; bucket: AnyBu
  */
 type RowUserStatus = "Paid" | "Outstanding";
 
-function EraReviewTable({
+/**
+ * Shared table layout for the Secondary Board. Two consumers today:
+ *   - ERA Review bucket (showActions=true): Status dropdown + Submit
+ *     button to write the chosen Monday Secondary Status.
+ *   - Outstanding bucket (showActions=false): same columns, read-only,
+ *     no Status/Action columns.
+ */
+function SecondaryClaimsTable({
   rows,
   expanded,
   onToggle,
   onMarkPosted,
+  showActions,
 }: {
   rows: SecClaim[];
   expanded: Record<string, boolean>;
   onToggle: (id: string) => void;
   onMarkPosted: (c: SecClaim) => void;
+  showActions: boolean;
 }) {
-  // Local overrides — the table seeds from each row's derived state but
-  // lets the operator override via either the Status dropdown or the
-  // action buttons. Both control the same map.
   const [rowStatus, setRowStatus] = useState<Record<string, RowUserStatus>>({});
+  const [submitting, setSubmitting] = useState<Record<string, boolean>>({});
 
   function effectiveStatus(c: SecClaim): RowUserStatus {
     if (rowStatus[c.id]) return rowStatus[c.id]!;
-    // Seed: rows whose Monday Secondary Status is already terminal-paid
-    // start as Paid; everything else as Outstanding.
     return c.status === "Secondary Paid" ? "Paid" : "Outstanding";
+  }
+
+  /**
+   * Submit the operator's chosen Status to Monday's Secondary Status
+   * column. We don't yet propagate to the primary board or subscription
+   * board — that's a future backend coordinator endpoint.
+   */
+  async function onSubmit(c: SecClaim) {
+    const status = effectiveStatus(c);
+    if (!c.mondayItemId) {
+      toast({
+        title: "Can't submit — no Monday item id",
+        description: c.patientName,
+      });
+      return;
+    }
+    setSubmitting((p) => ({ ...p, [c.id]: true }));
+    try {
+      // Monday Secondary Status labels: Paid is "Paid"; the user-facing
+      // "Outstanding" maps to Monday's "Outstanding" label.
+      await setSecondaryStatus(c.mondayItemId, status);
+      toast({
+        title: `Secondary status set to ${status}`,
+        description: c.patientName,
+      });
+      if (status === "Paid") onMarkPosted(c);
+    } catch (e) {
+      toast({
+        title: "Couldn't update Monday",
+        description: (e as Error).message,
+      });
+    } finally {
+      setSubmitting((p) => ({ ...p, [c.id]: false }));
+    }
   }
 
   return (
@@ -870,8 +912,12 @@ function EraReviewTable({
                 <TableHead className="text-right">Paid</TableHead>
                 <TableHead className="text-right">PR</TableHead>
                 <TableHead className="text-right">Difference</TableHead>
-                <TableHead className="w-[130px]">Status</TableHead>
-                <TableHead className="text-right">Action</TableHead>
+                {showActions && (
+                  <>
+                    <TableHead className="w-[130px]">Status</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
+                  </>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody className="[&_tr>td]:align-top">
@@ -885,7 +931,9 @@ function EraReviewTable({
                   onStatusChange={(s) =>
                     setRowStatus((p) => ({ ...p, [c.id]: s }))
                   }
-                  onMarkPosted={() => onMarkPosted(c)}
+                  onSubmit={() => onSubmit(c)}
+                  submitting={!!submitting[c.id]}
+                  showActions={showActions}
                 />
               ))}
             </TableBody>
@@ -902,14 +950,18 @@ function EraReviewTableRow({
   onToggle,
   status,
   onStatusChange,
-  onMarkPosted,
+  onSubmit,
+  submitting,
+  showActions,
 }: {
   c: SecClaim;
   expanded: boolean;
   onToggle: () => void;
   status: RowUserStatus;
   onStatusChange: (s: RowUserStatus) => void;
-  onMarkPosted: () => void;
+  onSubmit: () => void;
+  submitting: boolean;
+  showActions: boolean;
 }) {
   // PR column = patient responsibility the primary left = what we *expected*
   // the secondary to pay. For Karen: Medicare's $190.78 PR carries over to
@@ -1035,75 +1087,68 @@ function EraReviewTableRow({
         >
           {$(difference)}
         </TableCell>
-        <TableCell>
-          {/* Status dropdown — same Paid/Outstanding state as the action
-              buttons; either input updates the same row state. Same shape
-              as the primary detail's line-level Status select. */}
-          <Select
-            value={status}
-            onValueChange={(v) => onStatusChange(v as RowUserStatus)}
-          >
-            <SelectTrigger
-              className={cn(
-                "h-8 w-[120px] font-medium",
-                status === "Paid" &&
-                  "bg-success-soft text-success-soft-foreground border-success-soft",
-                status === "Outstanding" &&
-                  "bg-muted text-foreground",
-              )}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Paid">Paid</SelectItem>
-              <SelectItem value="Outstanding">Outstanding</SelectItem>
-            </SelectContent>
-          </Select>
-        </TableCell>
-        <TableCell className="text-right">
-          <TooltipProvider delayDuration={150}>
-            <div
-              className="inline-flex items-center justify-end gap-2"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="Mark as Paid"
-                    onClick={() => {
-                      onStatusChange("Paid");
-                      onMarkPosted();
-                    }}
-                    className="grid h-9 w-9 place-items-center rounded-md bg-success-soft text-success-soft-foreground hover:bg-success hover:text-success-foreground transition-colors shadow-sm"
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>Mark as Paid</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="Leave as Outstanding"
-                    onClick={() => onStatusChange("Outstanding")}
-                    className="grid h-9 w-9 place-items-center rounded-md bg-muted text-muted-foreground hover:bg-foreground hover:text-background transition-colors shadow-sm"
-                  >
-                    <Clock className="h-4 w-4" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>Leave as Outstanding</TooltipContent>
-              </Tooltip>
-            </div>
-          </TooltipProvider>
-        </TableCell>
+        {showActions && (
+          <>
+            <TableCell>
+              {/* Status dropdown — the operator picks Paid or Outstanding,
+                  then clicks Submit to write that label to Monday's
+                  Secondary Status column. */}
+              <Select
+                value={status}
+                onValueChange={(v) => onStatusChange(v as RowUserStatus)}
+              >
+                <SelectTrigger
+                  className={cn(
+                    "h-8 w-[120px] font-medium",
+                    status === "Paid" &&
+                      "bg-success-soft text-success-soft-foreground border-success-soft",
+                    status === "Outstanding" &&
+                      "bg-muted text-foreground",
+                  )}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Paid">Paid</SelectItem>
+                  <SelectItem value="Outstanding">Outstanding</SelectItem>
+                </SelectContent>
+              </Select>
+            </TableCell>
+            <TableCell className="text-right">
+              <Button
+                size="sm"
+                disabled={submitting}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSubmit();
+                }}
+                className={cn(
+                  status === "Paid"
+                    ? "bg-emerald-700 text-white hover:bg-emerald-800"
+                    : "",
+                )}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                    Submitting
+                  </>
+                ) : (
+                  "Submit"
+                )}
+              </Button>
+            </TableCell>
+          </>
+        )}
       </TableRow>
       {expanded && (
         <TableRow className="bg-muted/20 hover:bg-muted/20">
-          <TableCell colSpan={10} className="p-4">
-            <EraReviewBody c={c} onMarkPosted={onMarkPosted} />
+          <TableCell
+            colSpan={showActions ? 10 : 8}
+            className="p-4"
+          >
+            <EraReviewBody c={c} onMarkPosted={onSubmit} />
           </TableCell>
         </TableRow>
       )}
