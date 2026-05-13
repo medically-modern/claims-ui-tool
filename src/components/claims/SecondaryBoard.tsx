@@ -1579,70 +1579,49 @@ function ForwardedBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
 // ─────────────────────────────────────────────────────────────────────────────
 
 function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => void }) {
-  const totalPrimaryPaid = c.lines.reduce((s, l) => s + l.primaryPaid, 0);
+  void onMarkPosted; // Mark Paid lives on the table row now — keep the prop
+                     // so the API stays compatible with the rest of the file.
   const itemDed = c.lines.reduce((s, l) => s + (l.deductible ?? 0), 0);
   const totalCoins = c.lines.reduce((s, l) => s + (l.coinsuranceCopay ?? 0), 0);
   const claimDed = c.claimLevelDeductible ?? 0;
   const totalDed = itemDed + claimDed;
   const expected = totalDed + totalCoins;
 
-  const totalSecPaid = c.secondaryPaid ?? c.lines.reduce((s, l) => s + (l.secondaryPaid ?? 0), 0);
-  const totalSecAdj = c.secondaryAdj ?? c.lines.reduce((s, l) => s + (l.secondaryAdj ?? 0), 0);
-  const totalPatientResp = c.patientResp ?? c.lines.reduce((s, l) => s + (l.patientResp ?? 0), 0);
-
-  const fullyCovered = totalPatientResp === 0;
-  const cols = "grid-cols-[1.4fr_0.7fr_1fr_1fr_1fr_1fr]";
+  const totalPrimaryPaid = c.primaryPaid ||
+    c.lines.reduce((s, l) => s + l.primaryPaid, 0);
+  const totalSecPaid = c.secondaryPaid ??
+    c.lines.reduce((s, l) => s + (l.secondaryPaid ?? 0), 0);
+  // Total Expected = what the full allowed amount looked like across both
+  // payers. Primary paid + secondary expected. For a clean Forwarded
+  // crossover (Karen) this equals primary paid + primary PR = original
+  // expected payment.
+  const totalExpected = totalPrimaryPaid + expected;
 
   return (
     <div className="space-y-4">
-      {/* Key facts */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1fr_1fr_1fr]">
-        <Stat label="Primary Paid" value={$(totalPrimaryPaid)} />
-        <Stat label="Expected from Secondary" value={$(expected)} />
-        <div className="rounded border bg-success-soft px-2 py-1.5">
-          <div className="text-[10px] font-medium uppercase tracking-wide text-success-soft-foreground">
-            Secondary Paid
-          </div>
-          <div className="mt-0.5 text-sm font-semibold tabular-nums text-success-soft-foreground">
-            {$(totalSecPaid)}
-          </div>
-          {totalSecAdj > 0 && (
-            <div className="text-[10px] text-success-soft-foreground/80">
-              adj. {$(totalSecAdj)}
-            </div>
-          )}
-        </div>
-        <div className={cn(
-          "rounded border px-2 py-1.5",
-          fullyCovered ? "bg-success-soft" : "bg-warning-soft",
-        )}>
-          <div className={cn(
-            "text-[10px] font-medium uppercase tracking-wide",
-            fullyCovered ? "text-success-soft-foreground" : "text-warning-soft-foreground",
-          )}>
-            Patient Owes
-          </div>
-          <div className={cn(
-            "mt-0.5 text-sm font-semibold tabular-nums",
-            fullyCovered ? "text-success-soft-foreground" : "text-warning-soft-foreground",
-          )}>
-            {$(totalPatientResp)}
-          </div>
-        </div>
-        <Stat label="Secondary ERA Date" value={c.secondaryEraDate ? fmt(c.secondaryEraDate) : "—"} />
-      </div>
-
-      {/* Confirmation banner */}
-      <div className={cn(
-        "flex items-center gap-2 rounded-md border px-3 py-2 text-xs",
-        fullyCovered ? "bg-success-soft text-success-soft-foreground" : "bg-info-soft text-info-soft-foreground",
-      )}>
-        <CheckCircle2 className="h-4 w-4" />
-        <span>
-          {fullyCovered
-            ? `Secondary fully covered patient responsibility — ICN ${c.secondaryIcn ?? "—"}.`
-            : `Secondary ERA posted — ${$(totalPatientResp)} remaining will move to patient. ICN ${c.secondaryIcn ?? "—"}.`}
-        </span>
+      {/* Money summary — four boxes, payment dates embedded inline so the
+          operator has everything in one place without a separate dates
+          strip below the table. */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <SummaryBox label="Total Expected" value={$(totalExpected)} />
+        <SummaryBox
+          label="Primary Paid"
+          value={$(totalPrimaryPaid)}
+          sub={c.primaryPayDate ? `Paid ${fmt(c.primaryPayDate)}` : undefined}
+        />
+        <SummaryBox label="Secondary Expected" value={$(expected)} />
+        <SummaryBox
+          label="Secondary Paid"
+          value={$(totalSecPaid)}
+          sub={
+            c.secondaryEraDate
+              ? `ERA ${fmt(c.secondaryEraDate)}${
+                  c.secondaryPayDate ? ` · Paid ${fmt(c.secondaryPayDate)}` : ""
+                }`
+              : undefined
+          }
+          tone="success"
+        />
       </div>
 
       {/* Service Lines — mirrors primary detail's Service Lines table style,
@@ -1752,32 +1731,55 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
         </CardContent>
       </Card>
 
-      {/* Secondary ERA detail strip */}
-      <div className="rounded-md border bg-background px-3 py-2">
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Secondary ERA Detail
-        </div>
-        <div className="mt-1 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-          <Stat label="Secondary Sent" value={c.secondarySentDate ? fmt(c.secondarySentDate) : "—"} />
-          <Stat label="ERA Received" value={c.secondaryEraDate ? fmt(c.secondaryEraDate) : "—"} />
-          <Stat label="Pay Date" value={c.secondaryPayDate ? fmt(c.secondaryPayDate) : "—"} />
-          <Stat label="Secondary ICN" value={c.secondaryIcn ?? "—"} />
-        </div>
-      </div>
+    </div>
+  );
+}
 
-      <div className="flex justify-end gap-2">
-        <Button variant="outline">
-          <ExternalLink className="mr-1 h-4 w-4" /> Open in Monday
-        </Button>
-        {!fullyCovered && (
-          <Button variant="outline">
-            <UserRound className="mr-1 h-4 w-4" /> Move to Patient
-          </Button>
+/** Compact stat box used by the ERA Review detail. */
+function SummaryBox({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "success";
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded border bg-background px-2.5 py-2",
+        tone === "success" && "bg-success-soft",
+      )}
+    >
+      <div
+        className={cn(
+          "text-[10px] font-medium uppercase tracking-wide text-muted-foreground",
+          tone === "success" && "text-success-soft-foreground",
         )}
-        <Button onClick={onMarkPosted} className="bg-emerald-700 text-white hover:bg-emerald-800">
-          <CheckCircle2 className="mr-1 h-4 w-4" /> Mark as Posted
-        </Button>
+      >
+        {label}
       </div>
+      <div
+        className={cn(
+          "mt-0.5 text-base font-semibold tabular-nums",
+          tone === "success" && "text-success-soft-foreground",
+        )}
+      >
+        {value}
+      </div>
+      {sub && (
+        <div
+          className={cn(
+            "mt-0.5 text-[10px] text-muted-foreground",
+            tone === "success" && "text-success-soft-foreground/80",
+          )}
+        >
+          {sub}
+        </div>
+      )}
     </div>
   );
 }
