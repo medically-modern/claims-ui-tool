@@ -80,14 +80,19 @@ const PRE_OR_TERMINAL: ReadonlySet<string> = new Set([
 export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
   const todayMs = today.getTime();
 
-  // Check paid date FIRST. A future EFT date means the money is still in
-  // flight regardless of what the Primary status column says — so Medicaid
-  // Outstanding (status=Paid, paidDate=future) flows through to soonEra.
+  // Check paid date FIRST. The Primary status field doesn't tell us
+  // whether money has actually hit the bank — the paid date does.
+  //   - paidDate <= today      → settled (excluded from inflow)
+  //   - today < paidDate <= +7 → Soon (lands within the week)
+  //   - paidDate > +7          → Expected (further-out scheduled deposit)
+  // This handles Medicaid Outstanding (status=Review, future paid date)
+  // correctly without any status-based special case.
   if (claim.primaryPaidDate) {
     const paidMs = new Date(claim.primaryPaidDate).getTime();
     if (Number.isFinite(paidMs)) {
-      if (paidMs <= todayMs) return "settled"; // already cleared
-      return "soonEra"; // EFT in the future
+      if (paidMs <= todayMs) return "settled";
+      const daysAway = Math.ceil((paidMs - todayMs) / MS_PER_DAY);
+      return daysAway <= SOON_HORIZON_DAYS ? "soonEra" : "expected";
     }
   }
 
