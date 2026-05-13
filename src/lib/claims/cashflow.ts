@@ -115,13 +115,13 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
   }
 
   // Non-Medicaid without ERA — Expected while still in the normal payer
-  // turnaround window (<21 days from claim sent date). Past that, treat as
-  // High Risk (likely stuck, denied, or otherwise not coming).
+  // turnaround window (< 21 days from claim sent date). At 21+ days, treat
+  // as High Risk (likely stuck, denied, or otherwise not coming).
   if (claim.claimSentDate) {
     const sent = new Date(claim.claimSentDate);
     if (Number.isFinite(sent.getTime())) {
       const ageDays = Math.floor((todayMs - sent.getTime()) / MS_PER_DAY);
-      return ageDays <= EXPECTED_AGE_LIMIT_DAYS ? "expected" : "highRisk";
+      return ageDays < EXPECTED_AGE_LIMIT_DAYS ? "expected" : "highRisk";
     }
   }
 
