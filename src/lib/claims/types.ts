@@ -121,6 +121,8 @@ export interface Claim {
   claimStatusCategory: ClaimStatusCategory;
   claimStatusDetail?: string | null;
   lastClaimStatusCheck?: string | null;
+  /** "277 Paid Amount" column from the backend's last status check writeback. */
+  claimStatusPaidAmount?: number | null;
   claimId: string;
   payerClaimNumber?: string | null;
   estPay: number;

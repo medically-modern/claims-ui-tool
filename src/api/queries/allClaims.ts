@@ -48,6 +48,11 @@ const COL = {
   CLAIM_STATUS_CATEGORY: "color_mm2qbcpy",
   CLAIM_STATUS_DETAIL: "long_text_mm2qapj6",
   LAST_CLAIM_STATUS_CHECK: "date_mm2qrazz",
+  // 277 Paid Amount — populated by the backend's claim-status pipeline
+  // (services/claim_status_service.run_claim_status_check). Lets the UI
+  // show the persisted check result after a page refresh without
+  // re-running the 276/277.
+  CLAIM_STATUS_PAID_AMOUNT: "numeric_mm2qt479",
   RAW_ERA_DATE: "text_mm2047g9",
   RAW_ERA_CLAIM_STATUS: "text_mm20k1zv",
 } as const;
@@ -377,6 +382,7 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     ),
     claimStatusDetail: txt(item, COL.CLAIM_STATUS_DETAIL) || null,
     lastClaimStatusCheck: isoOrNull(txt(item, COL.LAST_CLAIM_STATUS_CHECK)),
+    claimStatusPaidAmount: num(item, COL.CLAIM_STATUS_PAID_AMOUNT) || null,
     claimId: txt(item, COL.CLAIM_ID),
     payerClaimNumber: txt(item, COL.PAYER_CLAIM_NUMBER) || null,
     estPay,

@@ -193,6 +193,35 @@ function generateStatusCheck(c: Claim, status: StatusCheckResult): StatusCheckRe
   }
 }
 /**
+ * Build a StatusCheckRecord from the claim's persisted Monday columns
+ * (Claim Status Category, Detail, Last Claim Status Check, Payer Claim
+ * Number, 277 Paid Amount). Returns null when the claim has never been
+ * status-checked.
+ *
+ * This is the persistence layer for the popover. The in-memory
+ * statusChecks map is only used to flip the UI instantly after a run;
+ * on page refresh the row reads through to Monday via this function.
+ */
+function statusCheckFromClaim(c: Claim): StatusCheckRecord | null {
+  if (!c.claimStatusCategory && !c.lastClaimStatusCheck) return null;
+  const cat = c.claimStatusCategory;
+  const label: StatusCheckResult = (
+    cat &&
+    (STATUS_CHECK_OPTIONS as readonly string[]).includes(cat)
+  )
+    ? (cat as StatusCheckResult)
+    : "Error";
+  return {
+    status: label,
+    checkedAt: c.lastClaimStatusCheck ?? new Date().toISOString(),
+    payerClaimNumber: c.payerClaimNumber ?? undefined,
+    detail: c.claimStatusDetail ?? undefined,
+    statusDescription: c.claimStatusDetail ?? undefined,
+    paidAmount: c.claimStatusPaidAmount ?? undefined,
+  };
+}
+
+/**
  * Convert the backend's claim-status writeback dict into the local
  * StatusCheckRecord shape the popover renders.
  */
@@ -880,7 +909,11 @@ const Claims = () => {
                                   case "claimStatus":
                                     return <TableCell key={col}><ClaimStatusBadge status={c.claimStatusCategory} /></TableCell>;
                                   case "claimStatusLate": {
-                                    const result = statusChecks[c.id];
+                                    // Source of truth order:
+                                    //   1) In-memory result (just ran, before
+                                    //      Monday write completes / next fetch)
+                                    //   2) Monday-persisted columns
+                                    const result = statusChecks[c.id] ?? statusCheckFromClaim(c);
                                     return (
                                       <TableCell key={col} className="text-sm">
                                         {result ? (
