@@ -1223,7 +1223,7 @@ function ForwardedBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
           <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             Total Patient Responsibility
           </div>
-          <div className="mt-1 grid grid-cols-2 divide-x">
+          <div className="mt-1 grid grid-cols-3 divide-x">
             <div className="pr-3">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Deductible</div>
               <div className="text-xs font-semibold tabular-nums">{$(totalDed)}</div>
@@ -1233,13 +1233,14 @@ function ForwardedBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
                 </div>
               )}
             </div>
-            <div className="pl-3">
+            <div className="px-3">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Coinsurance/Copay</div>
               <div className="text-xs font-semibold tabular-nums">{$(totalCoins)}</div>
             </div>
-          </div>
-          <div className="mt-1 border-t pt-1 text-[10px] text-muted-foreground">
-            Total: <span className="font-semibold tabular-nums text-foreground">{$(totalPR)}</span>
+            <div className="pl-3">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</div>
+              <div className="text-xs font-semibold tabular-nums">{$(totalPR)}</div>
+            </div>
           </div>
         </div>
 
