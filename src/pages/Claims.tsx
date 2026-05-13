@@ -36,6 +36,12 @@ import {
   summarizeSecondary,
 } from "@/api/markPaid";
 import {
+  runClaimStatusCheck as apiRunClaimStatusCheck,
+  isClaimStatusCheckConfigured,
+  ClaimStatusError,
+  type ClaimStatusWriteback,
+} from "@/api/runClaimStatusCheck";
+import {
   claimAge, eraReceived, fmtDate, fmtMoney, priorityOf, shortIssue, variance,
 } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
@@ -186,6 +192,38 @@ function generateStatusCheck(c: Claim, status: StatusCheckResult): StatusCheckRe
         detail: "Status check request failed.", rawError: "AAA*Y*42*Unable to respond at current time" };
   }
 }
+/**
+ * Convert the backend's claim-status writeback dict into the local
+ * StatusCheckRecord shape the popover renders.
+ */
+function recordFromWriteback(
+  c: Claim,
+  wb: ClaimStatusWriteback,
+): StatusCheckRecord {
+  const labelRaw = wb["Claim Status Category"] || "";
+  const label = (
+    STATUS_CHECK_OPTIONS as readonly string[]
+  ).includes(labelRaw)
+    ? (labelRaw as StatusCheckResult)
+    : "Error";
+
+  const rec: StatusCheckRecord = {
+    status: label,
+    checkedAt: wb["Last Claim Status Check"] || new Date().toISOString(),
+    payerClaimNumber:
+      wb["277 ICN"] || c.payerClaimNumber || undefined,
+    detail: wb["Claim Status Detail"] || undefined,
+    statusCode: wb._status_code || undefined,
+    statusDescription: wb["Claim Status Detail"] || undefined,
+    categoryCode: wb._category_code || undefined,
+    paidAmount: wb["277 Paid Amount"],
+    checkNumber: wb._check_number || undefined,
+    paidDate: wb._paid_date || undefined,
+    rawError: wb._failure_reason || undefined,
+  };
+  return rec;
+}
+
 function inLateEra(c: Claim) {
   // "Late ERAs" = No ERA Yet (per spec)
   const age = claimAge(c) ?? 0;
@@ -287,6 +325,41 @@ const Claims = () => {
   // Secondary claims — feed into the Cash Flow tile so Soon/Expected
   // include the secondary side. Empty array when token missing.
   const { data: secondaryClaims } = useAllSecondaryClaims();
+
+  // ─── Run Status Check wiring ──────────────────────────────────────────────
+  // Per-row in-flight flag so the button can show a spinner while the 276/277
+  // round-trip runs through the backend.
+  const [statusCheckBusy, setStatusCheckBusy] = useState<Record<string, boolean>>({});
+
+  async function runStatusCheckForRow(c: Claim) {
+    if (statusCheckBusy[c.id]) return;
+    if (!isClaimStatusCheckConfigured()) {
+      toast({
+        title: "Status check not wired",
+        description: "VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+      });
+      return;
+    }
+    setStatusCheckBusy((p) => ({ ...p, [c.id]: true }));
+    try {
+      const wb = await apiRunClaimStatusCheck(c.mondayItemId);
+      const rec = recordFromWriteback(c, wb);
+      setStatusChecks((p) => ({ ...p, [c.id]: rec }));
+      toast({
+        title: `Status check: ${rec.status}`,
+        description: c.patientName,
+      });
+      // Re-fetch claims so the Monday-written columns (Claim Status
+      // Category, Last Claim Status Check, 277 ICN, 277 Paid Amount,
+      // etc.) flow back into the table.
+      void refetchClaims();
+    } catch (e) {
+      const msg = e instanceof ClaimStatusError ? e.message : (e as Error).message;
+      toast({ title: "Status check failed", description: msg });
+    } finally {
+      setStatusCheckBusy((p) => ({ ...p, [c.id]: false }));
+    }
+  }
 
   // ─── Row-level Mark Paid wiring ──────────────────────────────────────────
   // The check-mark icon on each row in the table now actually calls the
@@ -853,11 +926,7 @@ const Claims = () => {
                                                 </TooltipContent>
                                               </Tooltip>
                                             );
-                                            const runCheck = () => {
-                                              const status = STATUS_CHECK_OPTIONS[Math.floor(Math.random() * STATUS_CHECK_OPTIONS.length)];
-                                              setStatusChecks((prev) => ({ ...prev, [c.id]: generateStatusCheck(c, status) }));
-                                              toast({ title: "Status check rerun", description: `${c.patientName}: ${status}` });
-                                            };
+                                            const runCheck = () => void runStatusCheckForRow(c);
                                             return (
                                               <TooltipProvider delayDuration={150}>
                                                 <div className="flex items-center gap-2">
@@ -896,13 +965,17 @@ const Claims = () => {
                                           <Button
                                             size="sm"
                                             variant="outline"
-                                              onClick={() => {
-                                                const status = STATUS_CHECK_OPTIONS[Math.floor(Math.random() * STATUS_CHECK_OPTIONS.length)];
-                                                setStatusChecks((prev) => ({ ...prev, [c.id]: generateStatusCheck(c, status) }));
-                                                toast({ title: "Status check complete", description: `${c.patientName}: ${status}` });
-                                              }}
+                                            disabled={!!statusCheckBusy[c.id]}
+                                            onClick={() => void runStatusCheckForRow(c)}
                                           >
-                                            Run Status Check
+                                            {statusCheckBusy[c.id] ? (
+                                              <>
+                                                <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                                Running
+                                              </>
+                                            ) : (
+                                              "Run Status Check"
+                                            )}
                                           </Button>
                                         )}
                                       </TableCell>
