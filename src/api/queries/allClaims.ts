@@ -65,7 +65,16 @@ const SUB_COL = {
   PRIMARY_PAID: "numeric_mm11v6th",
   RAW_ALLOWED: "numeric_mm1gtdts",
   RAW_PAID: "numeric_mm201t4y",
+  // Parsed-from-ERA columns the Stedi backend writes per service line.
+  // Used to populate the Patient Responsibility / CO / OA / PI breakdown
+  // on the Review ERA detail view.
+  PARSED_COINSURANCE: "numeric_mm11aqr1",
+  PARSED_DEDUCTIBLE: "numeric_mm1g3nvh",
   PARSED_COPAY: "numeric_mm1gtd3e",
+  PARSED_PR: "numeric_mm1gredn",
+  PARSED_CO: "numeric_mm1gken",
+  PARSED_OA: "numeric_mm1gh22d",
+  PARSED_PI: "numeric_mm1gqkvz",
   PARSED_ADJUSTMENT_CODES: "dropdown_mm2p2pr3",
   PARSED_ADJUSTMENT_REASONS: "long_text_mm1g7xmy",
   CARC: "dropdown_mm2pthcy",
@@ -289,7 +298,15 @@ function mapSubitemToLine(sub: MondaySubitem): ServiceLine {
   const hcpc = txt(sub, SUB_COL.HCPC);
   const primaryPaid = num(sub, SUB_COL.PRIMARY_PAID) || num(sub, SUB_COL.RAW_PAID);
   const allowed = num(sub, SUB_COL.RAW_ALLOWED);
+  // Patient-responsibility breakdown, populated by the Stedi ERA parser
+  // into discrete numeric columns on each subitem.
+  const coinsurance = num(sub, SUB_COL.PARSED_COINSURANCE);
+  const deductible = num(sub, SUB_COL.PARSED_DEDUCTIBLE);
   const copay = num(sub, SUB_COL.PARSED_COPAY);
+  const prAmount = num(sub, SUB_COL.PARSED_PR);
+  const coAmount = num(sub, SUB_COL.PARSED_CO);
+  const oaAmount = num(sub, SUB_COL.PARSED_OA);
+  const piAmount = num(sub, SUB_COL.PARSED_PI);
   const carcCodes = arr(sub, SUB_COL.CARC);
   const rarcCodes = arr(sub, SUB_COL.RARC);
   const adjustmentReasons = arr(sub, SUB_COL.PARSED_ADJUSTMENT_REASONS);
@@ -307,19 +324,23 @@ function mapSubitemToLine(sub: MondaySubitem): ServiceLine {
     estPay: num(sub, SUB_COL.EST_PAY),
     primaryPaid,
     allowed,
-    deductible: 0, // not yet parsed onto the board as a discrete subitem column
-    coinsurance: 0,
+    deductible,
+    coinsurance,
     copay,
-    patientResponsibility: 0,
+    // Total patient responsibility — what the patient owes. Prefer the
+    // explicit Parsed PR Amount when set; fall back to the sum of its
+    // components so the field is meaningful even on older claims where
+    // the rollup column wasn't populated.
+    patientResponsibility: prAmount || coinsurance + deductible + copay,
     carc: carcCodes,
     rarc: rarcCodes,
     adjustmentReasons,
     remarkText: [],
     denialAnalysis: mapDenialAnalysis(txt(sub, SUB_COL.DENIAL_ANALYSIS)),
-    coAmount: 0,
-    prAmount: 0,
-    oaAmount: 0,
-    piAmount: 0,
+    coAmount,
+    prAmount,
+    oaAmount,
+    piAmount,
   };
 }
 
