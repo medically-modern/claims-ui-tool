@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 
 CLAIMS_BOARD_ID = "18245429780"
 SUBITEMS_BOARD_ID = "18245429979"
+SECONDARY_BOARD_ID = "18413019028"
+SECONDARY_SUBITEMS_BOARD_ID = "18413019033"
 
 
 def parse_settings(settings_str):
@@ -180,29 +182,37 @@ def main():
     boards = raw["data"]["boards"]
     parent = next((b for b in boards if b["id"] == CLAIMS_BOARD_ID), None)
     subitems = next((b for b in boards if b["id"] == SUBITEMS_BOARD_ID), None)
+    secondary = next((b for b in boards if b["id"] == SECONDARY_BOARD_ID), None)
+    sec_subitems = next(
+        (b for b in boards if b["id"] == SECONDARY_SUBITEMS_BOARD_ID), None
+    )
     if parent is None:
         print(f"Claims Board (id {CLAIMS_BOARD_ID}) not in response", file=sys.stderr)
         sys.exit(1)
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    print("# Claims Board — Monday.com schema")
+    print("# Claims & Secondary Claims — Monday.com schema")
     print()
     print("> **Auto-generated reference for the Claims Command Center backend integration.**")
     print(f"> Fetched: {now}")
     print("> Source: Monday.com API v2 (query in `scripts/refresh-monday-schema.sh`)")
     print(">")
-    print("> This file is the source of truth for what columns exist on the Claims Board")
-    print("> and its Subitems board, what type each column is, and (critically) the")
-    print("> exact label IDs + names for status/dropdown columns. When the board")
+    print("> This file is the source of truth for what columns exist on the Claims and")
+    print("> Secondary Claims boards (parent + subitems), what type each column is, and")
+    print("> the exact label IDs + names for status/dropdown columns. When the board")
     print("> structure changes, re-run `scripts/refresh-monday-schema.sh` to regenerate")
     print("> this file. Do not edit by hand — your edits will be overwritten on next refresh.")
     print()
     print("## Board URLs")
     print()
-    print(f"- Parent board: https://medicallymodern-force.monday.com/boards/{CLAIMS_BOARD_ID}")
+    print(f"- Claims Board: https://medicallymodern-force.monday.com/boards/{CLAIMS_BOARD_ID}")
     if subitems:
-        print(f"- Subitems board: https://medicallymodern-force.monday.com/boards/{SUBITEMS_BOARD_ID}")
+        print(f"- Subitems of Claims Board: https://medicallymodern-force.monday.com/boards/{SUBITEMS_BOARD_ID}")
+    if secondary:
+        print(f"- Secondary Claims Board: https://medicallymodern-force.monday.com/boards/{SECONDARY_BOARD_ID}")
+    if sec_subitems:
+        print(f"- Subitems of Secondary Claims Board: https://medicallymodern-force.monday.com/boards/{SECONDARY_SUBITEMS_BOARD_ID}")
     print()
     print("## Summary")
     print()
@@ -218,6 +228,18 @@ def main():
             f"{subitems['items_count']} | {len(subitems['columns'])} | "
             f"{len(subitems['groups'])} |"
         )
+    if secondary:
+        print(
+            f"| Secondary Claims Board | `{secondary['id']}` | "
+            f"{secondary['items_count']} | {len(secondary['columns'])} | "
+            f"{len(secondary['groups'])} |"
+        )
+    if sec_subitems:
+        print(
+            f"| Subitems of Secondary Claims Board | `{sec_subitems['id']}` | "
+            f"{sec_subitems['items_count']} | {len(sec_subitems['columns'])} | "
+            f"{len(sec_subitems['groups'])} |"
+        )
     print()
     print("---")
     print()
@@ -227,6 +249,16 @@ def main():
         print("---")
         print()
         print(render_board(subitems, heading_level=2))
+        print()
+    if secondary:
+        print("---")
+        print()
+        print(render_board(secondary, heading_level=2))
+        print()
+    if sec_subitems:
+        print("---")
+        print()
+        print(render_board(sec_subitems, heading_level=2))
 
 
 if __name__ == "__main__":

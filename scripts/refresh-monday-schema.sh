@@ -30,7 +30,7 @@ OUT="${ROOT}/MONDAY_BOARD_SCHEMA.md"
 RAW="$(mktemp)"
 trap 'rm -f "$RAW"' EXIT
 
-QUERY='{"query":"query { boards(ids: [18245429780, 18245429979]) { id name description state board_kind board_folder_id type item_terminology items_count updated_at workspace { id name kind } owners { id name email } groups { id title color position archived } columns { id title type description settings_str archived width } } }"}'
+QUERY='{"query":"query { boards(ids: [18245429780, 18245429979, 18413019028, 18413019033]) { id name description state board_kind board_folder_id type item_terminology items_count updated_at workspace { id name kind } owners { id name email } groups { id title color position archived } columns { id title type description settings_str archived width } } }"}'
 
 echo "Fetching Monday board schema..." >&2
 HTTP_CODE=$(curl -sS -o "$RAW" -w "%{http_code}" \
