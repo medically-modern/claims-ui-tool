@@ -41,7 +41,8 @@ export function medicaidPaymentDate(sentDate: Date): Date {
 }
 
 export type CashFlowBucket =
-  | "soon"
+  | "soonEra"        // Soon — ERA in hand, future paid date
+  | "soonMedicaid"   // Soon — pure Medicaid, no ERA, next Wed cycle
   | "medicaid1plus"
   | "highRisk"
   | "settled"
@@ -69,7 +70,7 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
     const paidMs = new Date(claim.primaryPaidDate).getTime();
     if (!Number.isFinite(paidMs)) return "highRisk"; // bad data, treat conservatively
     if (paidMs <= todayMs) return "settled"; // already cleared
-    return "soon"; // EFT in the future — clear, near-term inflow
+    return "soonEra"; // EFT in the future — clear, near-term inflow
   }
 
   // No ERA yet — bucket by payer behavior
@@ -80,7 +81,7 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
       const daysAway = Math.ceil(
         (projectedPay.getTime() - todayMs) / MS_PER_DAY,
       );
-      return daysAway <= SOON_HORIZON_DAYS ? "soon" : "medicaid1plus";
+      return daysAway <= SOON_HORIZON_DAYS ? "soonMedicaid" : "medicaid1plus";
     }
   }
 
@@ -103,7 +104,12 @@ export interface BucketStat {
 }
 
 export interface CashFlowStats {
+  /** Combined Soon = ERA-in-hand + Medicaid-next-Wed. */
   soon: BucketStat;
+  /** Sub-bucket of Soon: ERA received, future paid date. */
+  soonEra: BucketStat;
+  /** Sub-bucket of Soon: pure Medicaid, no ERA, settles within 7 days. */
+  soonMedicaid: BucketStat;
   medicaid1plus: BucketStat;
   highRisk: BucketStat;
   totalOpen: BucketStat;
@@ -114,8 +120,12 @@ export function computeCashFlow(
   today: Date = new Date(),
 ): CashFlowStats {
   const empty = (): BucketStat => ({ count: 0, total: 0 });
-  const out: Record<"soon" | "medicaid1plus" | "highRisk", BucketStat> = {
-    soon: empty(),
+  const out: Record<
+    "soonEra" | "soonMedicaid" | "medicaid1plus" | "highRisk",
+    BucketStat
+  > = {
+    soonEra: empty(),
+    soonMedicaid: empty(),
     medicaid1plus: empty(),
     highRisk: empty(),
   };
@@ -128,10 +138,14 @@ export function computeCashFlow(
     out[bucket].total += amount;
   }
 
+  const soon: BucketStat = {
+    count: out.soonEra.count + out.soonMedicaid.count,
+    total: out.soonEra.total + out.soonMedicaid.total,
+  };
   const totalOpen: BucketStat = {
-    count: out.soon.count + out.medicaid1plus.count + out.highRisk.count,
-    total: out.soon.total + out.medicaid1plus.total + out.highRisk.total,
+    count: soon.count + out.medicaid1plus.count + out.highRisk.count,
+    total: soon.total + out.medicaid1plus.total + out.highRisk.total,
   };
 
-  return { ...out, totalOpen };
+  return { ...out, soon, totalOpen };
 }

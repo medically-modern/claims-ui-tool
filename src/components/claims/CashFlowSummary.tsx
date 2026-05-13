@@ -60,6 +60,10 @@ export function CashFlowSummary({ claims }: Props) {
             amount={stats.soon.total}
             count={stats.soon.count}
             subtitle="ERA in hand or Medicaid next Wed"
+            breakdown={[
+              { label: "ERA received", value: stats.soonEra.total, count: stats.soonEra.count },
+              { label: "Medicaid (next Wed)", value: stats.soonMedicaid.total, count: stats.soonMedicaid.count },
+            ]}
             tooltipText="Non-Medicaid claims where the EFT effective date is in the future, plus pure Medicaid claims whose 3/4-Wednesday settle date is within 7 days. Near-zero risk."
           />
           <Tile
@@ -95,6 +99,12 @@ const TONE_CLASSES: Record<Tone, { icon: string; ring: string }> = {
   danger:  { icon: "bg-rose-100 text-rose-700",     ring: "" },
 };
 
+interface BreakdownRow {
+  label: string;
+  value: number;
+  count: number;
+}
+
 function Tile({
   label,
   amount,
@@ -103,6 +113,7 @@ function Tile({
   icon,
   tone,
   tooltipText,
+  breakdown,
 }: {
   label: string;
   amount: number;
@@ -111,6 +122,7 @@ function Tile({
   icon: React.ReactNode;
   tone: Tone;
   tooltipText?: string;
+  breakdown?: BreakdownRow[];
 }) {
   const t = TONE_CLASSES[tone];
   const body = (
@@ -132,6 +144,19 @@ function Tile({
           <span className="mx-1">·</span>
           <span>{subtitle}</span>
         </div>
+        {breakdown && breakdown.length > 0 && (
+          <div className="mt-2 space-y-0.5 border-t pt-2 text-xs text-muted-foreground">
+            {breakdown.map((row) => (
+              <div key={row.label} className="flex items-baseline justify-between gap-2">
+                <span>{row.label}</span>
+                <span className="tabular-nums">
+                  <span className="font-medium text-foreground">{money(row.value)}</span>
+                  <span className="ml-1 text-muted-foreground">({row.count})</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </Card>
   );
