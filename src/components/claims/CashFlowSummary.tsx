@@ -69,11 +69,11 @@ export function CashFlowSummary({ claims }: Props) {
           <Tile
             tone="neutral"
             icon={<Clock className="h-5 w-5" />}
-            label="Medicaid 1+ week"
-            amount={stats.medicaid1plus.total}
-            count={stats.medicaid1plus.count}
-            subtitle="future Wednesdays"
-            tooltipText="Pure Medicaid claims whose 3/4-Wednesday settle date is more than 7 days away. Predictable but slower."
+            label="Expected"
+            amount={stats.expected.total}
+            count={stats.expected.count}
+            subtitle="Medicaid 1+ wk + new claims (<21d)"
+            tooltipText="Pure Medicaid claims whose eMedNY settle date is more than 7 days away, plus non-Medicaid claims still awaiting an ERA but submitted within the last 21 days (normal payer turnaround window). Low-medium risk."
           />
           <Tile
             tone="danger"
@@ -81,8 +81,8 @@ export function CashFlowSummary({ claims }: Props) {
             label="High risk"
             amount={stats.highRisk.total}
             count={stats.highRisk.count}
-            subtitle="no ERA yet"
-            tooltipText="Non-Medicaid claims awaiting an ERA. Could land at the est pay, partial, or zero depending on payer adjudication."
+            subtitle="no ERA, sent 21+ days ago"
+            tooltipText="Non-Medicaid claims submitted 21+ days ago that still have no ERA. Past normal payer turnaround — something may be wrong (denial, payer issue, lost claim)."
           />
         </div>
       </section>

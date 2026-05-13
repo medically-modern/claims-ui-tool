@@ -19,36 +19,48 @@ export function isPureMedicaid(payer: string | null | undefined): boolean {
 }
 
 /**
- * Medicaid payment rule:
- *   - Submitted Sun/Mon/Tue/Wed  → 3rd Wednesday strictly after submission
- *   - Submitted Thu/Fri/Sat      → 4th Wednesday strictly after submission
+ * eMedNY payment cycle rule.
+ * Reference: https://www.emedny.org/hipaa/news/PDFS/CYCLE_CALENDAR.pdf
  *
- * Examples:
- *   sent Wed 2026-05-13 → paid Wed 2026-06-03 (3rd Wed after)
- *   sent Thu 2026-05-14 → paid Wed 2026-06-10 (4th Wed after)
+ * Cycles run Thursday → Wednesday. Each cycle ends on a Wednesday. The
+ * Check Date is the following Monday. EFT is initiated on the Wednesday
+ * 2 weeks and 2 days after the Check Date — which simplifies to:
+ *
+ *   EFT date = cycle_end_Wednesday + 21 days
+ *
+ * where cycle_end_Wednesday is the next Wednesday on or after the
+ * submission date.
+ *
+ * Examples (verified against the eMedNY cycle calendar):
+ *   sent Wed 2026-04-15 → cycle end 04/15 → paid Wed 2026-05-06
+ *   sent Mon 2026-04-20 → cycle end 04/22 → paid Wed 2026-05-13
+ *   sent Tue 2026-04-28 → cycle end 04/29 → paid Wed 2026-05-20
+ *   sent Wed 2026-05-13 → cycle end 05/13 → paid Wed 2026-06-03
+ *   sent Thu 2026-05-14 → cycle end 05/20 → paid Wed 2026-06-10
  */
 export function medicaidPaymentDate(sentDate: Date): Date {
-  const dow = sentDate.getDay(); // 0=Sun … 6=Sat
-  const wedNumber = dow >= 4 ? 4 : 3; // Thu-Sat get the 4th Wed; rest get 3rd
-  const target = new Date(sentDate);
-  // Advance to first Wednesday strictly AFTER sent date
-  do {
-    target.setDate(target.getDate() + 1);
-  } while (target.getDay() !== 3);
-  // Add (wedNumber - 1) more weeks
-  target.setDate(target.getDate() + 7 * (wedNumber - 1));
-  return target;
+  const dow = sentDate.getDay(); // 0=Sun, 3=Wed
+  // Days until the next Wednesday (0 if sentDate is already a Wed)
+  const daysUntilWed = (3 - dow + 7) % 7;
+  const cycleEnd = new Date(sentDate);
+  cycleEnd.setDate(cycleEnd.getDate() + daysUntilWed);
+  const eft = new Date(cycleEnd);
+  eft.setDate(eft.getDate() + 21);
+  return eft;
 }
 
 export type CashFlowBucket =
   | "soonEra"        // Soon — ERA in hand, future paid date
   | "soonMedicaid"   // Soon — pure Medicaid, no ERA, next Wed cycle
-  | "medicaid1plus"
-  | "highRisk"
+  | "expected"       // pure Medicaid 1+ Wk OR non-Medicaid no-ERA, < 21 days old
+  | "highRisk"       // non-Medicaid, no ERA, 21+ days old — likely stuck
   | "settled"
   | "out";
 
 const SOON_HORIZON_DAYS = 7;
+/** Non-Medicaid no-ERA claims younger than this are still expected to pay.
+ *  Older than this and we treat it as stuck / High Risk. */
+const EXPECTED_AGE_LIMIT_DAYS = 21;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 const PRE_OR_TERMINAL: ReadonlySet<string> = new Set([
@@ -73,7 +85,7 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
     return "soonEra"; // EFT in the future — clear, near-term inflow
   }
 
-  // No ERA yet — bucket by payer behavior
+  // No ERA yet — bucket by payer + claim age
   if (isPureMedicaid(claim.primaryPayor) && claim.claimSentDate) {
     const sent = new Date(claim.claimSentDate);
     if (Number.isFinite(sent.getTime())) {
@@ -81,11 +93,22 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
       const daysAway = Math.ceil(
         (projectedPay.getTime() - todayMs) / MS_PER_DAY,
       );
-      return daysAway <= SOON_HORIZON_DAYS ? "soonMedicaid" : "medicaid1plus";
+      return daysAway <= SOON_HORIZON_DAYS ? "soonMedicaid" : "expected";
     }
   }
 
-  // Non-Medicaid without ERA → could land at $0
+  // Non-Medicaid without ERA — Expected while still in the normal payer
+  // turnaround window (<21 days from claim sent date). Past that, treat as
+  // High Risk (likely stuck, denied, or otherwise not coming).
+  if (claim.claimSentDate) {
+    const sent = new Date(claim.claimSentDate);
+    if (Number.isFinite(sent.getTime())) {
+      const ageDays = Math.floor((todayMs - sent.getTime()) / MS_PER_DAY);
+      return ageDays <= EXPECTED_AGE_LIMIT_DAYS ? "expected" : "highRisk";
+    }
+  }
+
+  // No sent date and no ERA — treat conservatively as High Risk
   return "highRisk";
 }
 
@@ -110,7 +133,9 @@ export interface CashFlowStats {
   soonEra: BucketStat;
   /** Sub-bucket of Soon: pure Medicaid, no ERA, settles within 7 days. */
   soonMedicaid: BucketStat;
-  medicaid1plus: BucketStat;
+  /** Pure Medicaid 1+ Wk + non-Medicaid no-ERA under 21 days old. */
+  expected: BucketStat;
+  /** Non-Medicaid no-ERA, 21+ days old (likely stuck). */
   highRisk: BucketStat;
   totalOpen: BucketStat;
 }
@@ -121,12 +146,12 @@ export function computeCashFlow(
 ): CashFlowStats {
   const empty = (): BucketStat => ({ count: 0, total: 0 });
   const out: Record<
-    "soonEra" | "soonMedicaid" | "medicaid1plus" | "highRisk",
+    "soonEra" | "soonMedicaid" | "expected" | "highRisk",
     BucketStat
   > = {
     soonEra: empty(),
     soonMedicaid: empty(),
-    medicaid1plus: empty(),
+    expected: empty(),
     highRisk: empty(),
   };
 
@@ -143,8 +168,8 @@ export function computeCashFlow(
     total: out.soonEra.total + out.soonMedicaid.total,
   };
   const totalOpen: BucketStat = {
-    count: soon.count + out.medicaid1plus.count + out.highRisk.count,
-    total: soon.total + out.medicaid1plus.total + out.highRisk.total,
+    count: soon.count + out.expected.count + out.highRisk.count,
+    total: soon.total + out.expected.total + out.highRisk.total,
   };
 
   return { ...out, soon, totalOpen };
