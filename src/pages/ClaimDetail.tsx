@@ -50,6 +50,7 @@ import {
 import {
   markPrimaryPaid as apiMarkPrimaryPaid,
   isMarkPaidConfigured,
+  isForwardedByPrimary,
   MarkPaidError,
   secondaryItemUrl,
   summarizeSecondary,
@@ -380,8 +381,21 @@ const ClaimDetail = () => {
             sub="Based on service lines" />
           <SummaryStat label="Primary Paid" value={fmtMoney(claim.primaryPaid)}
             sub={claim.primaryPaidDate ? `Paid ${fmtDate(claim.primaryPaidDate)}` : "Not paid yet"} />
-          <SummaryStat label="Patient Responsibility" value={fmtMoney(claim.prAmount)}
-            sub={`Deductible ${fmtMoney(claim.lines.reduce((s, l) => s + l.deductible, 0))} · Coins ${fmtMoney(claim.lines.reduce((s, l) => s + l.coinsurance, 0))}`} />
+          <SummaryStat
+            label="Patient Responsibility"
+            value={fmtMoney(claim.prAmount)}
+            sub={`Deductible ${fmtMoney(claim.lines.reduce((s, l) => s + l.deductible, 0))} · Coins ${fmtMoney(claim.lines.reduce((s, l) => s + l.coinsurance, 0))}`}
+            badge={
+              isForwardedByPrimary(claim.rawEraClaimStatus) ? (
+                <span
+                  className="inline-flex h-5 items-center rounded-md bg-blue-100 px-1.5 text-[10px] font-medium uppercase tracking-wide text-blue-700"
+                  title={claim.rawEraClaimStatus ?? undefined}
+                >
+                  Forwarded
+                </span>
+              ) : null
+            }
+          />
           <SummaryStat
             label="Difference"
             value={vPretty.tone === "balanced" ? "Balanced" : (v > 0 ? `${fmtMoney(v)} short` : `${fmtMoney(Math.abs(v))} over`)}
@@ -570,6 +584,7 @@ const ClaimDetail = () => {
                       claim.prAmount,
                       claim.primaryPayor,
                       claim.secondaryPayer,
+                      claim.rawEraClaimStatus,
                     )}
                   </span>
                 </p>
@@ -592,10 +607,12 @@ const ClaimDetail = () => {
 };
 
 function SummaryStat({
-  label, value, sub, tone = "neutral",
+  label, value, sub, tone = "neutral", badge,
 }: {
   label: string; value: string; sub?: string;
   tone?: "neutral" | "success" | "warning" | "danger" | "info";
+  /** Optional pill rendered below the sub line — e.g. "Forwarded". */
+  badge?: React.ReactNode;
 }) {
   const toneText: Record<typeof tone, string> = {
     neutral: "text-foreground",
@@ -610,6 +627,7 @@ function SummaryStat({
         <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
         <div className={cn("mt-1 text-2xl font-semibold tabular-nums", toneText[tone])}>{value}</div>
         {sub && <div className="mt-1 text-xs text-muted-foreground">{sub}</div>}
+        {badge && <div className="mt-2">{badge}</div>}
       </CardContent>
     </Card>
   );

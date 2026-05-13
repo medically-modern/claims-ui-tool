@@ -29,6 +29,7 @@ import {
 import {
   markPrimaryPaid as apiMarkPrimaryPaid,
   isMarkPaidConfigured,
+  isForwardedByPrimary,
   MarkPaidError,
   secondaryItemUrl,
   summarizeSecondary,
@@ -914,7 +915,8 @@ const Claims = () => {
                                         {eraIn ? fmtMoney(c.primaryPaid) : "—"}
                                       </TableCell>
                                     );
-                                  case "pr":
+                                  case "pr": {
+                                    const forwarded = isForwardedByPrimary(c.rawEraClaimStatus);
                                     return (
                                       <TableCell
                                         key={col}
@@ -923,9 +925,25 @@ const Claims = () => {
                                           !eraIn && "text-muted-foreground",
                                         )}
                                       >
-                                        {eraIn ? fmtMoney(c.prAmount) : "—"}
+                                        <div className="flex flex-col items-end gap-1">
+                                          <span>{eraIn ? fmtMoney(c.prAmount) : "—"}</span>
+                                          {forwarded && (
+                                            <Tooltip>
+                                              <TooltipTrigger asChild>
+                                                <span className="inline-flex h-5 items-center rounded-md bg-blue-100 px-1.5 text-[10px] font-medium uppercase tracking-wide text-blue-700 cursor-help">
+                                                  Forwarded
+                                                </span>
+                                              </TooltipTrigger>
+                                              <TooltipContent>
+                                                Primary forwarded to secondary
+                                                ({c.rawEraClaimStatus})
+                                              </TooltipContent>
+                                            </Tooltip>
+                                          )}
+                                        </div>
                                       </TableCell>
                                     );
+                                  }
                                   case "difference":
                                     // Difference = estPay - paid - PR. Negative means we got
                                     // paid MORE than projected → that's good, color green.
@@ -1068,6 +1086,7 @@ const Claims = () => {
                           markPaidTarget.prAmount,
                           markPaidTarget.primaryPayor,
                           markPaidTarget.secondaryPayer,
+                          markPaidTarget.rawEraClaimStatus,
                         )
                       : "None"}
                   </span>

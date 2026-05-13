@@ -109,10 +109,26 @@ const MEDICARE_PRIMARY_PAYORS = new Set([
 
 export type SubmissionType = "Forwarded" | "Insurance" | "Patient";
 
+/**
+ * True when the Raw ERA Claim Status indicates the primary payer
+ * auto-forwarded this claim to a secondary (Medicare crossover behavior).
+ * Mary Moody's ERA text was "Processed as Primary, Forwarded to Secondary
+ * Payer" — that "Forwarded to Secondary" phrase is the authoritative signal.
+ */
+export function isForwardedByPrimary(
+  rawEraClaimStatus: string | null | undefined,
+): boolean {
+  return /forwarded to secondary/i.test(rawEraClaimStatus || "");
+}
+
 export function predictSubmissionType(
   primaryPayor: string | null | undefined,
   secondaryPayer: string | null | undefined,
+  rawEraClaimStatus?: string | null | undefined,
 ): SubmissionType {
+  // ERA text wins: if Medicare already auto-forwarded the claim, that's
+  // Forwarded even if our Secondary Payer column on Monday is blank.
+  if (isForwardedByPrimary(rawEraClaimStatus)) return "Forwarded";
   if (!(secondaryPayer || "").trim()) return "Patient";
   if (MEDICARE_PRIMARY_PAYORS.has((primaryPayor || "").trim())) return "Forwarded";
   return "Insurance";
@@ -127,7 +143,8 @@ export function summarizeSecondary(
   prAmount: number,
   primaryPayor: string | null | undefined,
   secondaryPayer: string | null | undefined,
+  rawEraClaimStatus?: string | null | undefined,
 ): string {
   if (prAmount <= 0) return "None";
-  return predictSubmissionType(primaryPayor, secondaryPayer);
+  return predictSubmissionType(primaryPayor, secondaryPayer, rawEraClaimStatus);
 }
