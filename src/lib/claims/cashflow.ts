@@ -63,27 +63,39 @@ const SOON_HORIZON_DAYS = 7;
 const EXPECTED_AGE_LIMIT_DAYS = 21;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+// Pre-submission / written-off / rejected — these are out of the cash flow
+// pipeline entirely. Notably "Paid" is NOT in this set: a Medicaid claim
+// pre-filled with a future paid date often has status="Paid" (lives in the
+// "Medicaid Outstanding (Paid but didn't hit bank yet)" group). Those should
+// count as inflow until the date passes — the paid-date check below handles
+// the actual settled-vs-pending decision.
 const PRE_OR_TERMINAL: ReadonlySet<string> = new Set([
   "Submit Claim",
   "Future Claim",
   "Not Started Yet",
   "Bad Debt",
   "Request Rejected",
-  "Paid", // Status "Paid" means closed/booked; cash already in bank.
 ]);
 
 export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
-  if (PRE_OR_TERMINAL.has(claim.primaryStatus)) return "out";
-
   const todayMs = today.getTime();
 
-  // ERA in hand → use the EFT effective date as the settle signal
+  // Check paid date FIRST. A future EFT date means the money is still in
+  // flight regardless of what the Primary status column says — so Medicaid
+  // Outstanding (status=Paid, paidDate=future) flows through to soonEra.
   if (claim.primaryPaidDate) {
     const paidMs = new Date(claim.primaryPaidDate).getTime();
-    if (!Number.isFinite(paidMs)) return "highRisk"; // bad data, treat conservatively
-    if (paidMs <= todayMs) return "settled"; // already cleared
-    return "soonEra"; // EFT in the future — clear, near-term inflow
+    if (Number.isFinite(paidMs)) {
+      if (paidMs <= todayMs) return "settled"; // already cleared
+      return "soonEra"; // EFT in the future
+    }
   }
+
+  // No paid date — bucket by status
+  if (PRE_OR_TERMINAL.has(claim.primaryStatus)) return "out";
+  // Status "Paid" without a paid date is an oddity — treat as settled rather
+  // than reclassifying as inflow (we don't know the EFT, can't project).
+  if (claim.primaryStatus === "Paid") return "out";
 
   // No ERA yet — bucket by payer + claim age
   if (isPureMedicaid(claim.primaryPayor) && claim.claimSentDate) {
