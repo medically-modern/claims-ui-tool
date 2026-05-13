@@ -225,10 +225,14 @@ function recordFromWriteback(
 }
 
 function inLateEra(c: Claim) {
-  // "Late ERAs" = No ERA Yet (per spec)
+  // "Late ERAs" = submitted 21+ days ago with no ERA yet. 21 days matches
+  // the Cash Flow tile's High Risk threshold so a single claim is either
+  // "Expected" in both views or "Late / High Risk" in both — operators
+  // shouldn't see a claim flagged Late while Cash Flow still calls it
+  // Expected.
   const age = claimAge(c) ?? 0;
   const excluded = ["Paid", "Denied (Or Partly)", "Bad Debt", "Request Rejected"];
-  return Boolean(c.claimSentDate) && !eraReceived(c) && age >= 15 && !excluded.includes(c.primaryStatus);
+  return Boolean(c.claimSentDate) && !eraReceived(c) && age >= 21 && !excluded.includes(c.primaryStatus);
 }
 function inDenied(c: Claim) {
   return c.primaryStatus === "Denied (Or Partly)";
