@@ -1,14 +1,28 @@
-// Cash-flow bucketing for the Primary Board summary tile.
+// Cash-flow bucketing across both the Primary Claims Board and the
+// Secondary Claims Board.
 //
-// Three buckets:
-//   - "soon"          → low-risk inflow expected within ~7 days
-//   - "medicaid1plus" → pure Medicaid scheduled for a Wednesday >7 days out
-//   - "highRisk"      → no ERA yet, non-Medicaid — could land at $0
+// Buckets:
+//   - "soonEra"      → ERA in hand (primary or secondary), future pay date
+//   - "soonMedicaid" → pure Medicaid no ERA, settles within 7 days
+//   - "expectedPrimaryNonMedicaid" → non-Medicaid primary no-ERA <21 days
+//   - "expectedPrimaryMedicaid"    → pure Medicaid no-ERA >7 days away
+//   - "expectedSecondaryInsurance" → secondary (Forwarded/Insurance) awaiting ERA
+//   - "expectedSecondaryPatient"   → secondary type=Patient, awaiting payment
+//   - "highRisk"     → non-Medicaid primary no ERA, 21+ days old
+//   - "settled"      → already paid (paid date in the past)
+//   - "out"          → pre-submission, write-off, terminal — not inflow
 //
-// "settled" (paid date already in the past) and "out" (pre-submission /
-// terminal write-off) claims are excluded from all buckets.
+// Cash flow contribution per claim:
+//   - settled primary ERA in hand future pay  → secondary cash flow (the
+//     primary's already landed, money was counted then)
+//   - primary awaiting ERA                    → est. pay
+//   - secondary ERA in hand future pay        → secondaryPaid (what AARP/Medigap
+//     will deposit)
+//   - secondary awaiting ERA / patient        → c.remaining (the PR the primary
+//     passed down)
 
 import type { Claim } from "./types";
+import type { SecClaim } from "@/components/claims/SecondaryBoard";
 
 // Pure Medicaid only — variants like "Fidelis Medicaid" or "United Medicaid"
 // pay on commercial timelines, not the 3-Wednesday cycle.
@@ -22,25 +36,13 @@ export function isPureMedicaid(payer: string | null | undefined): boolean {
  * eMedNY payment cycle rule.
  * Reference: https://www.emedny.org/hipaa/news/PDFS/CYCLE_CALENDAR.pdf
  *
- * Cycles run Thursday → Wednesday. Each cycle ends on a Wednesday. The
- * Check Date is the following Monday. EFT is initiated on the Wednesday
- * 2 weeks and 2 days after the Check Date — which simplifies to:
- *
  *   EFT date = cycle_end_Wednesday + 21 days
  *
  * where cycle_end_Wednesday is the next Wednesday on or after the
  * submission date.
- *
- * Examples (verified against the eMedNY cycle calendar):
- *   sent Wed 2026-04-15 → cycle end 04/15 → paid Wed 2026-05-06
- *   sent Mon 2026-04-20 → cycle end 04/22 → paid Wed 2026-05-13
- *   sent Tue 2026-04-28 → cycle end 04/29 → paid Wed 2026-05-20
- *   sent Wed 2026-05-13 → cycle end 05/13 → paid Wed 2026-06-03
- *   sent Thu 2026-05-14 → cycle end 05/20 → paid Wed 2026-06-10
  */
 export function medicaidPaymentDate(sentDate: Date): Date {
   const dow = sentDate.getDay(); // 0=Sun, 3=Wed
-  // Days until the next Wednesday (0 if sentDate is already a Wed)
   const daysUntilWed = (3 - dow + 7) % 7;
   const cycleEnd = new Date(sentDate);
   cycleEnd.setDate(cycleEnd.getDate() + daysUntilWed);
@@ -50,10 +52,13 @@ export function medicaidPaymentDate(sentDate: Date): Date {
 }
 
 export type CashFlowBucket =
-  | "soonEra"        // Soon — ERA in hand, future paid date
-  | "soonMedicaid"   // Soon — pure Medicaid, no ERA, next Wed cycle
-  | "expected"       // pure Medicaid 1+ Wk OR non-Medicaid no-ERA, < 21 days old
-  | "highRisk"       // non-Medicaid, no ERA, 21+ days old — likely stuck
+  | "soonEra"
+  | "soonMedicaid"
+  | "expectedPrimaryNonMedicaid"
+  | "expectedPrimaryMedicaid"
+  | "expectedSecondaryInsurance"
+  | "expectedSecondaryPatient"
+  | "highRisk"
   | "settled"
   | "out";
 
@@ -63,12 +68,6 @@ const SOON_HORIZON_DAYS = 7;
 const EXPECTED_AGE_LIMIT_DAYS = 21;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-// Pre-submission / written-off / rejected — these are out of the cash flow
-// pipeline entirely. Notably "Paid" is NOT in this set: a Medicaid claim
-// pre-filled with a future paid date often has status="Paid" (lives in the
-// "Medicaid Outstanding (Paid but didn't hit bank yet)" group). Those should
-// count as inflow until the date passes — the paid-date check below handles
-// the actual settled-vs-pending decision.
 const PRE_OR_TERMINAL: ReadonlySet<string> = new Set([
   "Submit Claim",
   "Future Claim",
@@ -77,37 +76,34 @@ const PRE_OR_TERMINAL: ReadonlySet<string> = new Set([
   "Request Rejected",
 ]);
 
+/** Bucket a primary-board Claim. */
 export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
   const todayMs = today.getTime();
 
   // Check paid date FIRST. The Primary status field doesn't tell us
   // whether money has actually hit the bank — the paid date does.
-  //   paidDate <= today      → settled (excluded from inflow)
-  //   today < paidDate <= +7 → Soon (split by payer: Medicaid vs ERA-received)
-  //   paidDate > +7          → Expected (further-out scheduled deposit)
-  //
-  // The Medicaid sub-bucket and ERA-received sub-bucket of Soon are
-  // distinguished by payer type, not by whether the paid date came from an
-  // ERA vs a backend pre-fill. Pure-Medicaid pre-fills count as
-  // Medicaid-next-Wed; everything else with a future paid date is
-  // ERA-received.
   if (claim.primaryPaidDate) {
     const paidMs = new Date(claim.primaryPaidDate).getTime();
     if (Number.isFinite(paidMs)) {
       if (paidMs <= todayMs) return "settled";
       const daysAway = Math.ceil((paidMs - todayMs) / MS_PER_DAY);
-      if (daysAway > SOON_HORIZON_DAYS) return "expected";
+      if (daysAway > SOON_HORIZON_DAYS) {
+        // Future ERA more than 7 days out → still scheduled inflow, but
+        // there isn't a perfect Expected sub-bucket; treat as
+        // expectedPrimaryNonMedicaid (Medicaid prefills usually fall
+        // within the 7-day Soon window anyway).
+        return isPureMedicaid(claim.primaryPayor)
+          ? "expectedPrimaryMedicaid"
+          : "expectedPrimaryNonMedicaid";
+      }
       return isPureMedicaid(claim.primaryPayor) ? "soonMedicaid" : "soonEra";
     }
   }
 
-  // No paid date — bucket by status
   if (PRE_OR_TERMINAL.has(claim.primaryStatus)) return "out";
-  // Status "Paid" without a paid date is an oddity — treat as settled rather
-  // than reclassifying as inflow (we don't know the EFT, can't project).
   if (claim.primaryStatus === "Paid") return "out";
 
-  // No ERA yet — bucket by payer + claim age
+  // No ERA yet — pure Medicaid uses the eMedNY cycle math.
   if (isPureMedicaid(claim.primaryPayor) && claim.claimSentDate) {
     const sent = new Date(claim.claimSentDate);
     if (Number.isFinite(sent.getTime())) {
@@ -115,32 +111,86 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
       const daysAway = Math.ceil(
         (projectedPay.getTime() - todayMs) / MS_PER_DAY,
       );
-      return daysAway <= SOON_HORIZON_DAYS ? "soonMedicaid" : "expected";
+      return daysAway <= SOON_HORIZON_DAYS
+        ? "soonMedicaid"
+        : "expectedPrimaryMedicaid";
     }
   }
 
-  // Non-Medicaid without ERA — Expected while still in the normal payer
-  // turnaround window (< 21 days from claim sent date). At 21+ days, treat
-  // as High Risk (likely stuck, denied, or otherwise not coming).
+  // Non-Medicaid without ERA — Expected if still within normal payer
+  // turnaround (< 21 days), High Risk past that.
   if (claim.claimSentDate) {
     const sent = new Date(claim.claimSentDate);
     if (Number.isFinite(sent.getTime())) {
       const ageDays = Math.floor((todayMs - sent.getTime()) / MS_PER_DAY);
-      return ageDays < EXPECTED_AGE_LIMIT_DAYS ? "expected" : "highRisk";
+      return ageDays < EXPECTED_AGE_LIMIT_DAYS
+        ? "expectedPrimaryNonMedicaid"
+        : "highRisk";
     }
   }
 
-  // No sent date and no ERA — treat conservatively as High Risk
   return "highRisk";
 }
 
+/** Bucket a secondary-board SecClaim. */
+export function classifyForCashFlowSecondary(
+  claim: SecClaim,
+  today: Date,
+): CashFlowBucket {
+  const todayMs = today.getTime();
+
+  // Settled / closed-out states first.
+  if (
+    claim.status === "Patient Paid" ||
+    claim.status === "Bad Debt"
+  ) {
+    return "out";
+  }
+
+  // Pay date already in the past → already landed, exclude from inflow.
+  if (claim.secondaryPayDate) {
+    const paidMs = new Date(claim.secondaryPayDate).getTime();
+    if (Number.isFinite(paidMs)) {
+      if (paidMs <= todayMs) return "settled";
+      // ERA received with future pay date → Soon (ERA received).
+      return "soonEra";
+    }
+  }
+
+  // No pay date yet. Patient-type goes to its own Expected sub-bucket.
+  // Either the operator hasn't sent the statement yet, or it's out for
+  // patient payment.
+  if (
+    claim.status === "Sent to Patient" ||
+    (claim.secondaryPayer === "Patient")
+  ) {
+    return "expectedSecondaryPatient";
+  }
+
+  // Insurance/Forwarded — awaiting crossover ERA or 837 response. Both
+  // bucket as Secondary (Insurance) Expected.
+  return "expectedSecondaryInsurance";
+}
+
 /**
- * Best estimate of how many dollars this claim will deposit. If we have an
- * ERA, use the actual Primary Paid amount; otherwise project from est pay.
+ * Dollar contribution to cash flow for a primary claim. ERA-in-hand uses
+ * the actual Primary Paid; otherwise project from est pay.
  */
 export function expectedInflowAmount(claim: Claim): number {
   if (claim.primaryPaidDate) return claim.primaryPaid;
   return claim.estPay;
+}
+
+/**
+ * Dollar contribution to cash flow for a secondary claim. ERA-in-hand
+ * uses the actual Secondary Paid; otherwise project from the PR the
+ * primary passed down (c.remaining).
+ */
+export function expectedInflowAmountSecondary(claim: SecClaim): number {
+  if (claim.secondaryPayDate && claim.secondaryPaid != null) {
+    return claim.secondaryPaid;
+  }
+  return claim.remaining;
 }
 
 export interface BucketStat {
@@ -149,50 +199,106 @@ export interface BucketStat {
 }
 
 export interface CashFlowStats {
-  /** Combined Soon = ERA-in-hand + Medicaid-next-Wed. */
-  soon: BucketStat;
-  /** Sub-bucket of Soon: ERA received, future paid date. */
-  soonEra: BucketStat;
-  /** Sub-bucket of Soon: pure Medicaid, no ERA, settles within 7 days. */
-  soonMedicaid: BucketStat;
-  /** Pure Medicaid 1+ Wk + non-Medicaid no-ERA under 21 days old. */
-  expected: BucketStat;
-  /** Non-Medicaid no-ERA, 21+ days old (likely stuck). */
-  highRisk: BucketStat;
+  // Aggregate
   totalOpen: BucketStat;
+  primaryTotal: BucketStat;
+  secondaryTotal: BucketStat;
+
+  // Soon
+  soon: BucketStat;
+  soonEra: BucketStat;
+  soonMedicaid: BucketStat;
+
+  // Expected (split four ways)
+  expected: BucketStat;
+  expectedPrimaryNonMedicaid: BucketStat;
+  expectedPrimaryMedicaid: BucketStat;
+  expectedSecondaryInsurance: BucketStat;
+  expectedSecondaryPatient: BucketStat;
+
+  // High risk (primary only)
+  highRisk: BucketStat;
+}
+
+function emptyStat(): BucketStat {
+  return { count: 0, total: 0 };
+}
+
+function addToStat(stat: BucketStat, amount: number): void {
+  stat.count += 1;
+  stat.total += amount;
 }
 
 export function computeCashFlow(
   claims: Claim[],
+  secondaryClaims: SecClaim[] = [],
   today: Date = new Date(),
 ): CashFlowStats {
-  const empty = (): BucketStat => ({ count: 0, total: 0 });
-  const out: Record<
-    "soonEra" | "soonMedicaid" | "expected" | "highRisk",
+  const buckets: Record<
+    Exclude<CashFlowBucket, "settled" | "out">,
     BucketStat
   > = {
-    soonEra: empty(),
-    soonMedicaid: empty(),
-    expected: empty(),
-    highRisk: empty(),
+    soonEra: emptyStat(),
+    soonMedicaid: emptyStat(),
+    expectedPrimaryNonMedicaid: emptyStat(),
+    expectedPrimaryMedicaid: emptyStat(),
+    expectedSecondaryInsurance: emptyStat(),
+    expectedSecondaryPatient: emptyStat(),
+    highRisk: emptyStat(),
   };
+
+  const primaryTotal = emptyStat();
+  const secondaryTotal = emptyStat();
 
   for (const c of claims) {
     const bucket = classifyForCashFlow(c, today);
     if (bucket === "settled" || bucket === "out") continue;
     const amount = expectedInflowAmount(c);
-    out[bucket].count += 1;
-    out[bucket].total += amount;
+    addToStat(buckets[bucket], amount);
+    addToStat(primaryTotal, amount);
+  }
+
+  for (const c of secondaryClaims) {
+    const bucket = classifyForCashFlowSecondary(c, today);
+    if (bucket === "settled" || bucket === "out") continue;
+    const amount = expectedInflowAmountSecondary(c);
+    addToStat(buckets[bucket], amount);
+    addToStat(secondaryTotal, amount);
   }
 
   const soon: BucketStat = {
-    count: out.soonEra.count + out.soonMedicaid.count,
-    total: out.soonEra.total + out.soonMedicaid.total,
+    count: buckets.soonEra.count + buckets.soonMedicaid.count,
+    total: buckets.soonEra.total + buckets.soonMedicaid.total,
+  };
+  const expected: BucketStat = {
+    count:
+      buckets.expectedPrimaryNonMedicaid.count +
+      buckets.expectedPrimaryMedicaid.count +
+      buckets.expectedSecondaryInsurance.count +
+      buckets.expectedSecondaryPatient.count,
+    total:
+      buckets.expectedPrimaryNonMedicaid.total +
+      buckets.expectedPrimaryMedicaid.total +
+      buckets.expectedSecondaryInsurance.total +
+      buckets.expectedSecondaryPatient.total,
   };
   const totalOpen: BucketStat = {
-    count: soon.count + out.expected.count + out.highRisk.count,
-    total: soon.total + out.expected.total + out.highRisk.total,
+    count: soon.count + expected.count + buckets.highRisk.count,
+    total: soon.total + expected.total + buckets.highRisk.total,
   };
 
-  return { ...out, soon, totalOpen };
+  return {
+    totalOpen,
+    primaryTotal,
+    secondaryTotal,
+    soon,
+    soonEra: buckets.soonEra,
+    soonMedicaid: buckets.soonMedicaid,
+    expected,
+    expectedPrimaryNonMedicaid: buckets.expectedPrimaryNonMedicaid,
+    expectedPrimaryMedicaid: buckets.expectedPrimaryMedicaid,
+    expectedSecondaryInsurance: buckets.expectedSecondaryInsurance,
+    expectedSecondaryPatient: buckets.expectedSecondaryPatient,
+    highRisk: buckets.highRisk,
+  };
 }

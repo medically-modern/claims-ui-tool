@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/table";
 import { MOCK_CLAIMS as MOCK_CLAIMS_FALLBACK } from "@/lib/claims/mockData";
 import { useAllClaims } from "@/hooks/useAllClaims";
+import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
 import { hasMondayToken } from "@/api/monday";
 import { LoadingOverlay } from "@/components/claims/LoadingOverlay";
 import { CashFlowSummary } from "@/components/claims/CashFlowSummary";
@@ -283,6 +284,10 @@ const Claims = () => {
     ? mondayClaims ?? []
     : MOCK_CLAIMS_FALLBACK;
 
+  // Secondary claims — feed into the Cash Flow tile so Soon/Expected
+  // include the secondary side. Empty array when token missing.
+  const { data: secondaryClaims } = useAllSecondaryClaims();
+
   // ─── Row-level Mark Paid wiring ──────────────────────────────────────────
   // The check-mark icon on each row in the table now actually calls the
   // backend (POST /claims/mark-paid) instead of just toasting. We track
@@ -493,7 +498,10 @@ const Claims = () => {
         {board === "playbook" ? (
           <DenialAnalysisTable />
         ) : board === "cashflow" ? (
-          <CashFlowSummary claims={MOCK_CLAIMS} />
+          <CashFlowSummary
+            claims={MOCK_CLAIMS}
+            secondaryClaims={secondaryClaims ?? []}
+          />
         ) : board === "secondary" ? (
           <SecondaryBoard mode={mode} />
         ) : mode === "submit" ? (

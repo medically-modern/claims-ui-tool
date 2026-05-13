@@ -1,6 +1,5 @@
-// Top-of-page cash flow summary. Four tiles: Total Open, Soon, Medicaid 1+
-// Week, High Risk. Read-only — doesn't filter the table below; it's purely
-// a "what's coming in and when" snapshot for the operator.
+// Top-of-page cash flow summary. Four tiles: Total Open, Soon, Expected,
+// High Risk. Spans both Primary and Secondary claims.
 
 import { useMemo } from "react";
 import { Card } from "@/components/ui/card";
@@ -9,19 +8,29 @@ import { TrendingUp, Calendar, Clock, AlertTriangle, Info } from "lucide-react";
 import { computeCashFlow } from "@/lib/claims/cashflow";
 import { fmtMoney } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
+import type { SecClaim } from "@/components/claims/SecondaryBoard";
 import { cn } from "@/lib/utils";
 
 interface Props {
   claims: Claim[];
+  secondaryClaims?: SecClaim[];
 }
 
-// Drop the cents — these are aggregate dollars, not invoice-level numbers.
+// Drop the cents — aggregate dollars, not invoice-level.
 function money(n: number): string {
   return fmtMoney(Math.round(n)).replace(/\.00$/, "");
 }
 
-export function CashFlowSummary({ claims }: Props) {
-  const stats = useMemo(() => computeCashFlow(claims), [claims]);
+export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
+  const stats = useMemo(
+    () => computeCashFlow(claims, secondaryClaims),
+    [claims, secondaryClaims],
+  );
+
+  const avgClaim =
+    stats.totalOpen.count > 0
+      ? stats.totalOpen.total / stats.totalOpen.count
+      : 0;
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -36,9 +45,10 @@ export function CashFlowSummary({ claims }: Props) {
                 <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent className="max-w-sm text-xs">
-                Expected inflow projection. Excludes claims already settled
-                (paid date in the past) and pre-submission states. Medicaid
-                uses the 3 / 4 Wednesday rule from the submission date.
+                Expected inflow projection across both Primary and Secondary
+                boards. Excludes claims already settled (paid date in the
+                past) and pre-submission states. Medicaid uses the eMedNY
+                cycle (cycle-end Wednesday + 21 days).
               </TooltipContent>
             </Tooltip>
           </div>
@@ -51,7 +61,19 @@ export function CashFlowSummary({ claims }: Props) {
             label="Total open"
             amount={stats.totalOpen.total}
             count={stats.totalOpen.count}
-            subtitle="all expected inflow"
+            avg={avgClaim}
+            breakdown={[
+              {
+                label: "Primary",
+                value: stats.primaryTotal.total,
+                count: stats.primaryTotal.count,
+              },
+              {
+                label: "Secondary",
+                value: stats.secondaryTotal.total,
+                count: stats.secondaryTotal.count,
+              },
+            ]}
           />
           <Tile
             tone="success"
@@ -59,12 +81,20 @@ export function CashFlowSummary({ claims }: Props) {
             label="Soon"
             amount={stats.soon.total}
             count={stats.soon.count}
-            subtitle="ERA in hand or Medicaid next Wed"
+            subtitle="Received ERA / Medicaid next 7 days"
             breakdown={[
-              { label: "ERA received", value: stats.soonEra.total, count: stats.soonEra.count },
-              { label: "Medicaid (next Wed)", value: stats.soonMedicaid.total, count: stats.soonMedicaid.count },
+              {
+                label: "Received ERA",
+                value: stats.soonEra.total,
+                count: stats.soonEra.count,
+              },
+              {
+                label: "Medicaid (next Wed)",
+                value: stats.soonMedicaid.total,
+                count: stats.soonMedicaid.count,
+              },
             ]}
-            tooltipText="Non-Medicaid claims where the EFT effective date is in the future, plus pure Medicaid claims whose 3/4-Wednesday settle date is within 7 days. Near-zero risk."
+            tooltipText="Claims with the EFT pay date within 7 days, OR pure-Medicaid awaiting ERA whose eMedNY settle date is within 7 days. Spans both Primary and Secondary."
           />
           <Tile
             tone="neutral"
@@ -72,8 +102,30 @@ export function CashFlowSummary({ claims }: Props) {
             label="Expected"
             amount={stats.expected.total}
             count={stats.expected.count}
-            subtitle="Medicaid 1+ wk + new claims (<21d)"
-            tooltipText="Pure Medicaid claims whose eMedNY settle date is more than 7 days away, plus non-Medicaid claims still awaiting an ERA but submitted within the last 21 days (normal payer turnaround window). Low-medium risk."
+            subtitle="ERA's outstanding within 21 days of DOS / Medicaid 7-21 days"
+            breakdown={[
+              {
+                label: "Primary (non-medicaid)",
+                value: stats.expectedPrimaryNonMedicaid.total,
+                count: stats.expectedPrimaryNonMedicaid.count,
+              },
+              {
+                label: "Primary (medicaid)",
+                value: stats.expectedPrimaryMedicaid.total,
+                count: stats.expectedPrimaryMedicaid.count,
+              },
+              {
+                label: "Secondary (Insurance)",
+                value: stats.expectedSecondaryInsurance.total,
+                count: stats.expectedSecondaryInsurance.count,
+              },
+              {
+                label: "Secondary (Patient)",
+                value: stats.expectedSecondaryPatient.total,
+                count: stats.expectedSecondaryPatient.count,
+              },
+            ]}
+            tooltipText="Non-Medicaid primaries awaiting ERA within their normal turnaround window, pure-Medicaid more than a week from their eMedNY settle date, and secondaries (Forwarded/Insurance/Patient) still awaiting payment."
           />
           <Tile
             tone="danger"
@@ -81,8 +133,8 @@ export function CashFlowSummary({ claims }: Props) {
             label="High risk"
             amount={stats.highRisk.total}
             count={stats.highRisk.count}
-            subtitle="no ERA, sent 21+ days ago"
-            tooltipText="Non-Medicaid claims submitted 21+ days ago that still have no ERA. Past normal payer turnaround — something may be wrong (denial, payer issue, lost claim)."
+            subtitle="No primary ERA, sent 21+ days ago"
+            tooltipText="Non-Medicaid primary claims submitted 21+ days ago that still have no ERA. Past normal payer turnaround — something may be wrong (denial, payer issue, lost claim)."
           />
         </div>
       </section>
@@ -93,10 +145,10 @@ export function CashFlowSummary({ claims }: Props) {
 type Tone = "info" | "success" | "neutral" | "danger";
 
 const TONE_CLASSES: Record<Tone, { icon: string; ring: string }> = {
-  info:    { icon: "bg-blue-100 text-blue-700",     ring: "" },
+  info:    { icon: "bg-blue-100 text-blue-700",      ring: "" },
   success: { icon: "bg-emerald-100 text-emerald-700", ring: "" },
-  neutral: { icon: "bg-amber-100 text-amber-800",   ring: "" },
-  danger:  { icon: "bg-rose-100 text-rose-700",     ring: "" },
+  neutral: { icon: "bg-amber-100 text-amber-800",    ring: "" },
+  danger:  { icon: "bg-rose-100 text-rose-700",      ring: "" },
 };
 
 interface BreakdownRow {
@@ -110,6 +162,7 @@ function Tile({
   amount,
   count,
   subtitle,
+  avg,
   icon,
   tone,
   tooltipText,
@@ -118,7 +171,8 @@ function Tile({
   label: string;
   amount: number;
   count: number;
-  subtitle: string;
+  subtitle?: string;
+  avg?: number;
   icon: React.ReactNode;
   tone: Tone;
   tooltipText?: string;
@@ -135,15 +189,28 @@ function Tile({
           <div className="text-2xl font-bold tabular-nums leading-none">
             {money(amount)}
           </div>
+          {avg != null && avg > 0 && (
+            <div className="mt-1 text-[11px] text-muted-foreground tabular-nums">
+              avg {money(avg)}/claim
+            </div>
+          )}
         </div>
       </div>
       <div className="mt-3">
         <div className="text-sm font-semibold">{label}</div>
-        <div className="mt-0.5 text-xs text-muted-foreground">
-          <span className="font-medium">{count.toLocaleString()} claim{count === 1 ? "" : "s"}</span>
-          <span className="mx-1">·</span>
-          <span>{subtitle}</span>
-        </div>
+        {(subtitle || count > 0) && (
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            <span className="font-medium">
+              {count.toLocaleString()} claim{count === 1 ? "" : "s"}
+            </span>
+            {subtitle && (
+              <>
+                <span className="mx-1">·</span>
+                <span>{subtitle}</span>
+              </>
+            )}
+          </div>
+        )}
         {breakdown && breakdown.length > 0 && (
           <div className="mt-2 space-y-0.5 border-t pt-2 text-xs text-muted-foreground">
             {breakdown.map((row) => (
