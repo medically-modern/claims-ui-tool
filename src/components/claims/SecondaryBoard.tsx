@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,9 +15,12 @@ import {
 import { StatusBadge } from "@/components/claims/StatusBadge";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
+import { hasMondayToken } from "@/api/monday";
 import {
   ArrowUpDown, Search, Send, ChevronDown, ChevronRight,
   ExternalLink, FileText, CheckCircle2, Clock, FileSearch, UserRound, Info,
+  Loader2,
 } from "lucide-react";
 
 export type SecondaryMode = "submit" | "review";
@@ -26,7 +29,7 @@ export type SecondaryMode = "submit" | "review";
 // Local types & fixtures — Secondary Board only
 // ─────────────────────────────────────────────────────────────────────────────
 
-type SecondaryStatus =
+export type SecondaryStatus =
   | "Primary Paid - Forwarded"
   | "Primary Paid - Submit Secondary"
   | "Secondary Submitted"
@@ -40,9 +43,9 @@ type SubmitBucket = "insurance" | "patient";
 type ReviewBucket = "outstanding" | "era";
 type AnyBucket = SubmitBucket | ReviewBucket;
 
-type PrReason = "Deductible" | "Coinsurance" | "Copay" | "Non-covered service" | "Bad debt (write off)";
+export type PrReason = "Deductible" | "Coinsurance" | "Copay" | "Non-covered service" | "Bad debt (write off)";
 
-interface SecLine {
+export interface SecLine {
   id: string;
   product: string;
   hcpcs: string;
@@ -62,8 +65,10 @@ interface SecLine {
   status: "Pending" | "Pending — denied by primary" | "Paid" | "Denied/Partial";
 }
 
-interface SecClaim {
+export interface SecClaim {
   id: string;
+  /** Monday item id on the Secondary Claims Board (board 18413019028). */
+  mondayItemId?: string;
   parentClaimId: string;
   status: SecondaryStatus;
   patientName: string;
@@ -466,7 +471,27 @@ const MODE_BUCKETS: Record<SecondaryMode, AnyBucket[]> = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
-  const [claims, setClaims] = useState<SecClaim[]>(INITIAL_SEC_CLAIMS);
+  // Live data from Monday's Secondary Claims Board (id 18413019028).
+  // Falls back to mock data when no Monday token is configured (local dev
+  // without a .env, or PR previews) so the UI still renders something.
+  const {
+    data: mondayClaims,
+    isFetching: secondaryLoading,
+    refetch: refetchSecondary,
+  } = useAllSecondaryClaims();
+  const liveAvailable = hasMondayToken();
+  const initialClaims: SecClaim[] = liveAvailable
+    ? mondayClaims ?? []
+    : INITIAL_SEC_CLAIMS;
+
+  // Local working copy so the optimistic Submit / Mark Paid actions still
+  // work without a round-trip. Each time the live list changes we replay
+  // it into local state so newly-arrived items show up.
+  const [claims, setClaims] = useState<SecClaim[]>(initialClaims);
+  useEffect(() => {
+    if (liveAvailable) setClaims(mondayClaims ?? []);
+  }, [liveAvailable, mondayClaims]);
+
   const buckets = MODE_BUCKETS[mode];
   const [bucket, setBucket] = useState<AnyBucket>(buckets[0]);
   const [search, setSearch] = useState("");
@@ -594,8 +619,29 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
             <SelectItem value="payer">Sort by Secondary Payer</SelectItem>
           </SelectContent>
         </Select>
-        <div className="ml-auto text-xs text-muted-foreground">
-          Showing {visible.length} of {counts[bucket]} {BUCKET_META[bucket].label.toLowerCase()}
+        <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+          {liveAvailable && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2 text-xs"
+              onClick={() => void refetchSecondary()}
+              disabled={secondaryLoading}
+            >
+              {secondaryLoading ? (
+                <>
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  Refreshing
+                </>
+              ) : (
+                "Refresh"
+              )}
+            </Button>
+          )}
+          <span>
+            Showing {visible.length} of {counts[bucket]}{" "}
+            {BUCKET_META[bucket].label.toLowerCase()}
+          </span>
         </div>
       </Card>
 

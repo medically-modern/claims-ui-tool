@@ -13,6 +13,9 @@ const MONDAY_API_VERSION = "2024-10";
 
 export const CLAIMS_BOARD_ID = 18245429780;
 export const SUBITEMS_BOARD_ID = 18245429979;
+/** Secondary Claims Board — duplicated from primary on 2026-05-09. */
+export const SECONDARY_BOARD_ID = 18413019028;
+export const SECONDARY_SUBITEMS_BOARD_ID = 18413019033;
 
 export class MondayApiError extends Error {
   constructor(
