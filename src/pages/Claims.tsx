@@ -22,6 +22,17 @@ import { hasMondayToken } from "@/api/monday";
 import { LoadingOverlay } from "@/components/claims/LoadingOverlay";
 import { CashFlowSummary } from "@/components/claims/CashFlowSummary";
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  markPrimaryPaid as apiMarkPrimaryPaid,
+  isMarkPaidConfigured,
+  MarkPaidError,
+  secondaryItemUrl,
+} from "@/api/markPaid";
+import {
   claimAge, eraReceived, fmtDate, fmtMoney, priorityOf, shortIssue, variance,
 } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
@@ -269,6 +280,49 @@ const Claims = () => {
   const MOCK_CLAIMS = hasMondayToken()
     ? mondayClaims ?? []
     : MOCK_CLAIMS_FALLBACK;
+
+  // ─── Row-level Mark Paid wiring ──────────────────────────────────────────
+  // The check-mark icon on each row in the table now actually calls the
+  // backend (POST /claims/mark-paid) instead of just toasting. We track
+  // which claim is being confirmed and whether the request is in flight.
+  const [markPaidTarget, setMarkPaidTarget] = useState<Claim | null>(null);
+  const [markPaidBusy, setMarkPaidBusy] = useState(false);
+
+  async function confirmMarkPaidFromRow() {
+    const target = markPaidTarget;
+    if (!target || markPaidBusy) return;
+
+    if (!isMarkPaidConfigured()) {
+      toast({
+        title: "Mark Paid not wired",
+        description: "VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+      });
+      setMarkPaidTarget(null);
+      return;
+    }
+
+    setMarkPaidBusy(true);
+    try {
+      const result = await apiMarkPrimaryPaid(target.mondayItemId);
+      setMarkPaidTarget(null);
+
+      let description = result.reason ?? undefined;
+      if (result.spawned && result.secondary_item_id) {
+        description = `Secondary item created on Submit Claim group. ${result.reason ?? ""}`;
+      }
+      toast({
+        title: `Marked Paid: ${target.patientName}`,
+        description,
+      });
+      // Re-fetch the claims list so the row updates
+      void refetchClaims();
+    } catch (e) {
+      const msg = e instanceof MarkPaidError ? e.message : (e as Error).message;
+      toast({ title: "Mark Paid failed", description: msg });
+    } finally {
+      setMarkPaidBusy(false);
+    }
+  }
 
   // Local in-row state for "Run Status Check" on Late ERAs
   const [statusChecks, setStatusChecks] = useState<Record<string, StatusCheckRecord>>(() => {
@@ -908,7 +962,7 @@ const Claims = () => {
                                                   <button
                                                     type="button"
                                                     aria-label="Mark fully paid"
-                                                    onClick={() => toast({ title: "Marked Fully Paid", description: c.patientName })}
+                                                    onClick={() => setMarkPaidTarget(c)}
                                                     className="grid h-9 w-9 place-items-center rounded-md bg-success-soft text-success-soft-foreground hover:bg-success hover:text-success-foreground transition-colors shadow-sm"
                                                   >
                                                     <Check className="h-4 w-4" />
@@ -989,6 +1043,50 @@ const Claims = () => {
           </>
         )}
       </main>
+
+      {/* Row-level Mark Paid confirmation. Opens when the checkmark icon on
+          any row is clicked; calls the same /claims/mark-paid backend
+          endpoint as the in-detail flow. */}
+      <AlertDialog
+        open={!!markPaidTarget}
+        onOpenChange={(o) => !o && setMarkPaidTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Mark this primary claim Paid?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  This will set Primary status to <strong>Paid</strong> on
+                  Monday for <strong>{markPaidTarget?.patientName}</strong>.
+                </p>
+                {markPaidTarget && markPaidTarget.prAmount > 0 ? (
+                  <p>
+                    PR Amount is <strong>{fmtMoney0(markPaidTarget.prAmount)}</strong>
+                    {" "}— a corresponding item will be created on the
+                    Secondary Claims Board (Submit Claim group), with
+                    Submission Type pre-filled based on the payer combo.
+                  </p>
+                ) : (
+                  <p>
+                    PR Amount is $0 — nothing will be created on Secondary
+                    (primary fully covered the claim).
+                  </p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={markPaidBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={markPaidBusy}
+              onClick={(e) => { e.preventDefault(); void confirmMarkPaidFromRow(); }}
+            >
+              {markPaidBusy ? "Marking…" : "Confirm Mark Paid"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
