@@ -57,6 +57,12 @@ const COL = {
   RAW_ERA_DATE: "text_mm2047g9",
   RAW_ERA_CLAIM_STATUS: "text_mm20k1zv",
   RAW_TOTAL_CHARGE: "numeric_mm1ghydj",
+  // Exact secondary payer name from the 835 N1 (PR) loop — populated by
+  // services/secondary_era_writeback.py when an ERA arrives. The status
+  // column above only carries a small set of predefined labels; this
+  // is the true payer name (e.g. "AARP SUPPLEMENTAL HEALTH PLANS FROM
+  // UNITEDHEALTHCARE") for display.
+  SECONDARY_PAYER_RAW_NAME: "text_mm3a2yax",
   // Workflow
   SUBMISSION_TYPE: "color_mm3awg8g",
   SECONDARY_STATUS: "color_mm3a5yak",
@@ -377,6 +383,8 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
     ? "10-14 days after primary"
     : undefined;
 
+  const secondaryPayerRawName = txt(item, COL.SECONDARY_PAYER_RAW_NAME);
+
   return {
     id: txt(item, COL.CLAIM_ID) || item.id,
     mondayItemId: item.id,
@@ -384,6 +392,7 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
       txt(item, COL.PRIMARY_CLAIM_ID) ||
       item.id,
     status,
+    secondaryPayerRawName: secondaryPayerRawName || undefined,
     patientName: item.name,
     primaryPayor: txt(item, COL.PRIMARY_PAYOR),
     secondaryPayer: secondaryPayerLabel || null,

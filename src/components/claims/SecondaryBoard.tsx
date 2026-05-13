@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,9 @@ import {
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import { StatusBadge } from "@/components/claims/StatusBadge";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -71,6 +74,14 @@ export interface SecClaim {
   mondayItemId?: string;
   parentClaimId: string;
   status: SecondaryStatus;
+  /**
+   * Exact payer name from the secondary ERA's N1 (PR) envelope loop, e.g.
+   * "AARP SUPPLEMENTAL HEALTH PLANS FROM UNITEDHEALTHCARE". Set only once
+   * the secondary ERA arrives — undefined while the row is still Forwarded
+   * awaiting crossover. Prefer this over secondaryPayer (status label)
+   * for display in the ERA Review view.
+   */
+  secondaryPayerRawName?: string;
   patientName: string;
   primaryPayor: string;
   secondaryPayer: string | null;     // null = patient bucket with no secondary; "Other" = custom
@@ -655,6 +666,20 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
             <p className="text-base font-medium">Nothing in this bucket.</p>
             <p className="text-sm text-muted-foreground">All caught up.</p>
           </Card>
+        ) : bucket === "era" ? (
+          // ERA Review bucket renders as a primary-style table so the operator
+          // can scan Paid vs PR vs Difference across rows at a glance, instead
+          // of card-by-card. Other buckets still use the per-row card layout
+          // because their workflows (submit / send to patient / etc) need more
+          // inline form controls.
+          <EraReviewTable
+            rows={visible}
+            expanded={expanded}
+            onToggle={(id) =>
+              setExpanded((p) => ({ ...p, [id]: !p[id] }))
+            }
+            onMarkPosted={(c) => markPosted(c)}
+          />
         ) : (
           visible.map((c) => (
             <SecondaryRow
@@ -783,6 +808,221 @@ function StatusPill({ status, bucket }: { status: SecondaryStatus; bucket: AnyBu
     </StatusBadge>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ERA Review table — mirrors the primary board's Review ERA table layout.
+// Columns: Patient | DOS | Products | Primary Payor | Secondary Payor |
+//          Paid | PR | Difference | Action
+//
+//   Paid       = what the secondary paid (sum of line-level secondary paid)
+//   PR         = patient responsibility LEFT after the secondary
+//   Difference = expected secondary pay - actual paid - patient remaining.
+//                ~0 = clean; positive = secondary underpaid; negative = paid
+//                more than we expected (rare, but possible when allowed > PR).
+//
+// Each row toggles to reveal the existing EraReviewBody for full detail.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function EraReviewTable({
+  rows,
+  expanded,
+  onToggle,
+  onMarkPosted,
+}: {
+  rows: SecClaim[];
+  expanded: Record<string, boolean>;
+  onToggle: (id: string) => void;
+  onMarkPosted: (c: SecClaim) => void;
+}) {
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Patient</TableHead>
+                <TableHead>DOS</TableHead>
+                <TableHead>Products</TableHead>
+                <TableHead>Primary Payor</TableHead>
+                <TableHead>Secondary Payor</TableHead>
+                <TableHead className="text-right">Paid</TableHead>
+                <TableHead className="text-right">PR</TableHead>
+                <TableHead className="text-right">Difference</TableHead>
+                <TableHead className="text-right">Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody className="[&_tr>td]:align-top">
+              {rows.map((c) => (
+                <EraReviewTableRow
+                  key={c.id}
+                  c={c}
+                  expanded={!!expanded[c.id]}
+                  onToggle={() => onToggle(c.id)}
+                  onMarkPosted={() => onMarkPosted(c)}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function EraReviewTableRow({
+  c,
+  expanded,
+  onToggle,
+  onMarkPosted,
+}: {
+  c: SecClaim;
+  expanded: boolean;
+  onToggle: () => void;
+  onMarkPosted: () => void;
+}) {
+  // Expected secondary contribution = total patient responsibility the primary
+  // left for the secondary (claim-level deductible + per-line PR breakdown).
+  const totalCoins = c.lines.reduce((s, l) => s + (l.coinsuranceCopay ?? 0), 0);
+  const itemDed = c.lines.reduce((s, l) => s + (l.deductible ?? 0), 0);
+  const claimDed = c.claimLevelDeductible ?? 0;
+  const expected = totalCoins + itemDed + claimDed || c.remaining;
+
+  const secPaid =
+    c.secondaryPaid ?? c.lines.reduce((s, l) => s + (l.secondaryPaid ?? 0), 0);
+  const patientResp =
+    c.patientResp ?? c.lines.reduce((s, l) => s + (l.patientResp ?? 0), 0);
+  const difference = expected - secPaid - patientResp;
+  const balanced = Math.abs(difference) <= 0.5;
+
+  // Forwarded crossover gets a pill — anyone who ended up in ERA Review from
+  // the Forwarded path. Insurance-type ERAs (we sent a new 837) don't show
+  // the pill — they didn't auto-crossover.
+  const forwarded = !!c.forwardedFlag;
+
+  // Display name for secondary payor — prefer the exact name from the 835
+  // (e.g. "AARP SUPPLEMENTAL HEALTH PLANS FROM UNITEDHEALTHCARE") so the
+  // operator sees the real payer instead of "Medicare Suppl." sentinel.
+  const secondaryPayorDisplay =
+    c.secondaryPayerRawName ||
+    (c.secondaryPayer === OTHER_PAYER
+      ? c.secondaryPayerOther?.trim() || "Custom payor"
+      : c.secondaryPayer) ||
+    "—";
+
+  // Priority coloring: balanced = green, off by > $0.50 = yellow, big
+  // mismatch (e.g. secondary paid nothing) = red.
+  const cls = balanced
+    ? "row-priority-green"
+    : Math.abs(difference) > 50
+      ? "row-priority-red"
+      : "row-priority-yellow";
+
+  const products = uniqueProducts(c.lines);
+
+  return (
+    <Fragment>
+      <TableRow
+        className={cn(cls, "hover:bg-muted/40 cursor-pointer")}
+        onClick={onToggle}
+      >
+        <TableCell className="font-medium">
+          <div className="flex items-center gap-1.5">
+            {expanded ? (
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+            )}
+            <span>{c.patientName}</span>
+          </div>
+          <div className="ml-5 text-xs text-muted-foreground leading-tight">
+            <span className="font-bold select-none">ID: </span>
+            <span className="[user-select:all]">{c.primaryMemberId || "—"}</span>
+          </div>
+        </TableCell>
+        <TableCell className="text-sm">{c.dos ? fmt(c.dos) : "—"}</TableCell>
+        <TableCell className="text-sm">
+          <div className="flex flex-wrap gap-1">
+            {products.map((p) => (
+              <span
+                key={p}
+                className="inline-flex h-6 items-center rounded-md bg-muted px-1.5 text-xs font-medium whitespace-nowrap"
+              >
+                {p}
+              </span>
+            ))}
+          </div>
+        </TableCell>
+        <TableCell className="text-sm">{c.primaryPayor || "—"}</TableCell>
+        <TableCell className="text-sm">
+          <span className="line-clamp-2" title={secondaryPayorDisplay}>
+            {secondaryPayorDisplay}
+          </span>
+        </TableCell>
+        <TableCell className="text-right tabular-nums">{$(secPaid)}</TableCell>
+        <TableCell className="text-right tabular-nums">
+          <div className="flex flex-col items-end gap-1">
+            <span>{$(patientResp)}</span>
+            {forwarded && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex h-5 items-center rounded-md bg-blue-100 px-1.5 text-[10px] font-medium uppercase tracking-wide text-blue-700 cursor-help">
+                    Forwarded
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Primary auto-forwarded to secondary (Medicare crossover)
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </TableCell>
+        <TableCell
+          className={cn(
+            "text-right tabular-nums",
+            balanced
+              ? "text-success-soft-foreground"
+              : difference > 0
+                ? "text-warning-soft-foreground"
+                : "text-info-soft-foreground",
+          )}
+        >
+          {$(difference)}
+        </TableCell>
+        <TableCell className="text-right">
+          <Button
+            size="sm"
+            variant={balanced ? "default" : "outline"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onMarkPosted();
+            }}
+          >
+            <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+            Post
+          </Button>
+        </TableCell>
+      </TableRow>
+      {expanded && (
+        <TableRow className="bg-muted/20 hover:bg-muted/20">
+          <TableCell colSpan={9} className="p-4">
+            <EraReviewBody c={c} onMarkPosted={onMarkPosted} />
+          </TableCell>
+        </TableRow>
+      )}
+    </Fragment>
+  );
+}
+
+/** Distinct product labels across the claim's lines, preserving line order. */
+function uniqueProducts(lines: SecLine[]): string[] {
+  const out: string[] = [];
+  for (const l of lines) {
+    if (l.product && !out.includes(l.product)) out.push(l.product);
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SUBMIT TO SECONDARY body
 // ─────────────────────────────────────────────────────────────────────────────
