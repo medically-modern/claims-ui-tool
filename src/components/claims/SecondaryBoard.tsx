@@ -881,18 +881,22 @@ function EraReviewTableRow({
   onToggle: () => void;
   onMarkPosted: () => void;
 }) {
-  // Expected secondary contribution = total patient responsibility the primary
-  // left for the secondary (claim-level deductible + per-line PR breakdown).
+  // PR column = patient responsibility the primary left = what we *expected*
+  // the secondary to pay. For Karen: Medicare's $190.78 PR carries over to
+  // AARP as the amount AARP needs to cover.
   const totalCoins = c.lines.reduce((s, l) => s + (l.coinsuranceCopay ?? 0), 0);
   const itemDed = c.lines.reduce((s, l) => s + (l.deductible ?? 0), 0);
   const claimDed = c.claimLevelDeductible ?? 0;
-  const expected = totalCoins + itemDed + claimDed || c.remaining;
+  const pr = totalCoins + itemDed + claimDed || c.remaining;
 
+  // Paid column = what the secondary actually paid.
   const secPaid =
     c.secondaryPaid ?? c.lines.reduce((s, l) => s + (l.secondaryPaid ?? 0), 0);
-  const patientResp =
-    c.patientResp ?? c.lines.reduce((s, l) => s + (l.patientResp ?? 0), 0);
-  const difference = expected - secPaid - patientResp;
+
+  // Difference = expected (PR) minus actual paid. Positive = secondary
+  // underpaid, leftover rolls to patient. Zero = balanced. Negative = paid
+  // more than expected (rare; happens when allowed > PR).
+  const difference = pr - secPaid;
   const balanced = Math.abs(difference) <= 0.5;
 
   // Forwarded crossover gets a pill — anyone who ended up in ERA Review from
@@ -962,7 +966,7 @@ function EraReviewTableRow({
         <TableCell className="text-right tabular-nums">{$(secPaid)}</TableCell>
         <TableCell className="text-right tabular-nums">
           <div className="flex flex-col items-end gap-1">
-            <span>{$(patientResp)}</span>
+            <span>{$(pr)}</span>
             {forwarded && (
               <Tooltip>
                 <TooltipTrigger asChild>
