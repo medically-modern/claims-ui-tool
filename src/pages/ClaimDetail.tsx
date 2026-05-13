@@ -169,20 +169,15 @@ const ClaimDetail = () => {
   const [markPaidBusy, setMarkPaidBusy] = useState(false);
 
   function openMarkPaid() {
-    const v = Math.abs(variance(claim));
-    if (v > 5 && !overrideReason.trim()) {
-      toast.error("Variance exceeds tolerance — manager override reason required.");
-      return;
-    }
+    // Variance-override gate disabled for now. Operators can mark any claim
+    // paid regardless of how much variance from est. pay; the variance is
+    // visible elsewhere in the row + difference column.
     setMarkPaidOpen(true);
   }
 
   async function confirmMarkPaid() {
     if (markPaidBusy) return;
-    const v = Math.abs(variance(claim));
-    const note = v > 5
-      ? `Marked primary paid with manager override: ${overrideReason}`
-      : "Marked primary paid via Command Center.";
+    const note = "Marked primary paid via Command Center.";
 
     // Optimistic local update so the UI feels instant
     const previous = claim;
