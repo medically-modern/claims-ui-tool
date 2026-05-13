@@ -22,6 +22,11 @@ import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
 import { hasMondayToken } from "@/api/monday";
 import { setSecondaryStatus } from "@/api/setSecondaryStatus";
 import {
+  markSecondaryPaid as apiMarkSecondaryPaid,
+  isMarkSecondaryPaidConfigured,
+  MarkSecondaryPaidError,
+} from "@/api/markSecondaryPaid";
+import {
   ArrowUpDown, Search, Send, ChevronDown, ChevronRight,
   ExternalLink, FileText, CheckCircle2, Clock, FileSearch, UserRound, Info,
   Loader2,
@@ -864,9 +869,11 @@ function SecondaryClaimsTable({
   }
 
   /**
-   * Submit the operator's chosen Status to Monday's Secondary Status
-   * column. We don't yet propagate to the primary board or subscription
-   * board — that's a future backend coordinator endpoint.
+   * Submit the operator's chosen Status. The Paid path routes through
+   * the backend coordinator (/claims/secondary/mark-paid) so the
+   * Secondary Board update, primary lookup, and Subscription Board
+   * propagation happen atomically. The Outstanding path is a simple
+   * direct Monday write — no cross-board effects.
    */
   async function onSubmit(c: SecClaim) {
     const status = effectiveStatus(c);
@@ -879,19 +886,34 @@ function SecondaryClaimsTable({
     }
     setSubmitting((p) => ({ ...p, [c.id]: true }));
     try {
-      // Monday Secondary Status labels: Paid is "Paid"; the user-facing
-      // "Outstanding" maps to Monday's "Outstanding" label.
-      await setSecondaryStatus(c.mondayItemId, status);
-      toast({
-        title: `Secondary status set to ${status}`,
-        description: c.patientName,
-      });
-      if (status === "Paid") onMarkPosted(c);
+      if (status === "Paid") {
+        if (!isMarkSecondaryPaidConfigured()) {
+          toast({
+            title: "Secondary Mark Paid not wired",
+            description: "VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+          });
+          return;
+        }
+        const result = await apiMarkSecondaryPaid(c.mondayItemId);
+        const desc = result.subscription_updated
+          ? "Secondary set to Paid; Subscription Board synced."
+          : result.reason ?? "Secondary set to Paid (Subscription not synced).";
+        toast({
+          title: `${c.patientName}: Paid`,
+          description: desc,
+        });
+        onMarkPosted(c);
+      } else {
+        // Outstanding — direct Monday write, no cross-board chain to update.
+        await setSecondaryStatus(c.mondayItemId, status);
+        toast({
+          title: `${c.patientName}: ${status}`,
+          description: "Secondary status updated on Monday.",
+        });
+      }
     } catch (e) {
-      toast({
-        title: "Couldn't update Monday",
-        description: (e as Error).message,
-      });
+      const msg = e instanceof MarkSecondaryPaidError ? e.message : (e as Error).message;
+      toast({ title: "Couldn't update Monday", description: msg });
     } finally {
       setSubmitting((p) => ({ ...p, [c.id]: false }));
     }
