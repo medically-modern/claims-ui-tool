@@ -29,6 +29,10 @@ const COL = {
   SECONDARY_ID: "text_mkxwcqfy",
   DOS: "date_mkwr7spz",
   CLAIM_SENT_DATE: "date_mm14rk8d",
+  // The EFT effective date written by the Stedi-Monday backend from the
+  // 835 BPR segment (check_issue_or_eft_effective_date_16). This is the
+  // ground truth for "when does the money hit the bank".
+  PRIMARY_PAID_DATE: "date_mm11zg2f",
   CLAIM_ID: "text_mm1zpzrs",
   PAYER_CLAIM_NUMBER: "text_mm2nfytt",
   PRIMARY_STATUS: "color_mkxmywtb",
@@ -359,7 +363,9 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     prAmount,
     rawEraDate,
     rawEraClaimStatus: txt(item, COL.RAW_ERA_CLAIM_STATUS) || null,
-    primaryPaidDate: rawEraDate, // best proxy until a real "payment received" date column exists
+    // From the BPR effective date — when the money actually hits our bank.
+    // Populated by the Stedi-Monday backend for every ERA received.
+    primaryPaidDate: isoOrNull(txt(item, COL.PRIMARY_PAID_DATE)),
     secondaryPayer: txt(item, COL.SECONDARY_PAYER) || null,
     denialAction: null,
     nextActionDate: isoOrNull(txt(item, COL.NEXT_ACTION_DATE)),

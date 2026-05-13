@@ -20,6 +20,7 @@ import { MOCK_CLAIMS as MOCK_CLAIMS_FALLBACK } from "@/lib/claims/mockData";
 import { useAllClaims } from "@/hooks/useAllClaims";
 import { hasMondayToken } from "@/api/monday";
 import { LoadingOverlay } from "@/components/claims/LoadingOverlay";
+import { CashFlowSummary } from "@/components/claims/CashFlowSummary";
 import {
   claimAge, eraReceived, fmtDate, fmtMoney, priorityOf, shortIssue, variance,
 } from "@/lib/claims/logic";
@@ -440,6 +441,7 @@ const Claims = () => {
           <PrimarySubmitBoard />
         ) : (
           <>
+            <CashFlowSummary claims={MOCK_CLAIMS} />
             {/* Clickable summary tiles for all 6 categories */}
             <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               <SummaryTile
