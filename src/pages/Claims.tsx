@@ -633,7 +633,7 @@ const Claims = () => {
                           ))}
                         </TableRow>
                       </TableHeader>
-                      <TableBody>
+                      <TableBody className="[&_tr>td]:align-top">
                         {rows.map((c) => {
                           const d = diff(c);
                           const eraIn = eraReceived(c);

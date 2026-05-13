@@ -99,12 +99,13 @@ export function secondaryItemUrl(secondaryItemId: string): string {
 // Used by the Mark Paid confirmation dialog to tell the operator what kind
 // of secondary item is about to be created.
 
-const MEDICARE_PRIMARY_PAYORS = new Set([
-  "Medicare A&B",
-  "Fidelis Medicare",
-  "Anthem BCBS Medicare",
-  "United Medicare",
-  "Aetna Medicare",
+// Secondary Payer values that DON'T indicate a real secondary insurance —
+// either bill the patient (Patient), or Medicare auto-crossover that the
+// ERA text would have surfaced (Medicare Suppl.). Anything else in the
+// column means "we have a real secondary insurance on file."
+const NON_INSURANCE_SECONDARY_VALUES = new Set<string>([
+  "Patient",
+  "Medicare Suppl.",
 ]);
 
 export type SubmissionType = "Forwarded" | "Insurance" | "Patient";
@@ -112,8 +113,7 @@ export type SubmissionType = "Forwarded" | "Insurance" | "Patient";
 /**
  * True when the Raw ERA Claim Status indicates the primary payer
  * auto-forwarded this claim to a secondary (Medicare crossover behavior).
- * Mary Moody's ERA text was "Processed as Primary, Forwarded to Secondary
- * Payer" — that "Forwarded to Secondary" phrase is the authoritative signal.
+ * Example text: "Processed as Primary, Forwarded to Secondary Payer".
  */
 export function isForwardedByPrimary(
   rawEraClaimStatus: string | null | undefined,
@@ -126,12 +126,21 @@ export function predictSubmissionType(
   secondaryPayer: string | null | undefined,
   rawEraClaimStatus?: string | null | undefined,
 ): SubmissionType {
-  // ERA text wins: if Medicare already auto-forwarded the claim, that's
-  // Forwarded even if our Secondary Payer column on Monday is blank.
+  // 1. ERA text wins. If the primary auto-forwarded (Medicare crossover,
+  //    some BCBS plans, etc.), that's Forwarded regardless of any column.
   if (isForwardedByPrimary(rawEraClaimStatus)) return "Forwarded";
-  if (!(secondaryPayer || "").trim()) return "Patient";
-  if (MEDICARE_PRIMARY_PAYORS.has((primaryPayor || "").trim())) return "Forwarded";
-  return "Insurance";
+
+  // 2. Real secondary insurance on file — anything in the Secondary Payer
+  //    column other than the "not really insurance" sentinel values.
+  const sec = (secondaryPayer || "").trim();
+  if (sec && !NON_INSURANCE_SECONDARY_VALUES.has(sec)) {
+    return "Insurance";
+  }
+
+  // 3. Default: bill the patient. Covers Medicare primary without a real
+  //    secondary (the patient has no supplement) and any commercial primary
+  //    without a real secondary on file.
+  return "Patient";
 }
 
 /**
