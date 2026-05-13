@@ -1015,7 +1015,7 @@ function EraReviewTableRow({
             }}
           >
             <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-            Post
+            Mark as Paid
           </Button>
         </TableCell>
       </TableRow>
@@ -1645,48 +1645,112 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
         </span>
       </div>
 
-      {/* Items */}
-      <div className="overflow-hidden rounded-md border bg-background">
-        <div className={`grid ${cols} border-b bg-muted/40 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground`}>
-          <div>Subitem</div>
-          <div>HCPC</div>
-          <div className="text-right">Primary Paid</div>
-          <div className="text-right">Expected</div>
-          <div className="text-right">Secondary Paid</div>
-          <div className="text-right">Patient Owes</div>
-        </div>
-        {c.lines.map((l) => {
-          const exp = (l.deductible ?? 0) + (l.coinsuranceCopay ?? 0);
-          return (
-            <div key={l.id} className={`grid ${cols} border-b px-3 py-1.5 text-xs last:border-b-0`}>
-              <div className="truncate">{l.product}</div>
-              <div className="truncate">{l.hcpcs}</div>
-              <div className="text-right tabular-nums">{$(l.primaryPaid)}</div>
-              <div className="text-right tabular-nums">{$(exp)}</div>
-              <div className="text-right tabular-nums text-success-soft-foreground">{$(l.secondaryPaid ?? 0)}</div>
-              <div className="text-right tabular-nums">{$(l.patientResp ?? 0)}</div>
-            </div>
-          );
-        })}
-        {claimDed > 0 && (
-          <div className={`grid ${cols} border-b bg-amber-50 px-3 py-1.5 text-xs italic text-muted-foreground dark:bg-amber-950/20`}>
-            <div className="truncate">Claim-level deductible</div>
-            <div className="truncate">—</div>
-            <div className="text-right tabular-nums">—</div>
-            <div className="text-right font-medium tabular-nums text-foreground">{$(claimDed)}</div>
-            <div className="text-right tabular-nums">—</div>
-            <div className="text-right tabular-nums">—</div>
+      {/* Service Lines — mirrors primary detail's Service Lines table style,
+          trimmed to the columns relevant for a secondary ERA review:
+          Product | Patient Resp | Paid | Difference | Status. */}
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Product</TableHead>
+                  <TableHead className="text-right">Patient Resp</TableHead>
+                  <TableHead className="text-right">Paid</TableHead>
+                  <TableHead className="text-right">Difference</TableHead>
+                  <TableHead className="w-[120px]">Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {c.lines.map((l) => {
+                  // Patient Resp for the line = what the primary passed to
+                  // the secondary on this line (PR breakdown + deductible).
+                  const linePR =
+                    (l.deductible ?? 0) + (l.coinsuranceCopay ?? 0);
+                  const linePaid = l.secondaryPaid ?? 0;
+                  const lineDiff = linePR - linePaid;
+                  const lineState: "Paid" | "Partial" | "Denied" =
+                    linePR <= 0.5
+                      ? "Paid"
+                      : linePaid <= 0.5
+                        ? "Denied"
+                        : Math.abs(lineDiff) <= 0.5
+                          ? "Paid"
+                          : "Partial";
+                  return (
+                    <TableRow key={l.id} className="hover:bg-muted/30">
+                      <TableCell className="font-medium">{l.product}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {$(linePR)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {$(linePaid)}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "text-right tabular-nums",
+                          Math.abs(lineDiff) <= 0.5
+                            ? "text-muted-foreground"
+                            : lineDiff > 0
+                              ? "text-warning-soft-foreground"
+                              : "text-info-soft-foreground",
+                        )}
+                      >
+                        {$(lineDiff)}
+                      </TableCell>
+                      <TableCell>
+                        <span
+                          className={cn(
+                            "inline-flex h-7 w-full items-center justify-center rounded-md px-2 text-xs font-medium",
+                            lineState === "Paid" &&
+                              "bg-success-soft text-success-soft-foreground",
+                            lineState === "Partial" &&
+                              "bg-warning-soft text-warning-soft-foreground",
+                            lineState === "Denied" &&
+                              "bg-danger-soft text-danger-soft-foreground",
+                          )}
+                        >
+                          {lineState}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {claimDed > 0 && (
+                  <TableRow className="bg-amber-50 italic dark:bg-amber-950/20">
+                    <TableCell className="text-muted-foreground">
+                      Claim-level deductible
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {$(claimDed)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      —
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      —
+                    </TableCell>
+                    <TableCell />
+                  </TableRow>
+                )}
+                <TableRow className="border-t-2 bg-muted/40 font-semibold">
+                  <TableCell>Total</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {$(expected)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {$(totalSecPaid)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {$(expected - totalSecPaid)}
+                  </TableCell>
+                  <TableCell />
+                </TableRow>
+              </TableBody>
+            </Table>
           </div>
-        )}
-        <div className={`grid ${cols} border-t-2 bg-muted/40 px-3 py-1.5 text-xs font-semibold`}>
-          <div>Total</div>
-          <div />
-          <div className="text-right tabular-nums">{$(totalPrimaryPaid)}</div>
-          <div className="text-right tabular-nums">{$(expected)}</div>
-          <div className="text-right tabular-nums text-success-soft-foreground">{$(totalSecPaid)}</div>
-          <div className="text-right tabular-nums">{$(totalPatientResp)}</div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Secondary ERA detail strip */}
       <div className="rounded-md border bg-background px-3 py-2">
