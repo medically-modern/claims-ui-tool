@@ -958,10 +958,22 @@ function EraReviewTableRow({
           </div>
         </TableCell>
         <TableCell className="text-sm">{c.primaryPayor || "—"}</TableCell>
-        <TableCell className="text-sm">
-          <span className="line-clamp-2" title={secondaryPayorDisplay}>
-            {secondaryPayorDisplay}
-          </span>
+        <TableCell className="text-sm max-w-[160px]">
+          {/* AARP / UHC supplemental payer names regularly run 40-60 chars.
+              Cap the column width so the rest of the row stays scannable;
+              full name surfaces on hover. */}
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="block truncate cursor-help">
+                  {secondaryPayorDisplay}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-sm">
+                {secondaryPayorDisplay}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </TableCell>
         <TableCell className="text-right tabular-nums">{$(secPaid)}</TableCell>
         <TableCell className="text-right tabular-nums">
