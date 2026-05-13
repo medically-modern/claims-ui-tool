@@ -88,7 +88,7 @@ function groupProductRows<T extends { product: string }>(items: T[]): [T[], T[]]
   return [r0, r1];
 }
 
-type BoardKey = "primary" | "secondary" | "playbook";
+type BoardKey = "primary" | "secondary" | "cashflow" | "playbook";
 type ModeKey = "submit" | "review";
 type CategoryKey = "era" | "late" | "denied" | "outstanding" | "paid" | "all";
 
@@ -415,6 +415,7 @@ const Claims = () => {
           <TabsList className="bg-card border">
             <TabsTrigger value="primary">Primary Board</TabsTrigger>
             <TabsTrigger value="secondary">Secondary Board</TabsTrigger>
+            <TabsTrigger value="cashflow">Cash Flow</TabsTrigger>
             <TabsTrigger value="playbook">Denial Analysis Playbook</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -435,13 +436,14 @@ const Claims = () => {
 
         {board === "playbook" ? (
           <DenialAnalysisTable />
+        ) : board === "cashflow" ? (
+          <CashFlowSummary claims={MOCK_CLAIMS} />
         ) : board === "secondary" ? (
           <SecondaryBoard mode={mode} />
         ) : mode === "submit" ? (
           <PrimarySubmitBoard />
         ) : (
           <>
-            <CashFlowSummary claims={MOCK_CLAIMS} />
             {/* Clickable summary tiles for all 6 categories */}
             <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               <SummaryTile
