@@ -823,6 +823,15 @@ function StatusPill({ status, bucket }: { status: SecondaryStatus; bucket: AnyBu
 // Each row toggles to reveal the existing EraReviewBody for full detail.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * User-controllable per-row state for the ERA Review table. Mirrors
+ * primary's per-line LineUserStatus pattern but applies at the claim row.
+ *   "Paid"        - operator confirmed this secondary ERA is fully posted
+ *   "Outstanding" - operator left it pending (waiting on something / patient
+ *                   move / etc). Default until they pick.
+ */
+type RowUserStatus = "Paid" | "Outstanding";
+
 function EraReviewTable({
   rows,
   expanded,
@@ -834,6 +843,18 @@ function EraReviewTable({
   onToggle: (id: string) => void;
   onMarkPosted: (c: SecClaim) => void;
 }) {
+  // Local overrides — the table seeds from each row's derived state but
+  // lets the operator override via either the Status dropdown or the
+  // action buttons. Both control the same map.
+  const [rowStatus, setRowStatus] = useState<Record<string, RowUserStatus>>({});
+
+  function effectiveStatus(c: SecClaim): RowUserStatus {
+    if (rowStatus[c.id]) return rowStatus[c.id]!;
+    // Seed: rows whose Monday Secondary Status is already terminal-paid
+    // start as Paid; everything else as Outstanding.
+    return c.status === "Secondary Paid" ? "Paid" : "Outstanding";
+  }
+
   return (
     <Card>
       <CardContent className="p-0">
@@ -849,6 +870,7 @@ function EraReviewTable({
                 <TableHead className="text-right">Paid</TableHead>
                 <TableHead className="text-right">PR</TableHead>
                 <TableHead className="text-right">Difference</TableHead>
+                <TableHead className="w-[130px]">Status</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
@@ -859,6 +881,10 @@ function EraReviewTable({
                   c={c}
                   expanded={!!expanded[c.id]}
                   onToggle={() => onToggle(c.id)}
+                  status={effectiveStatus(c)}
+                  onStatusChange={(s) =>
+                    setRowStatus((p) => ({ ...p, [c.id]: s }))
+                  }
                   onMarkPosted={() => onMarkPosted(c)}
                 />
               ))}
@@ -874,11 +900,15 @@ function EraReviewTableRow({
   c,
   expanded,
   onToggle,
+  status,
+  onStatusChange,
   onMarkPosted,
 }: {
   c: SecClaim;
   expanded: boolean;
   onToggle: () => void;
+  status: RowUserStatus;
+  onStatusChange: (s: RowUserStatus) => void;
   onMarkPosted: () => void;
 }) {
   // PR column = patient responsibility the primary left = what we *expected*
@@ -1005,23 +1035,74 @@ function EraReviewTableRow({
         >
           {$(difference)}
         </TableCell>
-        <TableCell className="text-right">
-          <Button
-            size="sm"
-            variant={balanced ? "default" : "outline"}
-            onClick={(e) => {
-              e.stopPropagation();
-              onMarkPosted();
-            }}
+        <TableCell>
+          {/* Status dropdown — same Paid/Outstanding state as the action
+              buttons; either input updates the same row state. Same shape
+              as the primary detail's line-level Status select. */}
+          <Select
+            value={status}
+            onValueChange={(v) => onStatusChange(v as RowUserStatus)}
           >
-            <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-            Mark as Paid
-          </Button>
+            <SelectTrigger
+              className={cn(
+                "h-8 w-[120px] font-medium",
+                status === "Paid" &&
+                  "bg-success-soft text-success-soft-foreground border-success-soft",
+                status === "Outstanding" &&
+                  "bg-muted text-foreground",
+              )}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="Paid">Paid</SelectItem>
+              <SelectItem value="Outstanding">Outstanding</SelectItem>
+            </SelectContent>
+          </Select>
+        </TableCell>
+        <TableCell className="text-right">
+          <TooltipProvider delayDuration={150}>
+            <div
+              className="inline-flex items-center justify-end gap-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Mark as Paid"
+                    onClick={() => {
+                      onStatusChange("Paid");
+                      onMarkPosted();
+                    }}
+                    className="grid h-9 w-9 place-items-center rounded-md bg-success-soft text-success-soft-foreground hover:bg-success hover:text-success-foreground transition-colors shadow-sm"
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Mark as Paid</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Leave as Outstanding"
+                    onClick={() => onStatusChange("Outstanding")}
+                    className="grid h-9 w-9 place-items-center rounded-md bg-muted text-muted-foreground hover:bg-foreground hover:text-background transition-colors shadow-sm"
+                  >
+                    <Clock className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Leave as Outstanding</TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
         </TableCell>
       </TableRow>
       {expanded && (
         <TableRow className="bg-muted/20 hover:bg-muted/20">
-          <TableCell colSpan={9} className="p-4">
+          <TableCell colSpan={10} className="p-4">
             <EraReviewBody c={c} onMarkPosted={onMarkPosted} />
           </TableCell>
         </TableRow>
