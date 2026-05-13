@@ -82,17 +82,22 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
 
   // Check paid date FIRST. The Primary status field doesn't tell us
   // whether money has actually hit the bank — the paid date does.
-  //   - paidDate <= today      → settled (excluded from inflow)
-  //   - today < paidDate <= +7 → Soon (lands within the week)
-  //   - paidDate > +7          → Expected (further-out scheduled deposit)
-  // This handles Medicaid Outstanding (status=Review, future paid date)
-  // correctly without any status-based special case.
+  //   paidDate <= today      → settled (excluded from inflow)
+  //   today < paidDate <= +7 → Soon (split by payer: Medicaid vs ERA-received)
+  //   paidDate > +7          → Expected (further-out scheduled deposit)
+  //
+  // The Medicaid sub-bucket and ERA-received sub-bucket of Soon are
+  // distinguished by payer type, not by whether the paid date came from an
+  // ERA vs a backend pre-fill. Pure-Medicaid pre-fills count as
+  // Medicaid-next-Wed; everything else with a future paid date is
+  // ERA-received.
   if (claim.primaryPaidDate) {
     const paidMs = new Date(claim.primaryPaidDate).getTime();
     if (Number.isFinite(paidMs)) {
       if (paidMs <= todayMs) return "settled";
       const daysAway = Math.ceil((paidMs - todayMs) / MS_PER_DAY);
-      return daysAway <= SOON_HORIZON_DAYS ? "soonEra" : "expected";
+      if (daysAway > SOON_HORIZON_DAYS) return "expected";
+      return isPureMedicaid(claim.primaryPayor) ? "soonMedicaid" : "soonEra";
     }
   }
 
