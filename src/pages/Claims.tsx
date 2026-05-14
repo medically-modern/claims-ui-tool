@@ -42,7 +42,8 @@ import {
   type ClaimStatusWriteback,
 } from "@/api/runClaimStatusCheck";
 import {
-  claimAge, eraReceived, fmtDate, fmtMoney, priorityOf, shortIssue, variance,
+  claimAge, eraReceived, fmtDate, fmtMoney, lateEraThresholdDays,
+  priorityOf, shortIssue, variance,
 } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
 import {
@@ -254,14 +255,17 @@ function recordFromWriteback(
 }
 
 function inLateEra(c: Claim) {
-  // "Late ERAs" = submitted 21+ days ago with no ERA yet. 21 days matches
-  // the Cash Flow tile's High Risk threshold so a single claim is either
-  // "Expected" in both views or "Late / High Risk" in both — operators
-  // shouldn't see a claim flagged Late while Cash Flow still calls it
-  // Expected.
+  // "Late ERAs" = submitted long enough ago that we should be hearing
+  // back, with no ERA yet. claimAge uses effective sent date (= max of
+  // Claim Sent Date / Claim Resent Date) so freshly-resent claims reset
+  // the clock. Threshold is per-claim: Appeals get 60 days (payers
+  // commonly take 30-45 to respond to a clean appeal); everything else
+  // uses 21 days to match Cash Flow's High Risk bucket.
   const age = claimAge(c) ?? 0;
   const excluded = ["Paid", "Denied (Or Partly)", "Bad Debt", "Request Rejected"];
-  return Boolean(c.claimSentDate) && !eraReceived(c) && age >= 21 && !excluded.includes(c.primaryStatus);
+  return Boolean(c.claimSentDate) && !eraReceived(c)
+      && age >= lateEraThresholdDays(c)
+      && !excluded.includes(c.primaryStatus);
 }
 function inDenied(c: Claim) {
   return c.primaryStatus === "Denied (Or Partly)";

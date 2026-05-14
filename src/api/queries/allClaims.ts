@@ -13,6 +13,7 @@ import type {
   ServiceLine,
   PrimaryStatus,
   Status277,
+  DenialAction,
   ClaimStatusCategory,
   DenialAnalysis,
 } from "@/lib/claims/types";
@@ -48,6 +49,15 @@ const COL = {
   // detail page Textarea pre-fills with what's on Monday; written via
   // src/api/setActionContext.ts when the operator saves a denial.
   ACTION_CONTEXT: "text_mm29v2ph",
+  // Denial Action (color_mm2998p) — status label set when the operator
+  // picks how they're working a denial. Drives the Final Decision
+  // resolution path: New/Corrected -> Submit Claim, the actionable ones
+  // (Appeal etc) -> Outstanding, Bad Debt -> Bad Debt.
+  DENIAL_ACTION: "color_mm2998p",
+  // Claim Resent Date — stamped today when a denial is resolved back to
+  // Outstanding. Used as the effective "last submission" date for Late
+  // ERA aging so freshly-resent claims don't immediately reappear.
+  CLAIM_RESENT_DATE: "date_mm29scz",
   S277_STATUS: "color_mm1z1pb2",
   S277_REJECTED_REASON: "text_mm1zsp2x",
   CLAIM_STATUS_CATEGORY: "color_mm2qbcpy",
@@ -276,6 +286,34 @@ function mapClaimStatusCategory(label: string): ClaimStatusCategory {
   return null;
 }
 
+/**
+ * Map Monday's Denial Action status label to the frontend DenialAction
+ * enum. Monday and the frontend share the same vocabulary for these,
+ * but we keep this indirection so we can refuse unknown labels and
+ * stay typesafe.
+ */
+function mapDenialAction(label: string): DenialAction {
+  const t = label.trim();
+  const known: NonNullable<DenialAction>[] = [
+    "New claim",
+    "Corrected claim",
+    "Appeal",
+    "Investigate",
+    "Submit auth",
+    "Upload docs",
+    "Contact payer",
+    "Action Complete",
+    "No Action / Write Off",
+    "Bad Debt",
+  ];
+  // Bad Debt is on the Monday column but not yet in the frontend enum;
+  // include the cast so this stays compilable until types.ts catches up.
+  if ((known as readonly string[]).includes(t)) {
+    return t as DenialAction;
+  }
+  return null;
+}
+
 function mapDenialAnalysis(label: string): DenialAnalysis {
   const t = label.trim();
   // Mapping from Monday's Denial Analysis labels (18 values) to the frontend's
@@ -399,7 +437,8 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     // Populated by the Stedi-Monday backend for every ERA received.
     primaryPaidDate: isoOrNull(txt(item, COL.PRIMARY_PAID_DATE)),
     secondaryPayer: txt(item, COL.SECONDARY_PAYER) || null,
-    denialAction: null,
+    denialAction: mapDenialAction(txt(item, COL.DENIAL_ACTION)),
+    claimResentDate: isoOrNull(txt(item, COL.CLAIM_RESENT_DATE)),
     nextActionDate: isoOrNull(txt(item, COL.NEXT_ACTION_DATE)),
     actionContext: txt(item, COL.ACTION_CONTEXT) || undefined,
     notes: txt(item, COL.NOTES) || undefined,

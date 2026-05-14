@@ -57,6 +57,8 @@ import {
 } from "@/api/markPaid";
 import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 import { setActionContext } from "@/api/setActionContext";
+import { setDenialAction as apiSetDenialAction } from "@/api/setDenialAction";
+import { setClaimResentDate } from "@/api/setClaimResentDate";
 
 type LineUserStatus = "Paid" | "Underpaid" | "Denied";
 
@@ -174,10 +176,56 @@ const ClaimDetail = () => {
 
   // ─── Denial workflow resolution ───────────────────────────────────────────
   // For claims already in "Denied (Or Partly)", the Final Decision section
-  // renders three outcomes: resubmit as a corrected claim, move back to
-  // Outstanding (still being worked), or write off as Bad Debt. Each option
-  // flips the Primary Status on Monday via setPrimaryStatus and navigates
-  // back to the queue so the row reflects the new bucket on next refresh.
+  // renders three outcomes — but only the one matching the chosen Denial
+  // Action is clickable. Each option flips Primary Status on Monday via
+  // setPrimaryStatus and (for Outstanding) stamps Claim Resent Date so
+  // the Late ERA aging clock restarts. Bad Debt and Submit Claim do NOT
+  // stamp the resent date — Submit Claim because the actual resubmission
+  // happens later in the submit flow; Bad Debt because the claim is
+  // terminal.
+
+  /** Which routes are valid for the currently-selected Denial Action. */
+  function resolutionFor(
+    action: DenialAction,
+  ): "Submit Claim" | "Outstanding" | "Bad Debt" | null {
+    switch (action) {
+      case "New claim":
+      case "Corrected claim":
+        return "Submit Claim";
+      case "Appeal":
+      case "Investigate":
+      case "Submit auth":
+      case "Upload docs":
+      case "Contact payer":
+        return "Outstanding";
+      case "Bad Debt":
+      case "No Action / Write Off":
+        return "Bad Debt";
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Auto-persist the Denial Action to Monday whenever the operator
+   * changes the Select. We don't require them to commit a full
+   * resolution to record the action; a half-complete denial sits in
+   * the Denials bucket with the action recorded so they can come back
+   * later, do the work, and click the resolution button.
+   */
+  async function handleDenialActionChange(action: DenialAction) {
+    setDenialAction(action);
+    if (!action) return;
+    try {
+      await apiSetDenialAction(claim.mondayItemId, action);
+      setClaim({ ...claim, denialAction: action });
+    } catch (e) {
+      toast.error("Couldn't save Denial Action to Monday", {
+        description: (e as Error).message,
+      });
+    }
+  }
+
   const [denialResolveBusy, setDenialResolveBusy] = useState<
     "Submit Claim" | "Outstanding" | "Bad Debt" | null
   >(null);
@@ -186,37 +234,58 @@ const ClaimDetail = () => {
     nextStatus: "Submit Claim" | "Outstanding" | "Bad Debt",
   ) {
     if (denialResolveBusy) return;
+    if (!denialAction) {
+      toast.error("Pick a Denial Action above first.");
+      return;
+    }
     setDenialResolveBusy(nextStatus);
     try {
-      // Write status first, then action context (so the operator's note
-      // lands on Monday even if status was already set).
+      // 1. Primary Status — the load-bearing write.
       await setPrimaryStatus(claim.mondayItemId, nextStatus);
-      // Persist the textarea value to text_mm29v2ph if the operator has
-      // changed it from what's currently on Monday. Empty string is OK
-      // (clears the column).
+
+      // 2. Claim Resent Date — only when we're moving the claim back
+      //    into active pursuit (Outstanding). Submit Claim doesn't write
+      //    here because the resent date should reflect actual
+      //    resubmission, which happens later in the submit flow. Bad
+      //    Debt is terminal so the resent clock is irrelevant.
+      let resentToday: string | null = null;
+      if (nextStatus === "Outstanding") {
+        const today = new Date().toISOString().slice(0, 10);
+        try {
+          await setClaimResentDate(claim.mondayItemId, today);
+          resentToday = today;
+        } catch (e) {
+          console.warn("[denial-resolve] resent date write failed:", e);
+          toast.warning("Status updated, but Resent Date didn't save", {
+            description: (e as Error).message,
+          });
+        }
+      }
+
+      // 3. Action Context — persist any operator note.
       const ctxTrimmed = actionContext.trim();
       if (ctxTrimmed !== (claim.actionContext ?? "").trim()) {
         try {
           await setActionContext(claim.mondayItemId, ctxTrimmed);
         } catch (e) {
-          // Don't fail the whole resolution if the context write fails —
-          // the status flip is the important part. Log + surface gently.
           console.warn("[denial-resolve] action context write failed:", e);
           toast.warning("Status updated, but action context didn't save", {
             description: (e as Error).message,
           });
         }
       }
+
       setClaim({
         ...claim,
         primaryStatus: nextStatus as Claim["primaryStatus"],
         actionContext: ctxTrimmed,
+        claimResentDate: resentToday ?? claim.claimResentDate,
         activity: appendActivity(
           nextStatus === "Submit Claim"
-            ? "Denial resolved → resubmit as corrected claim."
+            ? `Denial resolved (${denialAction}) → moved to Submit Claim.`
             : nextStatus === "Outstanding"
-              ? "Denial resolved → moved back to Outstanding."
-              : "Denial resolved → written off as Bad Debt.",
+              ? `Denial resolved (${denialAction}) → Outstanding. Resent Date ${resentToday ?? "(not saved)"}.`
+              : `Denial resolved (${denialAction}) → written off as Bad Debt.`,
         ),
       });
       toast.success(`Primary status → ${nextStatus}`, {
@@ -224,7 +293,11 @@ const ClaimDetail = () => {
           nextStatus === "Submit Claim"
             ? "Lands on New Claims / Resubmit board."
             : nextStatus === "Outstanding"
-              ? "Back to Outstanding for continued work."
+              ? `Back to Outstanding. ${
+                  denialAction === "Appeal"
+                    ? "Late ERA clock: 60 days."
+                    : "Late ERA clock: 21 days."
+                }`
               : "Written off — claim closed.",
       });
       navigate("/claims");
@@ -544,7 +617,7 @@ const ClaimDetail = () => {
                 );
               })}
 
-              <div className="grid grid-cols-1 gap-4 pt-2 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 pt-2">
                 <div className="space-y-2">
                   <div className="flex items-baseline justify-between gap-2">
                     <label className="text-sm font-medium">Claim-level Denial Action</label>
@@ -554,7 +627,9 @@ const ClaimDetail = () => {
                   </div>
                   <Select
                     value={denialAction ?? undefined}
-                    onValueChange={(v) => setDenialAction(v as DenialAction)}
+                    onValueChange={(v) =>
+                      void handleDenialActionChange(v as DenialAction)
+                    }
                   >
                     <SelectTrigger><SelectValue placeholder="Choose action" /></SelectTrigger>
                     <SelectContent>
@@ -563,23 +638,13 @@ const ClaimDetail = () => {
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-[11px] text-muted-foreground">
+                    Saves to Monday on change. Pick the action even if you
+                    haven't done the work yet — the claim stays in
+                    Denials until you click a resolution below.
+                  </p>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Next Action Date</label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !nextActionDate && "text-muted-foreground")}>
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {nextActionDate ? format(nextActionDate, "PPP") : "Pick a date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar mode="single" selected={nextActionDate} onSelect={setNextActionDate}
-                        initialFocus className={cn("p-3 pointer-events-auto")} />
-                    </PopoverContent>
-                  </Popover>
-                </div>
-                <div className="space-y-2 md:col-span-2">
                   <label className="text-sm font-medium">Action Context</label>
                   <Textarea
                     placeholder="e.g. Reduce units to 30 and resubmit. Upload clinical notes to payer portal."
@@ -588,7 +653,7 @@ const ClaimDetail = () => {
                     rows={3}
                   />
                 </div>
-                <div className="md:col-span-2">
+                <div>
                   <CreateFollowUpButton
                     claim={claim}
                     denialAction={denialAction}
@@ -614,48 +679,78 @@ const ClaimDetail = () => {
           </CardHeader>
           <CardContent>
             {claim.primaryStatus === "Denied (Or Partly)" ? (
-              // Denial resolution flow — three outcomes after the operator
-              // has done the off-system work (called payer, filed appeal,
-              // gathered documentation, decided to rebill, etc.).
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                <DecisionCard
-                  tone="info"
-                  icon={<Send className="h-5 w-5" />}
-                  title="New claim created"
-                  desc="A corrected claim is going out. Move this to Submit Claim so it lands on the New Claims / Resubmit board for the next 837."
-                  cta={
-                    denialResolveBusy === "Submit Claim"
-                      ? "Moving…"
-                      : "Submit Claim"
-                  }
-                  onClick={() => void resolveDenial("Submit Claim")}
-                  disabled={denialResolveBusy !== null}
-                />
-                <DecisionCard
-                  tone="warning"
-                  icon={<Clock className="h-5 w-5" />}
-                  title="Move back to Outstanding"
-                  desc="Still working with the payer (appeal pending, doc review, callback). Park it in Outstanding while the response is in flight."
-                  cta={
-                    denialResolveBusy === "Outstanding"
-                      ? "Moving…"
-                      : "Outstanding"
-                  }
-                  onClick={() => void resolveDenial("Outstanding")}
-                  disabled={denialResolveBusy !== null}
-                />
-                <DecisionCard
-                  tone="danger"
-                  icon={<FileWarning className="h-5 w-5" />}
-                  title="Write off as Bad Debt"
-                  desc="Denial is final and uncollectable (timely filing past, patient unreachable, write-off approved). Closes the claim."
-                  cta={
-                    denialResolveBusy === "Bad Debt" ? "Writing off…" : "Bad Debt"
-                  }
-                  onClick={() => void resolveDenial("Bad Debt")}
-                  disabled={denialResolveBusy !== null}
-                />
-              </div>
+              // Denial resolution flow — only the path matching the
+              // currently-selected Denial Action is enabled. Other cards
+              // render disabled so the operator can see all options but
+              // not accidentally take the wrong route.
+              (() => {
+                const allowedRoute = resolutionFor(denialAction);
+                const hint =
+                  allowedRoute === null
+                    ? "Pick a Denial Action above to enable a resolution."
+                    : allowedRoute === "Submit Claim"
+                      ? "Action requires a new 837. Click Submit Claim to move it to the submit queue."
+                      : allowedRoute === "Outstanding"
+                        ? "Once you've performed the action, click Outstanding. Resent Date is stamped today and the Late ERA clock restarts."
+                        : "Denial is terminal. Bad Debt closes the claim.";
+                return (
+                  <>
+                    <p className="mb-3 text-xs text-muted-foreground">
+                      {hint}
+                    </p>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      <DecisionCard
+                        tone="info"
+                        icon={<Send className="h-5 w-5" />}
+                        title="New claim created"
+                        desc="A corrected claim is going out. Move this to Submit Claim so it lands on the New Claims / Resubmit board for the next 837."
+                        cta={
+                          denialResolveBusy === "Submit Claim"
+                            ? "Moving…"
+                            : "Submit Claim"
+                        }
+                        onClick={() => void resolveDenial("Submit Claim")}
+                        disabled={
+                          allowedRoute !== "Submit Claim" ||
+                          denialResolveBusy !== null
+                        }
+                      />
+                      <DecisionCard
+                        tone="warning"
+                        icon={<Clock className="h-5 w-5" />}
+                        title="Move back to Outstanding"
+                        desc="Action performed (appeal filed, docs uploaded, payer contacted). Park it in Outstanding while the response is in flight. Late ERA clock restarts today."
+                        cta={
+                          denialResolveBusy === "Outstanding"
+                            ? "Moving…"
+                            : "Outstanding"
+                        }
+                        onClick={() => void resolveDenial("Outstanding")}
+                        disabled={
+                          allowedRoute !== "Outstanding" ||
+                          denialResolveBusy !== null
+                        }
+                      />
+                      <DecisionCard
+                        tone="danger"
+                        icon={<FileWarning className="h-5 w-5" />}
+                        title="Write off as Bad Debt"
+                        desc="Denial is final and uncollectable. Closes the claim and triggers the Monday write-off automation."
+                        cta={
+                          denialResolveBusy === "Bad Debt"
+                            ? "Writing off…"
+                            : "Bad Debt"
+                        }
+                        onClick={() => void resolveDenial("Bad Debt")}
+                        disabled={
+                          allowedRoute !== "Bad Debt" ||
+                          denialResolveBusy !== null
+                        }
+                      />
+                    </div>
+                  </>
+                );
+              })()
             ) : (
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <DecisionCard

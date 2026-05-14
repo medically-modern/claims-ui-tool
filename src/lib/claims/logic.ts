@@ -9,8 +9,35 @@ export function daysBetween(from: string | null | undefined, to = new Date()): n
   return Math.floor((to.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
 }
 
+/**
+ * Effective last-submission date for aging. When a denial was resolved
+ * back to Outstanding the operator stamps Claim Resent Date today, and
+ * the Late ERA / Cash Flow clocks should restart from that point.
+ *
+ * Returns the more recent of Claim Sent Date and Claim Resent Date, or
+ * null when neither is set.
+ */
+export function effectiveSentDate(claim: Claim): string | null {
+  const sent = claim.claimSentDate;
+  const resent = claim.claimResentDate;
+  if (!sent && !resent) return null;
+  if (!sent) return resent ?? null;
+  if (!resent) return sent;
+  return new Date(resent) > new Date(sent) ? resent : sent;
+}
+
 export function claimAge(claim: Claim): number | null {
-  return daysBetween(claim.claimSentDate);
+  return daysBetween(effectiveSentDate(claim));
+}
+
+/**
+ * Late-ERA aging threshold for this claim. Appeals get a 60-day window
+ * because payers commonly take 30-45 days to respond to a clean appeal;
+ * everything else uses the standard 21-day window matching Cash Flow's
+ * High Risk bucket.
+ */
+export function lateEraThresholdDays(claim: Claim): number {
+  return claim.denialAction === "Appeal" ? 60 : 21;
 }
 
 export function eraReceived(claim: Claim): boolean {

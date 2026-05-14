@@ -56,6 +56,7 @@ export type DenialAction =
   | "Contact payer"
   | "Action Complete"
   | "No Action / Write Off"
+  | "Bad Debt"
   | null;
 
 export interface ServiceLine {
@@ -115,6 +116,10 @@ export interface Claim {
   insuranceType: string;
   memberId: string;
   claimSentDate: string | null;
+  /** "Claim Resent Date" (date_mm29scz). Stamped today when a denial is
+   *  resolved back to Outstanding. Used as the effective last-action
+   *  date for Late ERA aging. Null until the claim is resubmitted. */
+  claimResentDate?: string | null;
   primaryStatus: PrimaryStatus;
   status277: Status277;
   rejected277Reason?: string | null;
