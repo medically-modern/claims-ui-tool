@@ -41,7 +41,6 @@ import {
   ClaimStatusError,
   type ClaimStatusWriteback,
 } from "@/api/runClaimStatusCheck";
-import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 import {
   claimAge, eraReceived, fmtDate, fmtMoney, priorityOf, shortIssue, variance,
 } from "@/lib/claims/logic";
@@ -401,41 +400,6 @@ const Claims = () => {
   // which claim is being confirmed and whether the request is in flight.
   const [markPaidTarget, setMarkPaidTarget] = useState<Claim | null>(null);
   const [markPaidBusy, setMarkPaidBusy] = useState(false);
-
-  // ─── Denial Action Complete wiring ────────────────────────────────────────
-  // The Denials tab has an "Action Complete" button on each row that opens a
-  // dialog asking how to route the claim next: resubmit as a corrected claim
-  // (Primary Status -> Submit Claim) or keep working (Primary Status ->
-  // Outstanding). Both options write Monday and refetch.
-  const [denialActionTarget, setDenialActionTarget] = useState<Claim | null>(null);
-  const [denialActionBusy, setDenialActionBusy] = useState(false);
-
-  async function completeDenial(
-    target: Claim,
-    nextStatus: "Submit Claim" | "Outstanding",
-  ) {
-    if (denialActionBusy) return;
-    setDenialActionBusy(true);
-    try {
-      await setPrimaryStatus(target.mondayItemId, nextStatus);
-      toast({
-        title: `${target.patientName} → ${nextStatus}`,
-        description:
-          nextStatus === "Submit Claim"
-            ? "Moved to Submit Claim. It'll appear under New Claims / Resubmit."
-            : "Moved to Outstanding. Keep working with the payer.",
-      });
-      setDenialActionTarget(null);
-      void refetchClaims();
-    } catch (e) {
-      toast({
-        title: "Couldn't update Monday",
-        description: (e as Error).message,
-      });
-    } finally {
-      setDenialActionBusy(false);
-    }
-  }
 
   async function confirmMarkPaidFromRow() {
     const target = markPaidTarget;
@@ -1173,30 +1137,6 @@ const Claims = () => {
                                         </TableCell>
                                       );
                                     }
-                                    if (category === "denied") {
-                                      return (
-                                        <TableCell key={col} className="text-right">
-                                          <div className="inline-flex items-center justify-end gap-2">
-                                            <Button
-                                              size="sm"
-                                              className="bg-emerald-700 text-white hover:bg-emerald-800"
-                                              onClick={() => setDenialActionTarget(c)}
-                                            >
-                                              <Check className="mr-1 h-3.5 w-3.5" />
-                                              Action Complete
-                                            </Button>
-                                            <Button asChild size="sm" variant="outline">
-                                              <Link
-                                                to={`/claims/${c.id}`}
-                                                aria-label="See details"
-                                              >
-                                                <ArrowRight className="h-3.5 w-3.5" />
-                                              </Link>
-                                            </Button>
-                                          </div>
-                                        </TableCell>
-                                      );
-                                    }
                                     return (
                                       <TableCell key={col} className="text-right">
                                         <Button asChild size="sm" variant="outline">
@@ -1284,74 +1224,6 @@ const Claims = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Denial Action Complete dialog — fires from the Denials tab's
-          Action Complete button. Routes the claim to its next state:
-            Resubmit  -> Primary Status = "Submit Claim" (lands in Submit)
-            Outstanding -> Primary Status = "Outstanding" (back to working) */}
-      <AlertDialog
-        open={!!denialActionTarget}
-        onOpenChange={(o) => !o && setDenialActionTarget(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Action complete — what's next?</AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="space-y-1 text-sm">
-                <p className="font-medium text-foreground">
-                  {denialActionTarget?.patientName}
-                </p>
-                <p>
-                  Choose where this claim goes now that the denial action
-                  is finished.
-                </p>
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-3 py-2">
-            <button
-              type="button"
-              disabled={denialActionBusy}
-              onClick={() =>
-                denialActionTarget &&
-                void completeDenial(denialActionTarget, "Submit Claim")
-              }
-              className="flex w-full items-start gap-3 rounded-md border p-3 text-left hover:bg-muted/40 disabled:opacity-50"
-            >
-              <Send className="mt-0.5 h-4 w-4 text-primary" />
-              <div>
-                <div className="font-medium">Resubmit as corrected claim</div>
-                <div className="text-xs text-muted-foreground">
-                  Primary Status → Submit Claim. Lands on the New
-                  Claims / Resubmit board for the next 837.
-                </div>
-              </div>
-            </button>
-            <button
-              type="button"
-              disabled={denialActionBusy}
-              onClick={() =>
-                denialActionTarget &&
-                void completeDenial(denialActionTarget, "Outstanding")
-              }
-              className="flex w-full items-start gap-3 rounded-md border p-3 text-left hover:bg-muted/40 disabled:opacity-50"
-            >
-              <Clock className="mt-0.5 h-4 w-4 text-info-soft-foreground" />
-              <div>
-                <div className="font-medium">Keep working — Outstanding</div>
-                <div className="text-xs text-muted-foreground">
-                  Primary Status → Outstanding. Use when you're waiting
-                  on payer response (appeal, documentation, callback).
-                </div>
-              </div>
-            </button>
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={denialActionBusy}>
-              Cancel
-            </AlertDialogCancel>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 };

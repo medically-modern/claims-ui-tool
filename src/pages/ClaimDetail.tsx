@@ -32,7 +32,7 @@ import type {
 } from "@/lib/claims/types";
 import {
   AlertCircle, CalendarIcon, CheckCircle2, ChevronDown,
-  FileWarning, Ban, AlertTriangle,
+  Clock, FileWarning, Ban, AlertTriangle,
 } from "lucide-react";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -55,6 +55,7 @@ import {
   secondaryItemUrl,
   summarizeSecondary,
 } from "@/api/markPaid";
+import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 
 type LineUserStatus = "Paid" | "Underpaid" | "Denied";
 
@@ -169,6 +170,52 @@ const ClaimDetail = () => {
   // revert.
   const [markPaidOpen, setMarkPaidOpen] = useState(false);
   const [markPaidBusy, setMarkPaidBusy] = useState(false);
+
+  // ─── Denial workflow resolution ───────────────────────────────────────────
+  // For claims already in "Denied (Or Partly)", the Final Decision section
+  // renders three outcomes: resubmit as a corrected claim, move back to
+  // Outstanding (still being worked), or write off as Bad Debt. Each option
+  // flips the Primary Status on Monday via setPrimaryStatus and navigates
+  // back to the queue so the row reflects the new bucket on next refresh.
+  const [denialResolveBusy, setDenialResolveBusy] = useState<
+    "Submit Claim" | "Outstanding" | "Bad Debt" | null
+  >(null);
+
+  async function resolveDenial(
+    nextStatus: "Submit Claim" | "Outstanding" | "Bad Debt",
+  ) {
+    if (denialResolveBusy) return;
+    setDenialResolveBusy(nextStatus);
+    try {
+      await setPrimaryStatus(claim.mondayItemId, nextStatus);
+      setClaim({
+        ...claim,
+        primaryStatus: nextStatus as Claim["primaryStatus"],
+        activity: appendActivity(
+          nextStatus === "Submit Claim"
+            ? "Denial resolved → resubmit as corrected claim."
+            : nextStatus === "Outstanding"
+              ? "Denial resolved → moved back to Outstanding."
+              : "Denial resolved → written off as Bad Debt.",
+        ),
+      });
+      toast.success(`Primary status → ${nextStatus}`, {
+        description:
+          nextStatus === "Submit Claim"
+            ? "Lands on New Claims / Resubmit board."
+            : nextStatus === "Outstanding"
+              ? "Back to Outstanding for continued work."
+              : "Written off — claim closed.",
+      });
+      navigate("/claims");
+    } catch (e) {
+      toast.error("Couldn't update Monday", {
+        description: (e as Error).message,
+      });
+    } finally {
+      setDenialResolveBusy(null);
+    }
+  }
 
   function openMarkPaid() {
     // Variance-override gate disabled for now. Operators can mark any claim
@@ -539,25 +586,74 @@ const ClaimDetail = () => {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Final Decision</CardTitle>
-            <p className="text-sm text-muted-foreground">Pick one outcome to close out this claim.</p>
+            <p className="text-sm text-muted-foreground">
+              {claim.primaryStatus === "Denied (Or Partly)"
+                ? "Resolve this denial. Pick the outcome of the work you just did."
+                : "Pick one outcome to close out this claim."}
+            </p>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <DecisionCard
-                tone="success" icon={<CheckCircle2 className="h-5 w-5" />}
-                title="Paid"
-                desc="Primary paid correctly. Remainder is PR or going to secondary."
-                cta="Mark Paid" onClick={openMarkPaid}
-                disabled={linesWithIssues.length > 0}
-              />
-              <DecisionCard
-                tone="danger" icon={<FileWarning className="h-5 w-5" />}
-                title="Denied / Partial Denial"
-                desc="One or more lines were denied or underpaid. Send to the denial flow."
-                cta="Send to Denial" onClick={saveDenial}
-                disabled={linesWithIssues.length === 0}
-              />
-            </div>
+            {claim.primaryStatus === "Denied (Or Partly)" ? (
+              // Denial resolution flow — three outcomes after the operator
+              // has done the off-system work (called payer, filed appeal,
+              // gathered documentation, decided to rebill, etc.).
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <DecisionCard
+                  tone="info"
+                  icon={<Send className="h-5 w-5" />}
+                  title="New claim created"
+                  desc="A corrected claim is going out. Move this to Submit Claim so it lands on the New Claims / Resubmit board for the next 837."
+                  cta={
+                    denialResolveBusy === "Submit Claim"
+                      ? "Moving…"
+                      : "Submit Claim"
+                  }
+                  onClick={() => void resolveDenial("Submit Claim")}
+                  disabled={denialResolveBusy !== null}
+                />
+                <DecisionCard
+                  tone="warning"
+                  icon={<Clock className="h-5 w-5" />}
+                  title="Move back to Outstanding"
+                  desc="Still working with the payer (appeal pending, doc review, callback). Park it in Outstanding while the response is in flight."
+                  cta={
+                    denialResolveBusy === "Outstanding"
+                      ? "Moving…"
+                      : "Outstanding"
+                  }
+                  onClick={() => void resolveDenial("Outstanding")}
+                  disabled={denialResolveBusy !== null}
+                />
+                <DecisionCard
+                  tone="danger"
+                  icon={<FileWarning className="h-5 w-5" />}
+                  title="Write off as Bad Debt"
+                  desc="Denial is final and uncollectable (timely filing past, patient unreachable, write-off approved). Closes the claim."
+                  cta={
+                    denialResolveBusy === "Bad Debt" ? "Writing off…" : "Bad Debt"
+                  }
+                  onClick={() => void resolveDenial("Bad Debt")}
+                  disabled={denialResolveBusy !== null}
+                />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <DecisionCard
+                  tone="success" icon={<CheckCircle2 className="h-5 w-5" />}
+                  title="Paid"
+                  desc="Primary paid correctly. Remainder is PR or going to secondary."
+                  cta="Mark Paid" onClick={openMarkPaid}
+                  disabled={linesWithIssues.length > 0}
+                />
+                <DecisionCard
+                  tone="danger" icon={<FileWarning className="h-5 w-5" />}
+                  title="Denied / Partial Denial"
+                  desc="One or more lines were denied or underpaid. Send to the denial flow."
+                  cta="Send to Denial" onClick={saveDenial}
+                  disabled={linesWithIssues.length === 0}
+                />
+              </div>
+            )}
             <div className="mt-6 flex items-center justify-between">
               <Button variant="outline" onClick={escalate}>
                 <AlertTriangle className="mr-2 h-4 w-4" /> Escalate for review
