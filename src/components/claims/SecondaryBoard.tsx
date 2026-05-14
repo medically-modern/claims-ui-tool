@@ -20,12 +20,13 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
 import { hasMondayToken } from "@/api/monday";
-import { setSecondaryStatus } from "@/api/setSecondaryStatus";
+import { setSecondaryStatus, setSecondaryStatusAndMove } from "@/api/setSecondaryStatus";
 import {
   markSecondaryPaid as apiMarkSecondaryPaid,
   isMarkSecondaryPaidConfigured,
   MarkSecondaryPaidError,
 } from "@/api/markSecondaryPaid";
+import { confirmSecondaryPayor } from "@/api/confirmSecondaryPayor";
 import {
   ArrowUpDown, Search, Send, ChevronDown, ChevronRight,
   ExternalLink, FileText, CheckCircle2, Clock, FileSearch, UserRound, Info,
@@ -39,6 +40,7 @@ export type SecondaryMode = "submit" | "review";
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type SecondaryStatus =
+  | "Awaiting Payor Confirmation"
   | "Primary Paid - Forwarded"
   | "Primary Paid - Submit Secondary"
   | "Secondary Submitted"
@@ -48,7 +50,7 @@ export type SecondaryStatus =
   | "Patient Paid"
   | "Bad Debt";
 
-type SubmitBucket = "insurance" | "patient";
+type SubmitBucket = "confirm" | "insurance" | "patient";
 type ReviewBucket = "outstanding" | "era";
 type AnyBucket = SubmitBucket | ReviewBucket;
 
@@ -88,6 +90,20 @@ export interface SecClaim {
    * for display in the ERA Review view.
    */
   secondaryPayerRawName?: string;
+  /**
+   * Whether the operator has reviewed and confirmed the submission type
+   * in the Confirm Payor tab. Forwarded crossovers auto-confirm at spawn;
+   * Insurance/Patient types spawn as false and only flip true once the
+   * operator picks a destination from the Confirm Payor flow.
+   */
+  payorConfirmed?: boolean;
+  /**
+   * Raw Monday Secondary Status value (color_mm3a5yak). Used by the
+   * Patient bucket body to decide which stage to render: "Submit" =
+   * needs invoice, "Outstanding"/"Sent to Patient" = invoice sent
+   * awaiting payment.
+   */
+  rawSecondaryStatus?: string;
   patientName: string;
   primaryPayor: string;
   secondaryPayer: string | null;     // null = patient bucket with no secondary; "Other" = custom
@@ -464,6 +480,7 @@ const STATUS_TONE: Record<SecLine["status"], "warning" | "danger" | "success" | 
 };
 
 function bucketOf(c: SecClaim): AnyBucket | null {
+  if (c.status === "Awaiting Payor Confirmation") return "confirm";
   if (c.status === "Primary Paid - Submit Secondary") return "insurance";
   if (c.status === "Sent to Patient") return "patient";
   if (c.status === "Primary Paid - Forwarded" || c.status === "Secondary Submitted") return "outstanding";
@@ -472,6 +489,7 @@ function bucketOf(c: SecClaim): AnyBucket | null {
 }
 
 const BUCKET_META: Record<AnyBucket, { label: string; icon: React.ReactNode; tone: string }> = {
+  confirm:     { label: "Confirm Payor",    icon: <FileSearch className="h-4 w-4" />, tone: "text-warning-soft-foreground" },
   insurance:   { label: "Insurance",        icon: <Send className="h-4 w-4" />,      tone: "text-warning-soft-foreground" },
   patient:     { label: "Patient",          icon: <UserRound className="h-4 w-4" />, tone: "text-primary" },
   outstanding: { label: "Outstanding",      icon: <Clock className="h-4 w-4" />,     tone: "text-info-soft-foreground" },
@@ -479,7 +497,7 @@ const BUCKET_META: Record<AnyBucket, { label: string; icon: React.ReactNode; ton
 };
 
 const MODE_BUCKETS: Record<SecondaryMode, AnyBucket[]> = {
-  submit: ["insurance", "patient"],
+  submit: ["confirm", "insurance", "patient"],
   review: ["outstanding", "era"],
 };
 
@@ -560,30 +578,133 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
   const updateClaim = (id: string, patch: Partial<SecClaim>) =>
     setClaims((arr) => arr.map((c) => (c.id === id ? { ...c, ...patch } : c)));
 
-  const submitSecondary = (c: SecClaim, manual = false) => {
+  async function submitSecondary(c: SecClaim, manual = false) {
+    if (!c.mondayItemId) return;
+    // Insurance flow stage 2 — operator either submitted the 837 via
+    // Stedi or manually (paper/fax). Either way the row moves out of
+    // Submit Claim group into Insurance Outstanding so the visual
+    // board reflects "waiting on the secondary payer".
     updateClaim(c.id, { status: "Secondary Submitted" });
     const name = displaySecondary(c);
-    toast({
-      title: `Secondary ${manual ? "marked submitted manually" : "submitted"}: ${c.patientName}`,
-      description: manual
-        ? `Tracked outside Stedi (paper / fax / portal) → ${name}.`
-        : `837 sent to ${name}.`,
+    try {
+      await setSecondaryStatusAndMove(
+        c.mondayItemId,
+        "Submitted",
+        "group_mm332zns",  // Insurance Outstanding
+      );
+      toast({
+        title: `Secondary ${manual ? "marked submitted manually" : "submitted"}: ${c.patientName}`,
+        description: manual
+          ? `Tracked outside Stedi (paper / fax / portal) → ${name}.`
+          : `837 sent to ${name}.`,
+      });
+      void refetchSecondary();
+    } catch (e) {
+      toast({
+        title: "Couldn't update Monday",
+        description: (e as Error).message,
+      });
+    }
+  }
+  /**
+   * Patient bucket — stage 1: Send Invoice. Secondary Status flips to
+   * Outstanding so the row reads as "invoice sent, waiting on patient".
+   * Direct Monday write; no backend hop since no cross-board state
+   * changes (patient billing is closed-loop on the Secondary side
+   * until they actually pay).
+   */
+  async function sendInvoice(c: SecClaim) {
+    if (!c.mondayItemId) return;
+    // Patient flow stage 1 — invoice sent. Row moves out of Send Invoice
+    // group into Patient Responsibility Outstanding, status flips to
+    // Outstanding so the two-stage body switches to the Mark Paid button.
+    updateClaim(c.id, {
+      status: "Sent to Patient",
+      rawSecondaryStatus: "Outstanding",
     });
-  };
-  const generateStatement = (c: SecClaim) => {
+    try {
+      await setSecondaryStatusAndMove(
+        c.mondayItemId,
+        "Outstanding",
+        "group_mkwta260",  // Patient Responsibility Outstanding
+      );
+      toast({
+        title: `Invoice sent: ${c.patientName}`,
+        description: `Patient owes ${$(c.remaining)}. Status → Outstanding.`,
+      });
+      void refetchSecondary();
+    } catch (e) {
+      toast({ title: "Couldn't update Monday", description: (e as Error).message });
+    }
+  }
+
+  /**
+   * Patient bucket — stage 2: Mark as Paid. Patient has paid; flip the
+   * secondary's Monday status to Patient Paid. Doesn't fire the
+   * Subscription Board "Secondary Claim Paid? = Fully Paid" write —
+   * that's reserved for the ERA-driven mark-paid flow on the Secondary
+   * Mark Paid endpoint. Patient-side payment is recorded but the
+   * subscription propagation stays a separate decision.
+   */
+  async function markPatientPaid(c: SecClaim) {
+    if (!c.mondayItemId) return;
+    // Patient flow stage 2 — patient paid. Move to Paid And Closed.
     updateClaim(c.id, { status: "Patient Paid" });
-    toast({ title: `Statement generated: ${c.patientName}`, description: `Patient owes ${$(c.remaining)}.` });
-  };
-  const markPatientPaid = (c: SecClaim) => {
-    updateClaim(c.id, { status: "Patient Paid" });
-    toast({ title: `Marked paid: ${c.patientName}` });
-  };
+    try {
+      await setSecondaryStatusAndMove(
+        c.mondayItemId,
+        "Patient Paid",
+        "group_mkxsng4r",  // Paid And Closed
+      );
+      toast({ title: `Marked paid: ${c.patientName}` });
+      void refetchSecondary();
+    } catch (e) {
+      toast({ title: "Couldn't update Monday", description: (e as Error).message });
+    }
+  }
   const markPosted = (c: SecClaim) => {
     updateClaim(c.id, { status: "Secondary Paid" });
     toast({ title: `Crossover posted: ${c.patientName}` });
   };
 
-  const gridCols = buckets.length === 2 ? "md:grid-cols-2" : "md:grid-cols-3";
+  /**
+   * Confirm Payor — operator picks the final destination (Insurance vs
+   * Patient) for a freshly-spawned secondary. Writes Submission Type +
+   * Payor Confirmed = Yes on Monday in one batch. Row falls out of the
+   * Confirm bucket on the next refetch.
+   */
+  async function confirmPayor(
+    c: SecClaim,
+    dest: "Insurance" | "Patient",
+  ) {
+    if (!c.mondayItemId) {
+      toast({ title: "No Monday item id", description: c.patientName });
+      return;
+    }
+    // Optimistic flip so the row drops out of the Confirm bucket instantly.
+    updateClaim(c.id, {
+      payorConfirmed: true,
+      status:
+        dest === "Insurance"
+          ? "Primary Paid - Submit Secondary"
+          : "Sent to Patient",
+    });
+    try {
+      await confirmSecondaryPayor(c.mondayItemId, dest);
+      toast({
+        title: `Confirmed: ${dest}`,
+        description: `${c.patientName} → ${dest === "Insurance" ? "Submit to Insurance" : "Patient bucket"}.`,
+      });
+      void refetchSecondary();
+    } catch (e) {
+      toast({
+        title: "Couldn't confirm",
+        description: (e as Error).message,
+      });
+    }
+  }
+
+  const gridCols = buckets.length >= 3 ? "md:grid-cols-3" : "md:grid-cols-2";
 
   return (
     <div className="space-y-4">
@@ -697,9 +818,10 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
               onToggle={() => setExpanded((p) => ({ ...p, [c.id]: !p[c.id] }))}
               onUpdate={(patch) => updateClaim(c.id, patch)}
               onSubmitSecondary={(manual) => submitSecondary(c, manual)}
-              onGenerateStatement={() => generateStatement(c)}
-              onMarkPatientPaid={() => markPatientPaid(c)}
+              onGenerateStatement={() => void sendInvoice(c)}
+              onMarkPatientPaid={() => void markPatientPaid(c)}
               onMarkPosted={() => markPosted(c)}
+              onConfirmPayor={(dest) => void confirmPayor(c, dest)}
             />
           ))
         )}
@@ -715,6 +837,7 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
 function SecondaryRow({
   c, expanded, onToggle, onUpdate,
   onSubmitSecondary, onGenerateStatement, onMarkPatientPaid, onMarkPosted,
+  onConfirmPayor,
 }: {
   c: SecClaim;
   expanded: boolean;
@@ -724,6 +847,7 @@ function SecondaryRow({
   onGenerateStatement: () => void;
   onMarkPatientPaid: () => void;
   onMarkPosted: () => void;
+  onConfirmPayor: (dest: "Insurance" | "Patient") => void;
 }) {
   const b = bucketOf(c);
 
@@ -778,6 +902,9 @@ function SecondaryRow({
 
       {expanded && (
         <div className="border-t bg-muted/20 px-4 py-4">
+          {b === "confirm" && (
+            <ConfirmPayorBody c={c} onConfirm={onConfirmPayor} />
+          )}
           {b === "insurance" && (
             <SubmitSecondaryBody c={c} onUpdate={onUpdate} onSubmit={onSubmitSecondary} />
           )}
@@ -1211,6 +1338,113 @@ function uniqueProducts(lines: SecLine[]): string[] {
 // SUBMIT TO SECONDARY body
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Confirm Payor body — first stop for any freshly-spawned non-Forwarded
+// secondary. Operator reviews the primary ERA snapshot + patient's
+// insurance info and decides whether to send the claim to the
+// secondary insurance (Insurance bucket) or bill the patient (Patient
+// bucket). Suggested destination is shown but the operator must
+// explicitly click to commit.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ConfirmPayorBody({
+  c,
+  onConfirm,
+}: {
+  c: SecClaim;
+  onConfirm: (dest: "Insurance" | "Patient") => void;
+}) {
+  // Suggested destination — backend already classified at spawn. We use
+  // c.secondaryPayer (the Monday status label set during spawn) to hint
+  // the operator at the rules-based pick. They can override either way.
+  const suggested: "Insurance" | "Patient" =
+    c.secondaryPayer && c.secondaryPayer !== "Patient" ? "Insurance" : "Patient";
+
+  const hasSecondaryId =
+    !!c.secondaryMemberId && c.secondaryMemberId !== "—";
+
+  return (
+    <div className="space-y-4">
+      {/* Primary ERA snapshot — what the primary actually paid + what
+          they passed down as PR. This is the operator's source for
+          deciding whether a real secondary insurance can pay. */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <MoneyCard label="Primary Paid" value={$(c.primaryPaid)} tone="success" sub={c.primaryPayDate ? `Paid ${fmt(c.primaryPayDate)}` : undefined} />
+        <MoneyCard label="Patient Resp" value={$(c.remaining)} tone="primary" sub="Carried over from primary" />
+        <Stat label="Primary Payor" value={c.primaryPayor || "—"} />
+        <Stat label="DOS" value={c.dos ? fmt(c.dos) : "—"} />
+      </div>
+
+      {/* Insurance ID block — the call: does this patient have a real
+          secondary insurance on file? If yes -> Insurance. If no (or
+          if the on-file payer is "Patient" / "No Patient Responsibility")
+          -> Patient. */}
+      <div className="rounded-md border bg-background p-3">
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Insurance IDs on file
+        </div>
+        <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+          <div>
+            <div className="text-xs text-muted-foreground">Primary Member ID</div>
+            <div className="font-mono text-sm">{c.primaryMemberId || "—"}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground">
+              Secondary Member ID
+              {!hasSecondaryId && (
+                <span className="ml-2 inline-flex h-4 items-center rounded bg-muted px-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  none
+                </span>
+              )}
+            </div>
+            <div className="font-mono text-sm">
+              {hasSecondaryId ? c.secondaryMemberId : "Not on file"}
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 border-t pt-2 text-xs text-muted-foreground">
+          Suggested:{" "}
+          <span className="font-medium text-foreground">{suggested}</span>
+          {suggested === "Insurance"
+            ? ` (Secondary Payer on file: ${c.secondaryPayer ?? "—"})`
+            : " (no secondary insurance — patient owes the balance)"}
+        </div>
+      </div>
+
+      {/* Two big buttons — operator picks one. Suggested gets primary
+          emphasis; the other stays available as an outline button. */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <Button
+          size="lg"
+          className={cn(
+            suggested === "Insurance"
+              ? "bg-emerald-700 text-white hover:bg-emerald-800"
+              : "",
+          )}
+          variant={suggested === "Insurance" ? "default" : "outline"}
+          onClick={() => onConfirm("Insurance")}
+        >
+          <Send className="mr-2 h-4 w-4" />
+          Submit to Insurance
+        </Button>
+        <Button
+          size="lg"
+          className={cn(
+            suggested === "Patient"
+              ? "bg-emerald-700 text-white hover:bg-emerald-800"
+              : "",
+          )}
+          variant={suggested === "Patient" ? "default" : "outline"}
+          onClick={() => onConfirm("Patient")}
+        >
+          <UserRound className="mr-2 h-4 w-4" />
+          Bill the Patient
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function SubmitSecondaryBody({
   c, onUpdate, onSubmit,
 }: {
@@ -1584,23 +1818,38 @@ function SendToPatientBody({
         </div>
       </div>
 
-      {/* Actions */}
+      {/* Two-stage action — driven by the row's raw Monday Secondary
+          Status. Submit -> still owe the patient an invoice (Send Invoice
+          button). Anything else (Outstanding / Sent to Patient) -> we
+          already billed, now waiting on payment (Mark Paid button). */}
       <div className="flex items-center justify-end gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onMarkPaid}
-          className="h-8 hover:bg-emerald-600 hover:text-white hover:border-emerald-600"
-        >
-          <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
-        </Button>
-        <Button
-          size="sm"
-          onClick={onGenerate}
-          className="h-8 bg-blue-600 text-white hover:bg-blue-700"
-        >
-          <FileText className="mr-1 h-3.5 w-3.5" /> Generate Statement
-        </Button>
+        {(c.rawSecondaryStatus ?? "Submit") === "Submit" ? (
+          <>
+            <span className="text-[11px] text-muted-foreground">
+              Stage 1 — generate + send the patient invoice.
+            </span>
+            <Button
+              size="sm"
+              onClick={onGenerate}
+              className="h-8 bg-blue-600 text-white hover:bg-blue-700"
+            >
+              <FileText className="mr-1 h-3.5 w-3.5" /> Send Invoice
+            </Button>
+          </>
+        ) : (
+          <>
+            <span className="text-[11px] text-muted-foreground">
+              Stage 2 — patient paid? mark it.
+            </span>
+            <Button
+              size="sm"
+              onClick={onMarkPaid}
+              className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
+            >
+              <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );

@@ -49,7 +49,10 @@ const COL = {
   PRIMARY_PAID_DATE: "date_mm3a9bdm",
   FORWARDED_FROM_PRIMARY_DATE: "date_mm3a8h3a",
   PATIENT_BILLED_DATE: "date_mm3avzpm",
-  // Secondary ERA outputs (written by stedi-monday-integration writeback)
+  // Secondary ERA outputs (written by stedi-monday-integration writeback).
+  // SECONDARY_PAID_DATE = date_mm11zg2f (the "(D)" column) is what the
+  // backend's ERA_PARENT_COLUMN_MAP populates. date_mm3apmee is the
+  // operator-entered alternate; we don't read that for cash flow.
   SECONDARY_PAID_AMOUNT: "numeric_mm115q76", // "Secondary Paid (A)"
   SECONDARY_PAID_DATE: "date_mm11zg2f",       // "Secondary Paid Date (D)"
   SECONDARY_ICN: "text_mm2nfytt",             // "Payer Claim Number"
@@ -66,6 +69,9 @@ const COL = {
   // Workflow
   SUBMISSION_TYPE: "color_mm3awg8g",
   SECONDARY_STATUS: "color_mm3a5yak",
+  // Payor Confirmed — Yes once the operator has reviewed in the Confirm
+  // Payor tab. Forwarded crossovers auto-confirm at spawn.
+  PAYOR_CONFIRMED: "color_mm3bhy6m",
   DAYS_OUTSTANDING: "color_mm29awe7",
   NOTES: "long_text_mkzrx7ke",
   NEXT_ACTION_DATE: "date_mkxpynj",
@@ -225,9 +231,17 @@ function deriveStatus(
   secondaryStatus: string,
   secondaryPaidAmount: number,
   rawEraDate: string,
+  payorConfirmed: boolean,
 ): SecondaryStatus {
   const hasEra = secondaryPaidAmount > 0 || !!rawEraDate;
   if (hasEra) return "Secondary ERA Received";
+
+  // Pre-confirmation: operator hasn't reviewed in the Confirm Payor tab.
+  // Forwarded auto-confirms at spawn, so this branch only catches
+  // Insurance/Patient items awaiting human delegation.
+  if (!payorConfirmed && submissionType !== "Forwarded") {
+    return "Awaiting Payor Confirmation";
+  }
 
   switch (secondaryStatus) {
     case "Forwarded":
@@ -331,11 +345,13 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
   const secondaryStatus = txt(item, COL.SECONDARY_STATUS);
   const secondaryPaidAmount = num(item, COL.SECONDARY_PAID_AMOUNT);
   const rawEraDate = txt(item, COL.RAW_ERA_DATE);
+  const payorConfirmed = txt(item, COL.PAYOR_CONFIRMED) === "Yes";
   const status = deriveStatus(
     submissionType,
     secondaryStatus,
     secondaryPaidAmount,
     rawEraDate,
+    payorConfirmed,
   );
   const hasSecondaryEra = status === "Secondary ERA Received" ||
     status === "Secondary Paid";
@@ -393,6 +409,8 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
       item.id,
     status,
     secondaryPayerRawName: secondaryPayerRawName || undefined,
+    payorConfirmed,
+    rawSecondaryStatus: secondaryStatus || undefined,
     patientName: item.name,
     primaryPayor: txt(item, COL.PRIMARY_PAYOR),
     secondaryPayer: secondaryPayerLabel || null,

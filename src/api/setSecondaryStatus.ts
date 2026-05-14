@@ -31,6 +31,12 @@ const MUTATION = `
   }
 `;
 
+const MOVE_GROUP_MUT = `
+  mutation MoveGroup($itemId: ID!, $groupId: String!) {
+    move_item_to_group(item_id: $itemId, group_id: $groupId) { id }
+  }
+`;
+
 export async function setSecondaryStatus(
   mondayItemId: string,
   label: string,
@@ -40,4 +46,37 @@ export async function setSecondaryStatus(
     boardId: String(SECONDARY_BOARD_ID),
     value: JSON.stringify({ label }),
   });
+}
+
+/**
+ * Set Secondary Status AND move the item to a group in one operation.
+ * If the group move fails (network blip, group renamed, whatever), the
+ * status write already landed so the row is correct in the data layer —
+ * the group move is just visual organization on Monday.
+ *
+ * Group IDs for the workflow transitions:
+ *   group_mm332zns  Insurance Outstanding
+ *   group_mkwta260  Patient Responsibility Outstanding
+ *   group_mkxsng4r  Paid And Closed
+ *   group_mm3ba7x1  Send Invoice
+ *   group_mkpehq9q  Submit Claim
+ */
+export async function setSecondaryStatusAndMove(
+  mondayItemId: string,
+  label: string,
+  groupId: string,
+): Promise<void> {
+  await setSecondaryStatus(mondayItemId, label);
+  try {
+    await mondayQuery(MOVE_GROUP_MUT, {
+      itemId: mondayItemId,
+      groupId,
+    });
+  } catch (e) {
+    console.warn(
+      "[setSecondaryStatusAndMove] group move failed for "
+        + `${mondayItemId} -> ${groupId}:`,
+      e,
+    );
+  }
 }
