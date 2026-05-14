@@ -540,7 +540,7 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const counts = useMemo(() => {
-    const out: Record<AnyBucket, number> = { insurance: 0, patient: 0, outstanding: 0, era: 0 };
+    const out: Record<AnyBucket, number> = { confirm: 0, insurance: 0, patient: 0, outstanding: 0, era: 0 };
     for (const c of claims) {
       const b = bucketOf(c);
       if (b) out[b] += 1;
