@@ -1,20 +1,22 @@
 // Client for POST /claims/secondary/mark-paid on the Stedi-Monday backend.
 //
 // Called when the operator clicks Submit -> Paid on the Secondary Board's
-// ERA Review row. Backend:
-//   1. Flips Secondary Status = Paid on the Secondary Claims Board.
-//   2. Resolves the source primary via the Primary Claim ID column.
-//   3. Reads Subscription Item ID off the primary.
-//   4. Writes Secondary Claim Paid? = Fully Paid on the Subscription Board.
+// ERA Review row. The endpoint now responds in ~1-2s — it does only the
+// user-visible Secondary Status flip synchronously and fires the
+// cross-board propagation (primary lookup + Subscription Board write)
+// as a Railway background task.
 //
 // Auth: X-Admin-Key header, same as Mark Paid + Run Status Check.
 
 export interface MarkSecondaryPaidResult {
   secondary_updated: boolean;
-  primary_item_id: string | null;
-  subscription_item_id: string | null;
-  subscription_updated: boolean;
-  reason: string | null;
+  /** Primary's Claim ID (Stedi correlation) — surfaced so the toast
+   *  can show which primary the secondary is linked to. */
+  primary_claim_id: string | null;
+  /** Always "queued" — the cross-board sync runs as a Railway
+   *  BackgroundTask. Failures only surface in Railway logs as
+   *  [SECONDARY-BG] entries, not back to the operator. */
+  subscription_sync: "queued";
 }
 
 export class MarkSecondaryPaidError extends Error {

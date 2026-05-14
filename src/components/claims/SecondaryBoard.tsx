@@ -1021,13 +1021,14 @@ function SecondaryClaimsTable({
           });
           return;
         }
-        const result = await apiMarkSecondaryPaid(c.mondayItemId);
-        const desc = result.subscription_updated
-          ? "Secondary set to Paid; Subscription Board synced."
-          : result.reason ?? "Secondary set to Paid (Subscription not synced).";
+        await apiMarkSecondaryPaid(c.mondayItemId);
+        // Endpoint returns ~1-2s after the Secondary Status flip; the
+        // cross-board Subscription sync runs as a Railway background
+        // task. Operator gets immediate feedback; if the background
+        // sync fails it logs as [SECONDARY-BG] in Railway, not in the UI.
         toast({
           title: `${c.patientName}: Paid`,
-          description: desc,
+          description: "Secondary set to Paid. Subscription Board syncing in background.",
         });
         onMarkPosted(c);
       } else {
