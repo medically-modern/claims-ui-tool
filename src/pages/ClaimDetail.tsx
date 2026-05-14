@@ -56,7 +56,7 @@ import {
   summarizeSecondary,
 } from "@/api/markPaid";
 import { setPrimaryStatus } from "@/api/setPrimaryStatus";
-import { setActionContext } from "@/api/setActionContext";
+import { setActionContext as apiSetActionContext } from "@/api/setActionContext";
 import { setDenialAction as apiSetDenialAction } from "@/api/setDenialAction";
 import { setClaimResentDate } from "@/api/setClaimResentDate";
 
@@ -119,6 +119,40 @@ const ClaimDetail = () => {
   const [claim, setClaim] = useState<Claim>(initial);
   const [denialAction, setDenialAction] = useState<DenialAction>(claim.denialAction);
   const [actionContext, setActionContext] = useState(claim.actionContext ?? "");
+  // Track the persisted version separately so we know when the textarea
+  // is dirty vs. just sitting at the value Monday already has.
+  const [actionContextSavedState, setActionContextSavedState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+
+  /**
+   * Persist the Action Context textarea to Monday. Called from the
+   * Textarea's onBlur so the operator can drift away from the textarea
+   * (mouse-over the resolve buttons, switch tabs) and the notes survive
+   * without needing them to click a resolution.
+   *
+   * No-op when the trimmed value matches what's already on the claim —
+   * we don't burn API calls just because focus left the textarea.
+   */
+  async function autosaveActionContext() {
+    const trimmed = actionContext.trim();
+    const current = (claim.actionContext ?? "").trim();
+    if (trimmed === current) return;
+    setActionContextSavedState("saving");
+    try {
+      await apiSetActionContext(claim.mondayItemId, trimmed);
+      setClaim({ ...claim, actionContext: trimmed });
+      setActionContextSavedState("saved");
+      // Hide the indicator after a beat so the field doesn't stay
+      // crowded with stale status text.
+      setTimeout(() => setActionContextSavedState("idle"), 2500);
+    } catch (e) {
+      setActionContextSavedState("error");
+      toast.error("Couldn't save Action Context", {
+        description: (e as Error).message,
+      });
+    }
+  }
   const [nextActionDate, setNextActionDate] = useState<Date | undefined>(
     claim.nextActionDate ? new Date(claim.nextActionDate) : undefined,
   );
@@ -266,7 +300,7 @@ const ClaimDetail = () => {
       const ctxTrimmed = actionContext.trim();
       if (ctxTrimmed !== (claim.actionContext ?? "").trim()) {
         try {
-          await setActionContext(claim.mondayItemId, ctxTrimmed);
+          await apiSetActionContext(claim.mondayItemId, ctxTrimmed);
         } catch (e) {
           console.warn("[denial-resolve] action context write failed:", e);
           toast.warning("Status updated, but action context didn't save", {
@@ -645,13 +679,36 @@ const ClaimDetail = () => {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Action Context</label>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <label className="text-sm font-medium">Action Context</label>
+                    {actionContextSavedState === "saving" && (
+                      <span className="text-[11px] text-muted-foreground">
+                        Saving…
+                      </span>
+                    )}
+                    {actionContextSavedState === "saved" && (
+                      <span className="text-[11px] text-success-soft-foreground">
+                        ✓ Saved
+                      </span>
+                    )}
+                    {actionContextSavedState === "error" && (
+                      <span className="text-[11px] text-danger-soft-foreground">
+                        Couldn't save
+                      </span>
+                    )}
+                  </div>
                   <Textarea
                     placeholder="e.g. Reduce units to 30 and resubmit. Upload clinical notes to payer portal."
                     value={actionContext}
                     onChange={(e) => setActionContext(e.target.value)}
+                    onBlur={() => void autosaveActionContext()}
                     rows={3}
                   />
+                  <p className="text-[11px] text-muted-foreground">
+                    Auto-saves to Monday when you click out of the box.
+                    No need to resolve the denial yet — your notes are
+                    safe.
+                  </p>
                 </div>
                 <div>
                   <CreateFollowUpButton
