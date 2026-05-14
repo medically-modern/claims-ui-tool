@@ -993,6 +993,13 @@ function EraReviewTableRow({
   const claimDed = c.claimLevelDeductible ?? 0;
   const pr = totalCoins + itemDed + claimDed || c.remaining;
 
+  // Has the secondary ERA arrived? Only ERA-received rows have a real
+  // Paid amount; Outstanding/Forwarded rows are still waiting. For
+  // pending rows we render "—" in Paid/Difference so it doesn't look
+  // like the secondary paid $0.
+  const eraReceived =
+    c.status === "Secondary ERA Received" || c.status === "Secondary Paid";
+
   // Paid column = what the secondary actually paid.
   const secPaid =
     c.secondaryPaid ?? c.lines.reduce((s, l) => s + (l.secondaryPaid ?? 0), 0);
@@ -1001,7 +1008,9 @@ function EraReviewTableRow({
   // underpaid, leftover rolls to patient. Zero = balanced. Negative = paid
   // more than expected (rare; happens when allowed > PR).
   const difference = pr - secPaid;
-  const balanced = Math.abs(difference) <= 0.5;
+  // Only color the row by Difference once we actually have an ERA to
+  // judge against. Pre-ERA rows render neutral.
+  const balanced = eraReceived && Math.abs(difference) <= 0.5;
 
   // Forwarded crossover gets a pill — anyone who ended up in ERA Review from
   // the Forwarded path. Insurance-type ERAs (we sent a new 837) don't show
@@ -1018,13 +1027,15 @@ function EraReviewTableRow({
       : c.secondaryPayer) ||
     "—";
 
-  // Priority coloring: balanced = green, off by > $0.50 = yellow, big
-  // mismatch (e.g. secondary paid nothing) = red.
-  const cls = balanced
-    ? "row-priority-green"
-    : Math.abs(difference) > 50
-      ? "row-priority-red"
-      : "row-priority-yellow";
+  // Priority coloring. Pre-ERA rows stay neutral (we haven't heard back
+  // yet — no judgment to render). ERA-received rows color by Difference.
+  const cls = !eraReceived
+    ? "row-priority-gray"
+    : balanced
+      ? "row-priority-green"
+      : Math.abs(difference) > 50
+        ? "row-priority-red"
+        : "row-priority-yellow";
 
   const products = uniqueProducts(c.lines);
 
@@ -1079,7 +1090,14 @@ function EraReviewTableRow({
             </Tooltip>
           </TooltipProvider>
         </TableCell>
-        <TableCell className="text-right tabular-nums">{$(secPaid)}</TableCell>
+        <TableCell
+          className={cn(
+            "text-right tabular-nums",
+            !eraReceived && "text-muted-foreground",
+          )}
+        >
+          {eraReceived ? $(secPaid) : "—"}
+        </TableCell>
         <TableCell className="text-right tabular-nums">
           <div className="flex flex-col items-end gap-1">
             <span>{$(pr)}</span>
@@ -1100,14 +1118,16 @@ function EraReviewTableRow({
         <TableCell
           className={cn(
             "text-right tabular-nums",
-            balanced
-              ? "text-success-soft-foreground"
-              : difference > 0
-                ? "text-warning-soft-foreground"
-                : "text-info-soft-foreground",
+            !eraReceived
+              ? "text-muted-foreground"
+              : balanced
+                ? "text-success-soft-foreground"
+                : difference > 0
+                  ? "text-warning-soft-foreground"
+                  : "text-info-soft-foreground",
           )}
         >
-          {$(difference)}
+          {eraReceived ? $(difference) : "—"}
         </TableCell>
         {showActions && (
           <>
@@ -1729,6 +1749,11 @@ function ForwardedBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
 function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => void }) {
   void onMarkPosted; // Mark Paid lives on the table row now — keep the prop
                      // so the API stays compatible with the rest of the file.
+  // Whether the secondary ERA has actually arrived. Outstanding rows (still
+  // waiting on the crossover) shouldn't be styled as if the payer paid $0 —
+  // line-level Status should render "Pending" in that case.
+  const eraReceived =
+    c.status === "Secondary ERA Received" || c.status === "Secondary Paid";
   const itemDed = c.lines.reduce((s, l) => s + (l.deductible ?? 0), 0);
   const totalCoins = c.lines.reduce((s, l) => s + (l.coinsuranceCopay ?? 0), 0);
   const claimDed = c.claimLevelDeductible ?? 0;
@@ -1796,39 +1821,48 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
                     (l.deductible ?? 0) + (l.coinsuranceCopay ?? 0);
                   const linePaid = l.secondaryPaid ?? 0;
                   const lineDiff = linePR - linePaid;
-                  const lineState: "Paid" | "Partial" | "Denied" =
-                    linePR <= 0.5
-                      ? "Paid"
-                      : linePaid <= 0.5
-                        ? "Denied"
-                        : Math.abs(lineDiff) <= 0.5
-                          ? "Paid"
-                          : "Partial";
+                  // No ERA yet → "Pending" (don't claim it was denied just
+                  // because we haven't heard back). Once the ERA arrives the
+                  // line classifies as Paid / Partial / Denied.
+                  const lineState: "Pending" | "Paid" | "Partial" | "Denied" =
+                    !eraReceived
+                      ? "Pending"
+                      : linePR <= 0.5
+                        ? "Paid"
+                        : linePaid <= 0.5
+                          ? "Denied"
+                          : Math.abs(lineDiff) <= 0.5
+                            ? "Paid"
+                            : "Partial";
                   return (
                     <TableRow key={l.id} className="hover:bg-muted/30">
                       <TableCell className="font-medium">{l.product}</TableCell>
                       <TableCell className="text-right tabular-nums">
                         {$(linePR)}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {$(linePaid)}
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {eraReceived ? $(linePaid) : "—"}
                       </TableCell>
                       <TableCell
                         className={cn(
                           "text-right tabular-nums",
-                          Math.abs(lineDiff) <= 0.5
+                          !eraReceived
                             ? "text-muted-foreground"
-                            : lineDiff > 0
-                              ? "text-warning-soft-foreground"
-                              : "text-info-soft-foreground",
+                            : Math.abs(lineDiff) <= 0.5
+                              ? "text-muted-foreground"
+                              : lineDiff > 0
+                                ? "text-warning-soft-foreground"
+                                : "text-info-soft-foreground",
                         )}
                       >
-                        {$(lineDiff)}
+                        {eraReceived ? $(lineDiff) : "—"}
                       </TableCell>
                       <TableCell>
                         <span
                           className={cn(
                             "inline-flex h-7 w-full items-center justify-center rounded-md px-2 text-xs font-medium",
+                            lineState === "Pending" &&
+                              "bg-muted text-muted-foreground",
                             lineState === "Paid" &&
                               "bg-success-soft text-success-soft-foreground",
                             lineState === "Partial" &&
