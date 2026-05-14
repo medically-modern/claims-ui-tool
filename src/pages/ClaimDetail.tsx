@@ -69,9 +69,13 @@ const DENIAL_ANALYSIS_OPTIONS: NonNullable<DenialAnalysis>[] = [
   "Duplicate Claim", "Other / Needs Review",
 ];
 
+// Mirrors the labels on Monday's Denial Action column (color_mm2998p):
+// New claim, Action Complete, Corrected claim, Appeal, Investigate,
+// Submit auth, Upload docs, Contact payer, Bad Debt. Keep in lockstep
+// with Monday — any drift here breaks the autosave write side.
 const DENIAL_ACTION_OPTIONS: NonNullable<DenialAction>[] = [
   "New claim", "Corrected claim", "Appeal", "Investigate", "Submit auth",
-  "Upload docs", "Contact payer", "Action Complete", "No Action / Write Off",
+  "Upload docs", "Contact payer", "Action Complete", "Bad Debt",
 ];
 
 const ClaimDetail = () => {
@@ -242,14 +246,22 @@ const ClaimDetail = () => {
 
   /**
    * Auto-persist the Denial Action to Monday whenever the operator
-   * changes the Select. We don't require them to commit a full
-   * resolution to record the action; a half-complete denial sits in
-   * the Denials bucket with the action recorded so they can come back
-   * later, do the work, and click the resolution button.
+   * changes the Select — except for "Bad Debt", which is held in local
+   * state only until the operator commits via the Bad Debt outcome
+   * card. Writing "Bad Debt" to Monday fires a board automation that
+   * moves the item to the write-off group, so we never want it to
+   * happen by accident on a misclick. Every other action persists
+   * immediately so half-complete denials sit in the Denials bucket
+   * with the chosen action recorded.
    */
   async function handleDenialActionChange(action: DenialAction) {
     setDenialAction(action);
     if (!action) return;
+    if (action === "Bad Debt") {
+      // Defer the Monday write until the operator clicks the Bad Debt
+      // outcome card — see resolveDenial("Bad Debt").
+      return;
+    }
     try {
       await apiSetDenialAction(claim.mondayItemId, action);
       setClaim({ ...claim, denialAction: action });
@@ -274,6 +286,19 @@ const ClaimDetail = () => {
     }
     setDenialResolveBusy(nextStatus);
     try {
+      // 0. Bad Debt path: commit the Denial Action label to Monday now
+      //    — we held it back in handleDenialActionChange to avoid
+      //    accidentally firing the write-off automation on a misclick.
+      if (nextStatus === "Bad Debt" && denialAction === "Bad Debt") {
+        try {
+          await apiSetDenialAction(claim.mondayItemId, "Bad Debt");
+        } catch (e) {
+          toast.error("Couldn't save Denial Action = Bad Debt", {
+            description: (e as Error).message,
+          });
+          return;
+        }
+      }
       // 1. Primary Status — the load-bearing write.
       await setPrimaryStatus(claim.mondayItemId, nextStatus);
 
@@ -710,15 +735,6 @@ const ClaimDetail = () => {
                     safe.
                   </p>
                 </div>
-                <div>
-                  <CreateFollowUpButton
-                    claim={claim}
-                    denialAction={denialAction}
-                    disabled={
-                      denialAction !== "New claim" && denialAction !== "Corrected claim"
-                    }
-                  />
-                </div>
               </div>
             </CardContent>
           </Card>
@@ -727,7 +743,11 @@ const ClaimDetail = () => {
         {/* Final decision panel */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Final Decision</CardTitle>
+            <CardTitle className="text-base">
+              {claim.primaryStatus === "Denied (Or Partly)"
+                ? "Denial Action Outcome"
+                : "Final Decision"}
+            </CardTitle>
             <p className="text-sm text-muted-foreground">
               {claim.primaryStatus === "Denied (Or Partly)"
                 ? "Resolve this denial. Pick the outcome of the work you just did."
