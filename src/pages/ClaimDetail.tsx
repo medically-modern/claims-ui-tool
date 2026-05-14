@@ -603,6 +603,49 @@ const ClaimDetail = () => {
           />
         </section>
 
+        {/* Claim-level meta strip — sits directly above the Service Lines
+            table so the operator can see who the claim was sent to when
+            they're reading a denial (especially useful for Wrong Payer
+            denials where the line-level codes alone don't tell the story). */}
+        <Card>
+          <CardContent className="p-4">
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Claim Sent Date
+                </div>
+                <div className="mt-1 text-sm font-medium">
+                  {claim.claimSentDate ? fmtDate(claim.claimSentDate) : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Date of Service
+                </div>
+                <div className="mt-1 text-sm font-medium">
+                  {claim.dos ? fmtDate(claim.dos) : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Primary Payer
+                </div>
+                <div className="mt-1 text-sm font-medium">
+                  {claim.primaryPayor || "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Payer ID
+                </div>
+                <div className="mt-1 font-mono text-sm">
+                  {claim.payorId || "—"}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* ERA table */}
         <Card>
           <CardHeader className="pb-3">

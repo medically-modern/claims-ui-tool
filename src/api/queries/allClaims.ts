@@ -26,6 +26,10 @@ const COL = {
   DOB: "text_mkp3y5ax",
   MEMBER_ID: "text_mktat89m",
   PRIMARY_PAYOR: "color_mkxmhypt",
+  // PR Payor ID — numeric payer identifier we sent the 837 to (e.g.
+  // Medicare contractor 16013 NORIDIAN). Surfaced on the detail page
+  // so operators can interpret Wrong Payer denials.
+  PAYOR_ID: "text_mm1gcz3y",
   SECONDARY_PAYER: "color_mkxq1a2p",
   SECONDARY_ID: "text_mkxwcqfy",
   DOS: "date_mkwr7spz",
@@ -414,6 +418,7 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     dob: txt(item, COL.DOB),
     dos: isoOrNull(txt(item, COL.DOS)) ?? "",
     primaryPayor: txt(item, COL.PRIMARY_PAYOR),
+    payorId: txt(item, COL.PAYOR_ID) || null,
     insuranceType: "", // not currently tracked as a separate Monday column
     memberId: txt(item, COL.MEMBER_ID),
     claimSentDate: isoOrNull(txt(item, COL.CLAIM_SENT_DATE)),

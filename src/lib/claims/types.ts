@@ -113,6 +113,10 @@ export interface Claim {
   dob: string; // ISO
   dos: string; // ISO
   primaryPayor: string;
+  /** "PR Payor ID" column (text_mm1gcz3y) — the numeric payer
+   *  identifier we sent the 837 to. Helps operators interpret Wrong
+   *  Payer denials. */
+  payorId?: string | null;
   insuranceType: string;
   memberId: string;
   claimSentDate: string | null;
