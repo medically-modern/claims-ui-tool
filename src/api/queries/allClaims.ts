@@ -43,6 +43,11 @@ const COL = {
   PR_AMOUNT: "numeric_mkxmc2rh",
   NOTES: "long_text_mkzrx7ke",
   NEXT_ACTION_DATE: "date_mkxpynj",
+  // Action Context — operator-typed note about what we're doing on this
+  // denial (called payer, sent appeal docs, etc.). Read here so the
+  // detail page Textarea pre-fills with what's on Monday; written via
+  // src/api/setActionContext.ts when the operator saves a denial.
+  ACTION_CONTEXT: "text_mm29v2ph",
   S277_STATUS: "color_mm1z1pb2",
   S277_REJECTED_REASON: "text_mm1zsp2x",
   CLAIM_STATUS_CATEGORY: "color_mm2qbcpy",
@@ -396,6 +401,7 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     secondaryPayer: txt(item, COL.SECONDARY_PAYER) || null,
     denialAction: null,
     nextActionDate: isoOrNull(txt(item, COL.NEXT_ACTION_DATE)),
+    actionContext: txt(item, COL.ACTION_CONTEXT) || undefined,
     notes: txt(item, COL.NOTES) || undefined,
     activity: [],
     lines,

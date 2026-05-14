@@ -56,6 +56,7 @@ import {
   summarizeSecondary,
 } from "@/api/markPaid";
 import { setPrimaryStatus } from "@/api/setPrimaryStatus";
+import { setActionContext } from "@/api/setActionContext";
 
 type LineUserStatus = "Paid" | "Underpaid" | "Denied";
 
@@ -187,10 +188,29 @@ const ClaimDetail = () => {
     if (denialResolveBusy) return;
     setDenialResolveBusy(nextStatus);
     try {
+      // Write status first, then action context (so the operator's note
+      // lands on Monday even if status was already set).
       await setPrimaryStatus(claim.mondayItemId, nextStatus);
+      // Persist the textarea value to text_mm29v2ph if the operator has
+      // changed it from what's currently on Monday. Empty string is OK
+      // (clears the column).
+      const ctxTrimmed = actionContext.trim();
+      if (ctxTrimmed !== (claim.actionContext ?? "").trim()) {
+        try {
+          await setActionContext(claim.mondayItemId, ctxTrimmed);
+        } catch (e) {
+          // Don't fail the whole resolution if the context write fails —
+          // the status flip is the important part. Log + surface gently.
+          console.warn("[denial-resolve] action context write failed:", e);
+          toast.warning("Status updated, but action context didn't save", {
+            description: (e as Error).message,
+          });
+        }
+      }
       setClaim({
         ...claim,
         primaryStatus: nextStatus as Claim["primaryStatus"],
+        actionContext: ctxTrimmed,
         activity: appendActivity(
           nextStatus === "Submit Claim"
             ? "Denial resolved → resubmit as corrected claim."
