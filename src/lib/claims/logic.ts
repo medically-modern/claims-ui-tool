@@ -62,8 +62,30 @@ export function variancePretty(claim: Claim): { label: string; tone: "balanced" 
   return { label: `$${Math.abs(v).toFixed(2)} over expected`, tone: "over" };
 }
 
+// CARCs we know are "workable" denials — operator needs to take action
+// (resubmit corrected, file appeal, contact payer, etc.). Used to flag
+// whether a denial is in our standard playbook vs. something new.
+// Not exhaustive; new combos surface as "Needs Review" until added.
 const ACTIONABLE_CARC = new Set([
-  "16", "18", "27", "29", "50", "96", "97", "151", "167", "197", "198", "199", "204",
+  "11",  // Diagnosis inconsistent with procedure
+  "16",  // Claim/service lacks information
+  "18",  // Duplicate claim
+  "22",  // Coordination of benefits
+  "27",  // Expenses incurred after coverage terminated
+  "29",  // Time limit for filing has expired
+  "31",  // Patient cannot be identified
+  "39",  // Services denied at the time auth was needed
+  "50",  // Not medically necessary
+  "96",  // Non-covered charges
+  "97",  // Payment included in another service
+  "107", // Related qualifying procedure not paid
+  "109", // Claim/service not covered by this payer (wrong payer)
+  "151", // Payment adjusted (frequency)
+  "167", // Diagnosis is not covered
+  "197", // Precertification missing
+  "198", // Precertification was required
+  "199", // Revenue code / service date conflict
+  "204", // Service not covered by the plan
 ]);
 
 export function lineHasActionableDenial(carc: string[]): boolean {
@@ -72,13 +94,16 @@ export function lineHasActionableDenial(carc: string[]): boolean {
 
 export function lineStatus(line: Claim["lines"][number]): LineStatus {
   const actionable = lineHasActionableDenial(line.carc);
-  if (line.primaryPaid <= 0 && actionable) return "Denied";
+  // $0 paid + any CARC = Denied. The CARC may or may not be in our
+  // ACTIONABLE list (Wrong Payer / CO-109 is the canonical example
+  // we missed before — the payer says nope, we get $0, that's a denial
+  // even if we don't yet have a playbook entry).
+  if (line.primaryPaid <= 0 && line.carc.length > 0) return "Denied";
   if (line.primaryPaid > 0 && line.primaryPaid + line.patientResponsibility + line.coAmount < line.charge - 0.5 && actionable) {
     return "Partial";
   }
   if (line.primaryPaid > 0) return "Paid";
   if (line.patientResponsibility > 0) return "PR";
-  if (line.carc.length && !actionable) return "Paid";
   return "Needs Review";
 }
 
