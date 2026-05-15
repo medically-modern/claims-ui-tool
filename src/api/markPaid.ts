@@ -17,9 +17,14 @@
 
 export interface MarkPaidResult {
   primary_updated: boolean;
-  spawned: boolean;
-  secondary_item_id: string | null;
-  reason: string | null;
+  /** Sum of patient-responsibility carried over from the primary's ERA.
+   *  >0 means a secondary spawn is queued; 0 means nothing else to do. */
+  pr_amount: number;
+  primary_claim_id: string;
+  /** "queued" when PR > 0 (spawn runs as a Railway background task);
+   *  "skipped" when PR = 0 (no spawn needed, just the primary flip).
+   *  Always returns in ~1-2s regardless. */
+  spawn_status: "queued" | "skipped";
 }
 
 export class MarkPaidError extends Error {

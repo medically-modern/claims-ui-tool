@@ -423,15 +423,19 @@ const Claims = () => {
       const result = await apiMarkPrimaryPaid(target.mondayItemId);
       setMarkPaidTarget(null);
 
-      let description = result.reason ?? undefined;
-      if (result.spawned && result.secondary_item_id) {
-        description = `Secondary item created on Submit Claim group. ${result.reason ?? ""}`;
-      }
+      // Backend returns in ~1-2s after the Primary Status flip; the
+      // secondary spawn + Subscription sync run as a Railway background
+      // task. Toast surfaces what's queued; failures only land in
+      // Railway logs (intentional — we don't want a slow spawn blocking
+      // the UI confirmation).
+      const description =
+        result.spawn_status === "queued"
+          ? `Spawning Secondary item in background (PR $${result.pr_amount.toFixed(2)}).`
+          : "PR = 0 — no secondary needed.";
       toast({
         title: `Marked Paid: ${target.patientName}`,
         description,
       });
-      // Re-fetch the claims list so the row updates
       void refetchClaims();
     } catch (e) {
       const msg = e instanceof MarkPaidError ? e.message : (e as Error).message;

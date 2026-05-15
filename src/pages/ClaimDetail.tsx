@@ -405,30 +405,16 @@ const ClaimDetail = () => {
       const result = await apiMarkPrimaryPaid(claim.mondayItemId);
       setMarkPaidOpen(false);
 
-      if (result.spawned && result.secondary_item_id) {
-        toast.success("Marked Paid — secondary item created.", {
-          description: result.reason ?? undefined,
-          action: {
-            label: "Open in Monday",
-            onClick: () => {
-              window.open(secondaryItemUrl(result.secondary_item_id!), "_blank");
-            },
-          },
-        });
-      } else if (result.secondary_item_id) {
-        // idempotency hit — secondary already existed
+      // Backend now returns in ~1-2s after the Primary Status flip; the
+      // secondary spawn (if PR > 0) runs as a Railway background task,
+      // so we no longer have the secondary item id at response time.
+      if (result.spawn_status === "queued") {
         toast.success("Marked Paid.", {
-          description: result.reason ?? "Existing secondary item found; not duplicated.",
-          action: {
-            label: "Open existing secondary",
-            onClick: () => {
-              window.open(secondaryItemUrl(result.secondary_item_id!), "_blank");
-            },
-          },
+          description: `Spawning Secondary item in background (PR $${result.pr_amount.toFixed(2)}). It'll appear on the Secondary Board in ~5s.`,
         });
       } else {
         toast.success("Marked Paid.", {
-          description: result.reason ?? "No secondary item created — PR = 0.",
+          description: "PR = 0 — no secondary needed.",
         });
       }
     } catch (e) {
