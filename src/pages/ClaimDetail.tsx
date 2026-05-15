@@ -39,9 +39,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { carcPlaybookText, rarcPlaybookText, lookupDenialAnalysis } from "@/lib/claims/playbook";
-import { useThreadClaims } from "@/lib/claims/threadStore";
 import { Send } from "lucide-react";
-import type { ItemStatus, ThreadClaim, ThreadClaimType } from "@/lib/claims/threads";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
@@ -59,6 +57,12 @@ import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 import { setActionContext as apiSetActionContext } from "@/api/setActionContext";
 import { setDenialAction as apiSetDenialAction } from "@/api/setDenialAction";
 import { setClaimResentDate } from "@/api/setClaimResentDate";
+import {
+  spawnResubmission as apiSpawnResubmission,
+  isSpawnResubmissionConfigured,
+  SpawnResubmissionError,
+} from "@/api/spawnResubmission";
+import { LineResubmitDialog, type LineResubmitConfirm } from "@/components/claims/LineResubmitDialog";
 
 type LineUserStatus = "Paid" | "Underpaid" | "Denied";
 
@@ -275,6 +279,74 @@ const ClaimDetail = () => {
   const [denialResolveBusy, setDenialResolveBusy] = useState<
     "Submit Claim" | "Outstanding" | "Bad Debt" | null
   >(null);
+
+  // Line-selector dialog for the Submit Claim path. Opens when the
+  // operator picks New claim / Corrected claim and clicks Submit Claim —
+  // they pick which lines to carry onto the resubmission and optionally
+  // edit units / charge, then confirm. The backend spawns a fresh
+  // Monday item linked to this one via Parent Claim ID.
+  const [resubmitOpen, setResubmitOpen] = useState(false);
+  const [resubmitBusy, setResubmitBusy] = useState(false);
+
+  async function handleResubmitConfirm(req: LineResubmitConfirm) {
+    if (resubmitBusy) return;
+    if (!isSpawnResubmissionConfigured()) {
+      toast.error("Resubmission spawn not configured", {
+        description: "VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+      });
+      return;
+    }
+    setResubmitBusy(true);
+    try {
+      // Persist the denial action selection in case the operator flipped
+      // it inside the dialog. Best-effort — if it fails, the spawn still
+      // proceeds with the right Claim Type because the backend trusts
+      // the request body, not what's on Monday at the moment.
+      try {
+        if (req.denialAction !== denialAction) {
+          await apiSetDenialAction(claim.mondayItemId, req.denialAction);
+          setDenialAction(req.denialAction);
+        }
+      } catch (e) {
+        console.warn("[resubmit] denial action sync failed:", e);
+      }
+
+      const result = await apiSpawnResubmission({
+        parentItemId: claim.mondayItemId,
+        lineSubitemIds: req.selectedSubitemIds,
+        lineOverrides: req.overrides,
+        denialAction: req.denialAction,
+      });
+
+      // Optimistically reflect what we just wrote so the user sees the
+      // change without a full refetch.
+      setClaim({ ...claim, hasChildren: true });
+
+      toast.success(
+        result.idempotent_hit
+          ? "Existing resubmission reused"
+          : "Resubmission spawned",
+        {
+          description:
+            result.idempotent_hit
+              ? `Returned previously-spawned child (id ${result.child_item_id}). ${result.lines_carried} line(s) carried.`
+              : `New ${result.claim_type} claim created with ${result.lines_carried} line(s). Opening it now.`,
+        },
+      );
+      setResubmitOpen(false);
+
+      // Navigate to the new child item. Same route prefix as parent.
+      navigate(`/claims/${result.child_item_id}`);
+    } catch (e) {
+      const msg =
+        e instanceof SpawnResubmissionError
+          ? e.message
+          : (e as Error).message;
+      toast.error("Resubmission failed", { description: msg });
+    } finally {
+      setResubmitBusy(false);
+    }
+  }
 
   async function resolveDenial(
     nextStatus: "Submit Claim" | "Outstanding" | "Bad Debt",
@@ -552,6 +624,13 @@ const ClaimDetail = () => {
       />
 
       <main className="mx-auto max-w-[1440px] px-6 py-6 space-y-6">
+        {/* Thread breadcrumb — surfaces when this claim is part of a
+            resubmission lineage. Walks parent_claim_id up to the root and
+            children down so the operator can see what this claim
+            replaced and what (if anything) replaced it. Renders nothing
+            for claims without lineage so the header stays clean. */}
+        <ThreadBreadcrumb claim={claim} allClaims={mondayClaims ?? []} />
+
         {/* Status badges row */}
         <div className="flex flex-wrap items-center gap-2">
           <PrimaryStatusBadge status={claim.primaryStatus} />
@@ -818,17 +897,18 @@ const ClaimDetail = () => {
                       <DecisionCard
                         tone="info"
                         icon={<Send className="h-5 w-5" />}
-                        title="New claim created"
-                        desc="A corrected claim is going out. Move this to Submit Claim so it lands on the New Claims / Resubmit board for the next 837."
+                        title="Spawn resubmission"
+                        desc="Opens a line picker so you can carry only the denied / partial lines (and tweak units, like A4230 45 → 35). Creates a new claim linked back to this one — original stays put with a thread breadcrumb on the new claim."
                         cta={
-                          denialResolveBusy === "Submit Claim"
-                            ? "Moving…"
-                            : "Submit Claim"
+                          resubmitBusy
+                            ? "Spawning…"
+                            : "Pick lines & spawn"
                         }
-                        onClick={() => void resolveDenial("Submit Claim")}
+                        onClick={() => setResubmitOpen(true)}
                         disabled={
                           allowedRoute !== "Submit Claim" ||
-                          denialResolveBusy !== null
+                          denialResolveBusy !== null ||
+                          resubmitBusy
                         }
                       />
                       <DecisionCard
@@ -929,6 +1009,15 @@ const ClaimDetail = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <LineResubmitDialog
+        open={resubmitOpen}
+        onOpenChange={setResubmitOpen}
+        claim={claim}
+        initialDenialAction={denialAction}
+        busy={resubmitBusy}
+        onConfirm={handleResubmitConfirm}
+      />
     </div>
   );
 };
@@ -1146,70 +1235,102 @@ function DecisionCard({
   );
 }
 
-function CreateFollowUpButton({
+/**
+ * ThreadBreadcrumb — surfaces the resubmission lineage above ClaimDetail.
+ *
+ * Walks the parent chain up to the root via parentClaimItemId, then walks
+ * children down via the reverse index. Renders nothing when the claim has
+ * no parent AND no children (the common case — most claims are standalone
+ * originals).
+ *
+ * The component is intentionally a flat horizontal list, not a tree.
+ * Each resubmission is "one child per parent" by design (the operator
+ * runs the dialog twice if they want two siblings), so the lineage is a
+ * straight line: Original → Corrected #1 → Corrected #2 → ...
+ *
+ * Hooks into useAllClaims's full set (not the bucket-filtered MOCK_CLAIMS)
+ * so it can resolve children sitting in Submit Claim status that the
+ * Primary Board hides from active views.
+ */
+function ThreadBreadcrumb({
   claim,
-  denialAction,
-  disabled,
+  allClaims,
 }: {
   claim: Claim;
-  denialAction: DenialAction;
-  disabled?: boolean;
+  allClaims: Claim[];
 }) {
-  const { claims, addRoot, spawnFollowUp } = useThreadClaims();
+  // No lineage to draw → render nothing.
+  if (!claim.parentClaimItemId && !claim.hasChildren) return null;
 
-  const handleClick = () => {
-    let parentId = claim.id;
-    if (!claims.some((c) => c.id === parentId)) {
-      // Seed the thread store with this claim as a root, mapping ServiceLines -> ThreadItems.
-      const items = claim.lines.map((l, idx) => {
-        let status: ItemStatus = "Pending";
-        if (l.primaryPaid > 0 && l.primaryPaid >= l.estPay * 0.95) status = "Paid/Done";
-        else if (l.primaryPaid > 0) status = "Partial";
-        else if (l.carc.length > 0 || l.rarc.length > 0) status = "Denied";
-        return {
-          id: `${claim.id}_i${idx}`,
-          hcpc: l.hcpcs,
-          modifiers: [...l.modifiers],
-          qty: l.units,
-          charge: l.charge,
-          est_pay: l.estPay,
-          status,
-          paid_amount: l.primaryPaid,
-        };
-      });
-      const root: ThreadClaim = {
-        id: claim.id,
-        type: "Original",
-        status: "Partially Paid",
-        patient: { name: claim.patientName, dob: claim.dob, member_id: claim.memberId },
-        payer: claim.primaryPayor,
-        dos: claim.dos.slice(0, 10),
-        icn: claim.payerClaimNumber ?? claim.claimId,
-        items,
-        createdAt: Date.now() - 1000,
-      };
-      addRoot(root);
-    }
-    const type: ThreadClaimType = denialAction === "Corrected claim" ? "Corrected" : "Original";
-    const created = spawnFollowUp(parentId, type);
-    if (created) {
-      toast.success("Follow-up claim created", {
-        description: `${created.items.length} item(s) linked to original. See Resubmit queue.`,
-      });
-    } else {
-      toast.error("Could not create follow-up claim.");
-    }
-  };
+  // Build the chain by walking up parents, then back down to the latest
+  // descendant. Guards against cycles by tracking visited ids.
+  const chain: Claim[] = [];
+  const byId = new Map(allClaims.map((c) => [c.mondayItemId, c]));
+  const seen = new Set<string>();
+
+  // Walk up to root
+  let cursor: Claim | undefined = claim;
+  while (cursor && !seen.has(cursor.mondayItemId)) {
+    chain.unshift(cursor);
+    seen.add(cursor.mondayItemId);
+    cursor = cursor.parentClaimItemId
+      ? byId.get(cursor.parentClaimItemId)
+      : undefined;
+  }
+  // Walk down to leaves
+  let last = chain[chain.length - 1];
+  while (last) {
+    const child = allClaims.find(
+      (c) => c.parentClaimItemId === last.mondayItemId && !seen.has(c.mondayItemId),
+    );
+    if (!child) break;
+    chain.push(child);
+    seen.add(child.mondayItemId);
+    last = child;
+  }
+
+  if (chain.length <= 1) return null;
 
   return (
-    <Button
-      onClick={handleClick}
-      disabled={disabled}
-      className="bg-emerald-700 text-white hover:bg-emerald-800"
-    >
-      Create Follow-up Claim
-      <Send className="ml-2 h-4 w-4" />
-    </Button>
+    <div className="flex flex-wrap items-center gap-1 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+      <span className="mr-2 font-semibold uppercase tracking-wide text-muted-foreground">
+        Thread
+      </span>
+      {chain.map((c, i) => {
+        const isCurrent = c.mondayItemId === claim.mondayItemId;
+        const isOriginal = !c.parentClaimItemId;
+        const label = isOriginal
+          ? "Original"
+          : c.claimType === "Corrected"
+            ? `Corrected #${i}`
+            : `Resubmission #${i}`;
+        return (
+          <span key={c.mondayItemId} className="flex items-center gap-1">
+            {i > 0 && <span className="text-muted-foreground">→</span>}
+            {isCurrent ? (
+              <span className="rounded bg-foreground/10 px-2 py-0.5 font-medium">
+                {label} · {fmtDate(c.dos)}
+                {c.primaryStatus !== "Submit Claim" && (
+                  <span className="ml-1 text-muted-foreground">
+                    ({c.primaryStatus})
+                  </span>
+                )}
+              </span>
+            ) : (
+              <Link
+                to={`/claims/${c.mondayItemId}`}
+                className="rounded px-2 py-0.5 hover:bg-foreground/10 hover:underline"
+              >
+                {label} · {fmtDate(c.dos)}
+                <span className="ml-1 text-muted-foreground">
+                  ({c.primaryStatus})
+                </span>
+              </Link>
+            )}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 

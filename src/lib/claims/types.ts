@@ -150,6 +150,24 @@ export interface Claim {
   claimsHoldReason?: ClaimsHoldReason;
   sourceSubscriptionItemId?: string | null;
   sourceOrderItemId?: string | null;
+  /** Threading. When this claim was spawned from a denied parent via the
+   *  Submit Claim flow, parentClaimItemId is the Monday item id of the
+   *  parent (text_mm3559h4). Null/undefined on original claims.
+   *
+   *  We treat a claim with any descendant (i.e. some other claim's
+   *  parentClaimItemId equals this claim's mondayItemId) as "replaced" —
+   *  it falls out of active buckets, but stays navigable via the thread
+   *  breadcrumb. See `hasChildren` derivation in the claims query. */
+  parentClaimItemId?: string | null;
+  /** "Claim Type" status (color_mm2nvk1p) — Original / Corrected / Void.
+   *  Original = first submission. Corrected = resubmission with payer-side
+   *  replacement intent (837 emits CLM05-3 = 7 + REF*F8 with parent's ICN).
+   *  New-claim resubmissions stay Original because they go out as fresh
+   *  originals on the wire even though we still record the parent link. */
+  claimType?: "Original" | "Corrected" | "Void" | null;
+  /** True when any other claim in the current load has this item id as
+   *  its parent. Derived at the query layer — not read from Monday. */
+  hasChildren?: boolean;
   activity?: ActivityEntry[];
   lines: ServiceLine[];
 }

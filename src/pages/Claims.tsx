@@ -114,6 +114,8 @@ type ModeKey = "submit" | "review";
 type CategoryKey = "era" | "late" | "denied" | "outstanding" | "paid" | "all";
 
 function inEraReview(c: Claim) {
+  // Replaced parents drop out — the child carries any active review.
+  if (c.hasChildren) return false;
   return eraReceived(c) && c.primaryStatus === "Review";
 }
 
@@ -261,6 +263,10 @@ function inLateEra(c: Claim) {
   // the clock. Threshold is per-claim: Appeals get 60 days (payers
   // commonly take 30-45 to respond to a clean appeal); everything else
   // uses 21 days to match Cash Flow's High Risk bucket.
+  //
+  // Parents with children fall out — the child is the active claim, the
+  // parent is historical lineage only.
+  if (c.hasChildren) return false;
   const age = claimAge(c) ?? 0;
   const excluded = ["Paid", "Denied (Or Partly)", "Bad Debt", "Request Rejected"];
   return Boolean(c.claimSentDate) && !eraReceived(c)
@@ -268,10 +274,14 @@ function inLateEra(c: Claim) {
       && !excluded.includes(c.primaryStatus);
 }
 function inDenied(c: Claim) {
+  // Hide parents that have been replaced by a corrected/new claim — the
+  // child is now where the active denial work happens.
+  if (c.hasChildren) return false;
   return c.primaryStatus === "Denied (Or Partly)";
 }
 function inOutstanding(c: Claim) {
   // Open primary work that isn't already in ERA Review / Late ERAs / Denials
+  if (c.hasChildren) return false;
   if (c.primaryStatus === "Paid" || c.primaryStatus === "Bad Debt") return false;
   if (inEraReview(c) || inLateEra(c) || inDenied(c)) return false;
   return true;
@@ -353,10 +363,20 @@ const Claims = () => {
 
   // Real claims from Monday (the Primary Board's data source). Fall back to
   // mock data when no Monday token is configured so local dev still works.
+  //
+  // The hook returns ALL claims (including pre-submission statuses) so that
+  // thread breadcrumbs in ClaimDetail can resolve freshly-spawned children
+  // sitting in Submit Claim. Pre-submission rows are filtered out HERE for
+  // the Primary Board's bucket views.
   const { data: mondayClaims, isFetching: claimsLoading, refetch: refetchClaims } =
     useAllClaims();
+  const preSubmissionStatuses: Claim["primaryStatus"][] = [
+    "Submit Claim", "Future Claim", "Not Started Yet",
+  ];
   const MOCK_CLAIMS = hasMondayToken()
-    ? mondayClaims ?? []
+    ? (mondayClaims ?? []).filter(
+        (c) => !preSubmissionStatuses.includes(c.primaryStatus),
+      )
     : MOCK_CLAIMS_FALLBACK;
 
   // Secondary claims — feed into the Cash Flow tile so Soon/Expected

@@ -447,9 +447,20 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     nextActionDate: isoOrNull(txt(item, COL.NEXT_ACTION_DATE)),
     actionContext: txt(item, COL.ACTION_CONTEXT) || undefined,
     notes: txt(item, COL.NOTES) || undefined,
+    // Threading: parent pointer + claim-type flag. Both already exist as
+    // Monday columns (text_mm3559h4, color_mm2nvk1p) — we just surface them
+    // here. `hasChildren` is derived once below in fetchAllClaims after the
+    // whole set is loaded; leaving it undefined on this row is correct.
+    parentClaimItemId: txt(item, COL.PARENT_CLAIM_ID) || null,
+    claimType: mapClaimType(txt(item, COL.CLAIM_TYPE)),
     activity: [],
     lines,
   };
+}
+
+function mapClaimType(s: string): "Original" | "Corrected" | "Void" | null {
+  if (s === "Original" || s === "Corrected" || s === "Void") return s;
+  return null;
 }
 
 // ---------- fetcher ----------
@@ -478,6 +489,18 @@ export async function fetchAllClaims(opts?: {
     }
     cursor = page?.cursor ?? null;
   } while (cursor);
+
+  // Derive `hasChildren` per claim from parent pointers across the load.
+  // A parent claim that has any child resubmission falls out of active
+  // buckets (the child is the active claim). We compute this once here so
+  // every consumer downstream gets a consistent flag without re-scanning.
+  const parentIds = new Set<string>();
+  for (const c of all) {
+    if (c.parentClaimItemId) parentIds.add(c.parentClaimItemId);
+  }
+  for (const c of all) {
+    c.hasChildren = parentIds.has(c.mondayItemId);
+  }
 
   if (!excludePreSubmission) return all;
 

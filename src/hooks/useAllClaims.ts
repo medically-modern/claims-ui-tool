@@ -12,7 +12,12 @@ export const ALL_CLAIMS_QUERY_KEY = ["claims", "all"] as const;
 export function useAllClaims() {
   return useQuery<Claim[]>({
     queryKey: ALL_CLAIMS_QUERY_KEY,
-    queryFn: () => fetchAllClaims(),
+    // Include pre-submission rows so thread breadcrumbs can navigate to
+    // freshly-spawned children that are sitting in Submit Claim status.
+    // Bucket filters in Claims.tsx already exclude pre-submission statuses
+    // so this doesn't change what gets listed; it just makes lookups
+    // (ClaimDetail, getThread) able to find every related claim.
+    queryFn: () => fetchAllClaims({ excludePreSubmission: false }),
     // Skip the network call entirely when no Monday token is configured so
     // local dev without a .env doesn't blow up; pages that need a fallback
     // can detect `isFetching === false && data === undefined` and substitute
