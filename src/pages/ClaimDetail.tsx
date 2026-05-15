@@ -441,31 +441,41 @@ const ClaimDetail = () => {
     }
   }
 
-  function saveDenial() {
-    if (!denialAction) {
-      toast.error("Choose a claim-level denial action."); return;
+  /**
+   * Move the claim into the Denials bucket — Primary Status flips to
+   * Denied (Or Partly) on Monday. This is the entry point of the
+   * denial workflow, NOT the resolution. The operator picks Denial
+   * Action + writes Action Context + chooses the outcome (Submit
+   * Claim / Outstanding / Bad Debt) later, on the Denial Action
+   * Outcome card that appears once the claim is in Denied state.
+   *
+   * Previously this required denialAction + actionContext +
+   * nextActionDate up front, but that conflated the "send to denial
+   * bucket" action with "resolve the denial" — operators were getting
+   * blocked here when they hadn't yet decided what to do.
+   */
+  async function saveDenial() {
+    try {
+      await setPrimaryStatus(claim.mondayItemId, "Denied (Or Partly)");
+      setClaim({
+        ...claim,
+        primaryStatus: "Denied (Or Partly)",
+        subscriptionClearance: "Hold",
+        claimsHoldReason: "Denial / appeal pending",
+        lines: claim.lines.map((l) => ({ ...l, denialAnalysis: lineAnalysis[l.id] })),
+        activity: appendActivity(
+          "Sent to Denials bucket. Pick a Denial Action below to work it.",
+        ),
+      });
+      toast.success("Sent to Denials", {
+        description:
+          "Claim is in the Denials bucket. Pick a Denial Action and choose an outcome to resolve it.",
+      });
+    } catch (e) {
+      toast.error("Couldn't update Monday", {
+        description: (e as Error).message,
+      });
     }
-    if (!actionContext.trim()) {
-      toast.error("Action context is required."); return;
-    }
-    if (!nextActionDate) {
-      toast.error("Next action date is required."); return;
-    }
-    setClaim({
-      ...claim, primaryStatus: "Denied (Or Partly)",
-      denialAction, actionContext,
-      nextActionDate: nextActionDate.toISOString(),
-      subscriptionClearance: "Hold",
-      claimsHoldReason: "Denial / appeal pending",
-      lines: claim.lines.map((l) => ({ ...l, denialAnalysis: lineAnalysis[l.id] })),
-      activity: appendActivity(`Saved denial action: ${denialAction}. ${actionContext}`),
-    });
-    writeback("Denial saved", {
-      Primary: "Denied (Or Partly)",
-      "Denial Action": denialAction,
-      "Action Context": actionContext,
-      "Next Action Date": format(nextActionDate, "yyyy-MM-dd"),
-    });
   }
 
   function markInvestigation() {
