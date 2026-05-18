@@ -21,7 +21,8 @@ import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { getClaim } from "@/lib/claims/mockData";
-import { useAllClaims } from "@/hooks/useAllClaims";
+import { useAllClaims, ALL_CLAIMS_QUERY_KEY } from "@/hooks/useAllClaims";
+import { useQueryClient } from "@tanstack/react-query";
 import { hasMondayToken } from "@/api/monday";
 import {
   carcMeaning, claimAge, eraReceived, fmtDate, fmtMoney, lineStatus,
@@ -88,6 +89,13 @@ const DENIAL_ACTION_OPTIONS: NonNullable<DenialAction>[] = [
 const ClaimDetail = () => {
   const { claimId } = useParams<{ claimId: string }>();
   const navigate = useNavigate();
+  // Shared React Query cache for the claims list. We invalidate this on
+  // any successful write so the Claims page picks up the new state on
+  // navigate-back instead of waiting for React Query's staleTime to
+  // expire (5 min). Without this, the operator marks paid in the detail
+  // view, navigates back to /claims, and the claim is still sitting in
+  // ERA Review for five minutes.
+  const queryClient = useQueryClient();
 
   // Look up the claim from real Monday data first; fall back to mock when
   // no token is configured (local dev). Match by Claim ID column or by the
@@ -593,6 +601,18 @@ const ClaimDetail = () => {
     try {
       const result = await apiMarkPrimaryPaid(claim.mondayItemId);
       setMarkPaidOpen(false);
+
+      // Invalidate the shared claims-list cache so when the operator
+      // navigates back to /claims the row drops out of ERA Review
+      // immediately (instead of waiting up to 5 min for staleTime).
+      // Schedule a few follow-up invalidations to catch the Monday
+      // status propagation that lags behind the backend response.
+      void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
+      [3000, 6000, 9000].forEach((delay) => {
+        window.setTimeout(() => {
+          void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
+        }, delay);
+      });
 
       // Backend now returns in ~1-2s after the Primary Status flip; the
       // secondary spawn (if PR > 0) runs as a Railway background task,
