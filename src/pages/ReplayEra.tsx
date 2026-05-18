@@ -31,7 +31,17 @@ export default function ReplayEra() {
   const [payload, setPayload] = useState("");
   const [uploadedFilename, setUploadedFilename] = useState<string | null>(null);
   const [transactionId, setTransactionId] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [commitBusy, setCommitBusy] = useState(false);
+  // Preview = parsed list of claims (dry-run). Operator picks which to
+  // replay from this list before committing.
+  const [preview, setPreview] = useState<ReplayEraResult | null>(null);
+  // PCNs the operator has selected from the preview. All checked by
+  // default once preview lands so the common case (replay everything)
+  // stays one click.
+  const [selectedPcns, setSelectedPcns] = useState<Set<string>>(new Set());
+  // result = the final committed run. Distinct from preview so we don't
+  // lose the patient list after committing.
   const [result, setResult] = useState<ReplayEraResult | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -61,19 +71,64 @@ export default function ReplayEra() {
     }
   }
 
+  // Fire the dry-run preview as soon as we have a payload. The backend
+  // parses + routes (matches PCNs to Monday items) but skips the writes.
+  // Result becomes a checkbox list the operator picks from.
+  async function runPreview(text: string) {
+    setParseError(null);
+    setPreview(null);
+    setResult(null);
+    setSelectedPcns(new Set());
+
+    const v = validatePayload(text);
+    if (!v) return;
+
+    if (!isReplayEraConfigured()) {
+      toast({
+        title: "Replay not configured",
+        description: "VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+      });
+      return;
+    }
+
+    setPreviewBusy(true);
+    try {
+      const res = await replayEra(v.data, {
+        transactionId: transactionId.trim() || undefined,
+        dryRun: true,
+      });
+      setPreview(res);
+      // Default every PCN to selected — common case is "replay everything",
+      // operator unticks the ones they don't want.
+      setSelectedPcns(new Set(res.results.map((r) => r.pcn).filter(Boolean)));
+      toast({
+        title: "Preview ready",
+        description:
+          `${res.rows_parsed} claim(s) found. Select which to replay below.`,
+      });
+    } catch (e) {
+      const msg =
+        e instanceof ReplayEraError ? e.message : (e as Error).message;
+      toast({ title: "Preview failed", description: msg });
+    } finally {
+      setPreviewBusy(false);
+    }
+  }
+
   async function handleFileSelected(file: File) {
     try {
       const text = await file.text();
       setPayload(text);
       setUploadedFilename(file.name);
-      setParseError(null);
-      setResult(null);
       toast({
         title: `Loaded ${file.name}`,
         description: `${(text.length / 1024).toFixed(1)} KB · ${
           looksLikeX12(text) ? "X12 .835 detected" : "treated as JSON"
         }`,
       });
+      // Auto-fire preview right after file load so the operator doesn't
+      // have to click anything extra to see the claim list.
+      await runPreview(text);
     } catch (e) {
       toast({
         title: "Couldn't read file",
@@ -82,8 +137,16 @@ export default function ReplayEra() {
     }
   }
 
-  async function handleSubmit() {
-    if (busy) return;
+  async function handleCommit() {
+    if (commitBusy) return;
+    if (!preview) return;
+    if (selectedPcns.size === 0) {
+      toast({
+        title: "Nothing selected",
+        description: "Tick at least one claim to replay.",
+      });
+      return;
+    }
     setParseError(null);
     setResult(null);
 
@@ -98,25 +161,42 @@ export default function ReplayEra() {
     const v = validatePayload(payload);
     if (!v) return;
 
-    setBusy(true);
+    setCommitBusy(true);
     try {
       const res = await replayEra(v.data, {
         transactionId: transactionId.trim() || undefined,
+        pcnFilter: Array.from(selectedPcns),
       });
       setResult(res);
       toast({
         title: "ERA replayed",
         description:
-          `Parsed ${res.rows_parsed} row(s) — ${res.rows_written} written, ` +
-          `${res.rows_skipped} skipped. Matched claims will appear in ERA Review.`,
+          `${res.rows_written} written, ${res.rows_skipped} skipped. ` +
+          `Matched claims now in ERA Review.`,
       });
     } catch (e) {
       const msg =
         e instanceof ReplayEraError ? e.message : (e as Error).message;
       toast({ title: "Replay failed", description: msg });
     } finally {
-      setBusy(false);
+      setCommitBusy(false);
     }
+  }
+
+  function togglePcn(pcn: string) {
+    setSelectedPcns((prev) => {
+      const next = new Set(prev);
+      if (next.has(pcn)) next.delete(pcn);
+      else next.add(pcn);
+      return next;
+    });
+  }
+  function selectAll() {
+    if (!preview) return;
+    setSelectedPcns(new Set(preview.results.map((r) => r.pcn).filter(Boolean)));
+  }
+  function selectNone() {
+    setSelectedPcns(new Set());
   }
 
   return (
@@ -207,15 +287,19 @@ export default function ReplayEra() {
               onChange={(e) => {
                 setPayload(e.target.value);
                 // Typing into the textarea invalidates the prior file
-                // attribution. Keeps the label honest.
+                // attribution and any cached preview/result. Keeps the
+                // label honest and the selection in sync.
                 if (uploadedFilename) setUploadedFilename(null);
+                setPreview(null);
+                setResult(null);
+                setSelectedPcns(new Set());
               }}
               placeholder={
                 "Paste raw X12 (.835 starts with `ISA*…~`) or 835 JSON " +
                 "(X12-typed heading/detail, Stedi SDK transactions[], or " +
                 "flat single-claim)."
               }
-              className="min-h-[400px] font-mono text-xs"
+              className="min-h-[300px] font-mono text-xs"
             />
             {parseError && (
               <Alert variant="destructive">
@@ -223,13 +307,111 @@ export default function ReplayEra() {
               </Alert>
             )}
             <div className="flex justify-end">
-              <Button onClick={() => void handleSubmit()} disabled={busy}>
+              {/* Preview button — runs dry_run on the backend to get the
+                  parsed claim list. If a file upload already auto-fired
+                  this, the operator can re-run after editing the text. */}
+              <Button
+                variant="outline"
+                onClick={() => void runPreview(payload)}
+                disabled={previewBusy || !payload.trim()}
+              >
                 <Send className="mr-2 h-4 w-4" />
-                {busy ? "Processing…" : "Replay ERA"}
+                {previewBusy ? "Parsing…" : preview ? "Re-parse" : "Preview claims"}
               </Button>
             </div>
           </CardContent>
         </Card>
+
+        {/* Preview card — appears after the dry_run lands. Shows every
+            claim in the payload with a checkbox; operator picks which to
+            actually replay. */}
+        {preview && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <CardTitle className="text-base">
+                  Claims in payload ({preview.results.length})
+                </CardTitle>
+                <div className="flex items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={selectAll}
+                    className="rounded border px-2 py-1 hover:bg-muted"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectNone}
+                    className="rounded border px-2 py-1 hover:bg-muted"
+                  >
+                    Select none
+                  </button>
+                  <span className="ml-2 text-muted-foreground">
+                    {selectedPcns.size} of {preview.results.length} selected
+                  </span>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="rounded-md border">
+                <div className="grid grid-cols-[2.5rem_1fr_1fr_1fr_1fr_0.9fr_0.9fr] items-center gap-2 border-b bg-muted/40 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
+                  <span></span>
+                  <span>Patient</span>
+                  <span>PCN</span>
+                  <span>Payer</span>
+                  <span>Status</span>
+                  <span className="text-right">Paid</span>
+                  <span className="text-right">PR</span>
+                </div>
+                {preview.results.map((r, i) => {
+                  const checked = selectedPcns.has(r.pcn);
+                  return (
+                    <label
+                      key={`${r.pcn}-${i}`}
+                      className="grid cursor-pointer grid-cols-[2.5rem_1fr_1fr_1fr_1fr_0.9fr_0.9fr] items-center gap-2 border-b px-3 py-2 text-xs last:border-b-0 hover:bg-muted/20"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={!r.pcn}
+                        onChange={() => r.pcn && togglePcn(r.pcn)}
+                        className="h-4 w-4"
+                      />
+                      <span className="font-medium">
+                        {r.patient_name || <span className="text-muted-foreground">—</span>}
+                      </span>
+                      <span className="font-mono text-[11px]">{r.pcn || "—"}</span>
+                      <span className="truncate" title={r.payer_name}>
+                        {r.payer_name || "—"}
+                      </span>
+                      <span className="truncate" title={r.claim_status}>
+                        {r.claim_status || "—"}
+                      </span>
+                      <span className="text-right tabular-nums">
+                        {r.primary_paid || "—"}
+                      </span>
+                      <span className="text-right tabular-nums">
+                        {r.pr_amount || "—"}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="flex justify-end">
+                <Button
+                  onClick={() => void handleCommit()}
+                  disabled={commitBusy || selectedPcns.size === 0}
+                >
+                  <Send className="mr-2 h-4 w-4" />
+                  {commitBusy
+                    ? "Replaying…"
+                    : `Replay ${selectedPcns.size} selected`}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {result && (
           <Card>

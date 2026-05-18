@@ -9,12 +9,23 @@
 
 export interface ReplayEraResultRow {
   pcn: string;
+  /** Patient name parsed from the NM1*QC sub-loop. Only populated for
+   *  X12 / X12-typed JSON inputs; legacy SDK formats may leave it blank. */
+  patient_name?: string;
+  /** Envelope-level payer name from N1*PR. */
+  payer_name?: string;
   claim_status: string;
   primary_paid: string;
   pr_amount: string;
   route: "primary" | "secondary";
   item_id: string | null;
-  outcome: "populated" | "no-match" | "secondary-not-spawned" | string;
+  outcome:
+    | "populated"
+    | "no-match"
+    | "secondary-not-spawned"
+    | "preview"          // dry_run result — nothing was written
+    | "filtered-out"     // not in pcn_filter, skipped on commit
+    | string;
 }
 
 export interface ReplayEraResult {
@@ -44,7 +55,14 @@ export function isReplayEraConfigured(): boolean {
 
 export async function replayEra(
   eraJson: unknown,
-  opts?: { transactionId?: string },
+  opts?: {
+    transactionId?: string;
+    /** Parse + match but skip writes — drives the preview/select UI. */
+    dryRun?: boolean;
+    /** When set, only PCNs in this list are processed; everything else
+     *  comes back with outcome="filtered-out". */
+    pcnFilter?: string[];
+  },
 ): Promise<ReplayEraResult> {
   if (!API_BASE || !ADMIN_KEY) {
     throw new ReplayEraError(
@@ -64,6 +82,8 @@ export async function replayEra(
       body: JSON.stringify({
         era_json: eraJson,
         transaction_id: opts?.transactionId ?? null,
+        dry_run: opts?.dryRun ?? false,
+        pcn_filter: opts?.pcnFilter ?? null,
       }),
     });
   } catch (e) {
