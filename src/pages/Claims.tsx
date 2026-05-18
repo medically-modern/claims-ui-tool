@@ -19,6 +19,11 @@ import {
 import { MOCK_CLAIMS as MOCK_CLAIMS_FALLBACK } from "@/lib/claims/mockData";
 import { useAllClaims, ALL_CLAIMS_QUERY_KEY } from "@/hooks/useAllClaims";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  addProcessing as addMarkPaidProcessing,
+  removeProcessing as removeMarkPaidProcessing,
+  getAllProcessing as getAllMarkPaidProcessing,
+} from "@/lib/markPaidProcessing";
 import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
 import { hasMondayToken } from "@/api/monday";
 import { LoadingOverlay } from "@/components/claims/LoadingOverlay";
@@ -464,10 +469,23 @@ const Claims = () => {
   // no longer in the active list — useEffect below sweeps the dict each
   // render to drop ids that have already left the load. So the spinner
   // is gone exactly when the row is, never earlier.
-  const [markPaidProcessing, setMarkPaidProcessing] = useState<Record<string, boolean>>({});
+  // Initial state seeds from sessionStorage so the chip shows up when
+  // the operator navigates here from ClaimDetail after a detail-view
+  // Mark Paid. Without seeding, the page would mount with an empty
+  // processing dict and the row would look untouched.
+  const [markPaidProcessing, setMarkPaidProcessing] = useState<Record<string, boolean>>(
+    () => {
+      const persisted = getAllMarkPaidProcessing();
+      const out: Record<string, boolean> = {};
+      for (const id of Object.keys(persisted)) out[id] = true;
+      return out;
+    },
+  );
 
   function startMarkPaidProcessing(claimId: string) {
     setMarkPaidProcessing((p) => ({ ...p, [claimId]: true }));
+    // Also persist so the chip survives navigation to/from ClaimDetail.
+    addMarkPaidProcessing(claimId);
     // Safety net — 45s hard timeout. If Monday's response cache or
     // anything else upstream is holding stale "Review" status past
     // the normal propagation window, drop the spinner so the operator
@@ -480,6 +498,7 @@ const Claims = () => {
         delete next[claimId];
         return next;
       });
+      removeMarkPaidProcessing(claimId);
     }, 45000);
   }
 
@@ -508,6 +527,7 @@ const Claims = () => {
         // Mark Paid landed and the row is no longer in Review.
         if (status === undefined || status !== "Review") {
           delete next[id];
+          removeMarkPaidProcessing(id);
           dirty = true;
         }
       }

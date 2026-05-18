@@ -23,6 +23,7 @@ import {
 import { getClaim } from "@/lib/claims/mockData";
 import { useAllClaims, ALL_CLAIMS_QUERY_KEY } from "@/hooks/useAllClaims";
 import { useQueryClient } from "@tanstack/react-query";
+import { addProcessing as addMarkPaidProcessing } from "@/lib/markPaidProcessing";
 import { hasMondayToken } from "@/api/monday";
 import {
   carcMeaning, claimAge, eraReceived, fmtDate, fmtMoney, lineStatus,
@@ -613,6 +614,13 @@ const ClaimDetail = () => {
           void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
         }, delay);
       });
+
+      // Persist a "this claim is mid-processing" marker so the Claims
+      // page (when the operator navigates back) shows the same
+      // "Marking paid…" pulsing chip the row-level Mark Paid uses.
+      // Without this, returning to the list looked like the click in
+      // the detail view never happened.
+      addMarkPaidProcessing(claim.id);
 
       // Backend now returns in ~1-2s after the Primary Status flip; the
       // secondary spawn (if PR > 0) runs as a Railway background task,
