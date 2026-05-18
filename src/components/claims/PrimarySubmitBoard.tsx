@@ -38,7 +38,14 @@ const PAYER_OPTIONS = [
   "Cigna", "Humana", "Medicare", "Medicaid",
 ];
 const HCPC_OPTIONS = ["A4230", "A4232", "A4239", "E0784", "E2103"];
-const MODIFIER_OPTIONS = ["KX", "NU", "RR", "RA", "RB", "GA", "GY", "KH", "KI", "KJ"];
+// Keep in sync with the Modifiers dropdown column (dropdown_mm1z7je9) on
+// the Claims subitems board. When operators add a new modifier on Monday,
+// append it here so the inline picker offers it. The Monday side accepts
+// label-by-name writes (create_labels_if_missing), so an unknown modifier
+// won't break a write — but the picker won't surface it until added here.
+const MODIFIER_OPTIONS = [
+  "KX", "NU", "RR", "RA", "RB", "GA", "GY", "GW", "KH", "KI", "KJ",
+];
 
 interface ProductDefaults {
   product: string;
