@@ -73,6 +73,12 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
                 value: stats.secondaryTotal.total,
                 count: stats.secondaryTotal.count,
               },
+              {
+                label: "Pump claims",
+                value: stats.totalOpenPumps.total,
+                count: stats.totalOpenPumps.count,
+                emphasis: true,
+              },
             ]}
           />
           <Tile
@@ -92,6 +98,12 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
                 label: "Medicaid (next Wed)",
                 value: stats.soonMedicaid.total,
                 count: stats.soonMedicaid.count,
+              },
+              {
+                label: "Pump claims",
+                value: stats.soonPumps.total,
+                count: stats.soonPumps.count,
+                emphasis: true,
               },
             ]}
             tooltipText="Claims with the EFT pay date within 7 days, OR pure-Medicaid awaiting ERA whose eMedNY settle date is within 7 days. Spans both Primary and Secondary."
@@ -124,6 +136,12 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
                 value: stats.expectedSecondaryPatient.total,
                 count: stats.expectedSecondaryPatient.count,
               },
+              {
+                label: "Pump claims",
+                value: stats.expectedPumps.total,
+                count: stats.expectedPumps.count,
+                emphasis: true,
+              },
             ]}
             tooltipText="Non-Medicaid primaries awaiting ERA within their normal turnaround window, pure-Medicaid more than a week from their eMedNY settle date, and secondaries (Forwarded/Insurance/Patient) still awaiting payment."
           />
@@ -134,6 +152,18 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             amount={stats.highRisk.total}
             count={stats.highRisk.count}
             subtitle="No primary ERA, sent 21+ days ago"
+            breakdown={
+              stats.highRiskPumps.count > 0
+                ? [
+                    {
+                      label: "Pump claims",
+                      value: stats.highRiskPumps.total,
+                      count: stats.highRiskPumps.count,
+                      emphasis: true,
+                    },
+                  ]
+                : undefined
+            }
             tooltipText="Non-Medicaid primary claims submitted 21+ days ago that still have no ERA. Past normal payer turnaround — something may be wrong (denial, payer issue, lost claim)."
           />
         </div>
@@ -155,6 +185,9 @@ interface BreakdownRow {
   label: string;
   value: number;
   count: number;
+  // Pump rows are visually separated — pumps are $4-6k each, so the
+  // operator wants to see the pump-only contribution at a glance.
+  emphasis?: boolean;
 }
 
 function Tile({
@@ -214,8 +247,16 @@ function Tile({
         {breakdown && breakdown.length > 0 && (
           <div className="mt-2 space-y-0.5 border-t pt-2 text-xs text-muted-foreground">
             {breakdown.map((row) => (
-              <div key={row.label} className="flex items-baseline justify-between gap-2">
-                <span>{row.label}</span>
+              <div
+                key={row.label}
+                className={cn(
+                  "flex items-baseline justify-between gap-2",
+                  row.emphasis && "mt-1 border-t border-dashed pt-1",
+                )}
+              >
+                <span className={cn(row.emphasis && "font-medium text-foreground")}>
+                  {row.label}
+                </span>
                 <span className="tabular-nums">
                   <span className="font-medium text-foreground">{money(row.value)}</span>
                   <span className="ml-1 text-muted-foreground">({row.count})</span>

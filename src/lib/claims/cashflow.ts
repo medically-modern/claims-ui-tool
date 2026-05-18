@@ -218,6 +218,15 @@ export interface CashFlowStats {
 
   // High risk (primary only)
   highRisk: BucketStat;
+
+  // Per-tile pump-claim breakdown. A claim counts as a pump claim when
+  // any service line has HCPCS E0784. Pumps run $4k-$6k per claim so
+  // they outsize the rest of the dollar totals — this lets the operator
+  // see how much of each tile is "pump money" specifically.
+  totalOpenPumps: BucketStat;
+  soonPumps: BucketStat;
+  expectedPumps: BucketStat;
+  highRiskPumps: BucketStat;
 }
 
 function emptyStat(): BucketStat {
@@ -227,6 +236,18 @@ function emptyStat(): BucketStat {
 function addToStat(stat: BucketStat, amount: number): void {
   stat.count += 1;
   stat.total += amount;
+}
+
+// CMS HCPCS for the insulin pump. A claim with this code on any line
+// counts as a "pump claim" for Cash Flow breakdown purposes.
+const PUMP_HCPCS = "E0784";
+
+function claimHasPump(c: Claim): boolean {
+  return (c.lines || []).some((l) => (l.hcpcs || "").trim() === PUMP_HCPCS);
+}
+
+function secClaimHasPump(c: SecClaim): boolean {
+  return (c.lines || []).some((l) => (l.hcpcs || "").trim() === PUMP_HCPCS);
 }
 
 export function computeCashFlow(
@@ -250,12 +271,30 @@ export function computeCashFlow(
   const primaryTotal = emptyStat();
   const secondaryTotal = emptyStat();
 
+  // Pump-claim counters per tile. Incremented in parallel with the
+  // main buckets so the breakdown reflects exactly the same claim set.
+  const soonPumps = emptyStat();
+  const expectedPumps = emptyStat();
+  const highRiskPumps = emptyStat();
+
   for (const c of claims) {
     const bucket = classifyForCashFlow(c, today);
     if (bucket === "settled" || bucket === "out") continue;
     const amount = expectedInflowAmount(c);
     addToStat(buckets[bucket], amount);
     addToStat(primaryTotal, amount);
+    if (claimHasPump(c)) {
+      if (bucket === "soonEra" || bucket === "soonMedicaid") {
+        addToStat(soonPumps, amount);
+      } else if (
+        bucket === "expectedPrimaryNonMedicaid" ||
+        bucket === "expectedPrimaryMedicaid"
+      ) {
+        addToStat(expectedPumps, amount);
+      } else if (bucket === "highRisk") {
+        addToStat(highRiskPumps, amount);
+      }
+    }
   }
 
   for (const c of secondaryClaims) {
@@ -264,6 +303,16 @@ export function computeCashFlow(
     const amount = expectedInflowAmountSecondary(c);
     addToStat(buckets[bucket], amount);
     addToStat(secondaryTotal, amount);
+    if (secClaimHasPump(c)) {
+      if (bucket === "soonEra") {
+        addToStat(soonPumps, amount);
+      } else if (
+        bucket === "expectedSecondaryInsurance" ||
+        bucket === "expectedSecondaryPatient"
+      ) {
+        addToStat(expectedPumps, amount);
+      }
+    }
   }
 
   const soon: BucketStat = {
@@ -287,6 +336,12 @@ export function computeCashFlow(
     total: soon.total + expected.total + buckets.highRisk.total,
   };
 
+  // totalOpenPumps = soon+expected+highRisk pumps; sum the three per-tile stats.
+  const totalOpenPumps: BucketStat = {
+    count: soonPumps.count + expectedPumps.count + highRiskPumps.count,
+    total: soonPumps.total + expectedPumps.total + highRiskPumps.total,
+  };
+
   return {
     totalOpen,
     primaryTotal,
@@ -300,5 +355,9 @@ export function computeCashFlow(
     expectedSecondaryInsurance: buckets.expectedSecondaryInsurance,
     expectedSecondaryPatient: buckets.expectedSecondaryPatient,
     highRisk: buckets.highRisk,
+    totalOpenPumps,
+    soonPumps,
+    expectedPumps,
+    highRiskPumps,
   };
 }
