@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { ThreadPanel, ThreadContextStrip } from "./ThreadPanel";
 import { setPlaceOfService } from "@/api/setPlaceOfService";
+import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 
 type QueueKey = "new" | "resubmit";
 type SortKey = "payor" | "dos";
@@ -38,13 +39,16 @@ const PAYER_OPTIONS = [
   "Cigna", "Humana", "Medicare", "Medicaid",
 ];
 const HCPC_OPTIONS = ["A4230", "A4232", "A4239", "E0784", "E2103"];
-// Keep in sync with the Modifiers dropdown column (dropdown_mm1z7je9) on
-// the Claims subitems board. When operators add a new modifier on Monday,
-// append it here so the inline picker offers it. The Monday side accepts
-// label-by-name writes (create_labels_if_missing), so an unknown modifier
-// won't break a write — but the picker won't surface it until added here.
+// Canonical modifiers we typically pick from. Keep in sync with the
+// Modifiers dropdown column (dropdown_mm1z7je9) on the Claims subitems
+// board. The dropdown renders the union of these AND any modifiers
+// currently active on the row — so ERA-derived modifiers like KF / CG
+// that we don't routinely add by hand still appear as toggle-able rows.
+// The Monday side accepts label-by-name writes (create_labels_if_missing)
+// so unknown modifiers always write successfully.
 const MODIFIER_OPTIONS = [
-  "KX", "NU", "RR", "RA", "RB", "GA", "GY", "GW", "KH", "KI", "KJ",
+  "KX", "NU", "RR", "RA", "RB", "GA", "GY", "GW", "KF", "CG",
+  "KH", "KI", "KJ",
 ];
 
 interface ProductDefaults {
@@ -115,12 +119,38 @@ export function PrimarySubmitBoard() {
     );
   }, [awaiting, queue, payerFilter, search, sortBy]);
 
-  const submitOne = (c: ThreadClaim) => {
+  // Submit: write Primary Status="Submitted" to Monday, which triggers
+  // the existing claims_webhook on the backend that calls
+  // submit_from_claims_board (build 837 → send to Stedi → write back
+  // Claim ID / PCN / Claim Sent Date). We update local state optimistically
+  // so the row visually moves out of the "Awaiting Submission" queue;
+  // the next refresh will pick up the backend's writebacks.
+  const submitOne = async (c: ThreadClaim) => {
+    if (!c.monday_item_id) {
+      toast({
+        title: "Can't submit",
+        description: "No Monday item id on this row — local-only claim.",
+      });
+      return;
+    }
+    // Optimistic local flip so the row leaves the Submit queue immediately.
     updateClaim(c.id, { status: "Submitted" });
-    toast({
-      title: `Submitted ${c.patient.name}`,
-      description: `${c.items.length} line item${c.items.length === 1 ? "" : "s"} sent to ${c.payer}.`,
-    });
+    try {
+      await setPrimaryStatus(c.monday_item_id, "Submitted");
+      toast({
+        title: `Submitted ${c.patient.name}`,
+        description:
+          `${c.items.length} line item${c.items.length === 1 ? "" : "s"} queued to ${c.payer}. ` +
+          `Stedi 837 fires in the background; Claim ID + Sent Date will appear after the response.`,
+      });
+    } catch (e) {
+      // Revert optimistic update on failure.
+      updateClaim(c.id, { status: "Awaiting Submission" });
+      toast({
+        title: "Submit failed",
+        description: (e as Error).message,
+      });
+    }
   };
 
   const addLine = (claimId: string, product: string) => {
@@ -379,29 +409,20 @@ function ClaimCard({
 
         <div className="col-span-2 flex justify-end">
           {/*
-            Submit button intentionally disabled while we verify real Monday
-            data end-to-end. Re-enable once the Monday write-back + Stedi 837
-            chain is ready. See the project handoff doc for the flow.
+            Live submit. Click → setPrimaryStatus(itemId, "Submitted") on
+            Monday → /claims/webhook on the backend fires → 837 to Stedi →
+            writeback (Claim ID / PCN / Claim Sent Date). isLocked guards
+            against re-clicking after the first submit lands.
           */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="w-full">
-                <Button
-                  size="sm"
-                  className="h-7 w-full bg-emerald-700 text-white hover:bg-emerald-800"
-                  disabled
-                  aria-disabled="true"
-                >
-                  <Send className="mr-1 h-3.5 w-3.5" />
-                  {isLocked ? "Submitted" : "Submit"}
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              Submission not yet wired — disabled while we verify real Monday
-              data. Will be enabled once the Stedi write-back is ready.
-            </TooltipContent>
-          </Tooltip>
+          <Button
+            size="sm"
+            className="h-7 w-full bg-emerald-700 text-white hover:bg-emerald-800"
+            disabled={isLocked || c.items.length === 0}
+            onClick={() => void onSubmit()}
+          >
+            <Send className="mr-1 h-3.5 w-3.5" />
+            {isLocked ? "Submitted" : "Submit"}
+          </Button>
         </div>
       </div>
 
@@ -509,6 +530,16 @@ function ModifierMultiSelect({ value, onChange }: { value: string[]; onChange: (
   const toggle = (m: string) =>
     onChange(value.includes(m) ? value.filter((x) => x !== m) : [...value, m]);
   const remove = (m: string) => onChange(value.filter((x) => x !== m));
+  // Union of canonical options + anything already active on the row that
+  // isn't in the canonical list (e.g. KF / CG coming from a Medicare ERA).
+  // Without this, those modifiers render as active chips but the dropdown
+  // doesn't show them — so the operator can't uncheck them without
+  // clicking the × on the chip. Preserves the canonical order, then
+  // appends extras in the order they appear on the row.
+  const dropdownOptions = [
+    ...MODIFIER_OPTIONS,
+    ...value.filter((m) => !MODIFIER_OPTIONS.includes(m)),
+  ];
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -534,7 +565,7 @@ function ModifierMultiSelect({ value, onChange }: { value: string[]; onChange: (
       </PopoverTrigger>
       <PopoverContent align="start" className="w-44 p-2">
         <div className="grid gap-1">
-          {MODIFIER_OPTIONS.map((m) => (
+          {dropdownOptions.map((m) => (
             <label key={m} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-accent">
               <Checkbox checked={value.includes(m)} onCheckedChange={() => toggle(m)} />
               <span>{m}</span>
