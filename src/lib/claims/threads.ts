@@ -34,6 +34,12 @@ export interface ThreadItem {
 
 export interface ThreadClaim {
   id: string;
+  /** Monday item id — distinct from `id` (which may be the Claim ID
+   *  column value when set). Needed for any write-back to Monday since
+   *  setStatus / setPlaceOfService / etc. all key by item id, not the
+   *  human Claim ID. Optional for mock/in-memory rows that don't have
+   *  a Monday backing. */
+  monday_item_id?: string;
   type: ThreadClaimType;
   status: ThreadClaimStatus;
   patient: { name: string; dob: string; member_id: string };
@@ -42,6 +48,10 @@ export interface ThreadClaim {
   dos: string; // ISO yyyy-mm-dd
   icn?: string;
   parent_claim_id?: string;
+  /** Place of Service label as stored on Monday (status column
+   *  color_mm3fk3qv). "Home" -> CMS POS 12, "Office" -> CMS POS 11.
+   *  Defaults to Home in the UI when undefined. */
+  place_of_service?: "Home" | "Office";
   items: ThreadItem[];
   notes?: string;
   createdAt: number;

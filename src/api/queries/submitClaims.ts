@@ -26,6 +26,10 @@ const COL = {
   PARENT_CLAIM_ID: "text_mm3559h4",
   CLAIM_ID: "text_mm1zpzrs",
   PAYER_CLAIM_NUMBER: "text_mm2nfytt",
+  // POS — status column with labels Home (CMS 12) / Office (CMS 11).
+  // Read here so the Submit Claim board's inline editor can render the
+  // current value and let the operator switch before submitting.
+  PLACE_OF_SERVICE: "color_mm3fk3qv",
 } as const;
 
 // Column IDs on the Subitems board. See MONDAY_BOARD_SCHEMA.md.
@@ -196,9 +200,17 @@ function mapSubitem(sub: MondaySubitem): ThreadItem {
 
 function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
   const parentClaimId = textOf(item, COL.PARENT_CLAIM_ID);
+  const posLabel = textOf(item, COL.PLACE_OF_SERVICE);
   return {
     id: textOf(item, COL.CLAIM_ID) || item.id, // prefer Claim ID column when set
+    // Always carry the raw Monday item id separately so writes (status,
+    // POS, etc.) always target the right row even when `id` is a Claim ID.
+    monday_item_id: item.id,
     type: mapClaimType(textOf(item, COL.CLAIM_TYPE)),
+    place_of_service:
+      posLabel === "Office" ? "Office"
+      : posLabel === "Home" ? "Home"
+      : undefined,
     // Everything fetched here is filtered to Primary=Submit Claim,
     // which corresponds to the frontend's "Awaiting Submission" state.
     status: "Awaiting Submission",

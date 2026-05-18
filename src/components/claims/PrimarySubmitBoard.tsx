@@ -22,6 +22,7 @@ import type { ThreadClaim, ThreadClaimType, ThreadItem } from "@/lib/claims/thre
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { ThreadPanel, ThreadContextStrip } from "./ThreadPanel";
+import { setPlaceOfService } from "@/api/setPlaceOfService";
 
 type QueueKey = "new" | "resubmit";
 type SortKey = "payor" | "dos";
@@ -236,8 +237,10 @@ function ClaimCard({
 }) {
   const dosDate = c.dos ? new Date(c.dos + "T00:00:00") : undefined;
 
+  // 9 grid cells: Patient | Payer | Member ID | DOS | Dx | POS | Type | Submit (col-span-2)
+  // POS sits between Dx and Type per the operator's preferred read order.
   const gridCols =
-    "grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.85fr)_32px] gap-3 items-end";
+    "grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.7fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.85fr)_32px] gap-3 items-end";
   const cellCls = "min-w-0";
 
   const usedProducts = c.items.map((i) => productForHcpc(i.hcpc));
@@ -313,6 +316,42 @@ function ClaimCard({
           </Select>
         </Field>
 
+        {/* Place of Service — between Dx and Type. Drives CMS-1500 Box 24B /
+            837 placeOfServiceCode. Home -> 12 (default for DME shipped to
+            patient), Office -> 11 (clinical-setting visit). Writes through
+            to Monday immediately so the next submit picks it up. */}
+        <Field label="POS" className={cellCls}>
+          <Select
+            value={c.place_of_service ?? "Home"}
+            onValueChange={(v) => {
+              const next = v as "Home" | "Office";
+              // Optimistic local update first so the select snaps to the
+              // new value; the Monday write resolves in the background.
+              onUpdate({ place_of_service: next });
+              if (c.monday_item_id) {
+                void setPlaceOfService(c.monday_item_id, next).catch((e) => {
+                  // Revert and surface error; the Monday board is the source
+                  // of truth and we shouldn't claim a write succeeded if it
+                  // didn't.
+                  onUpdate({ place_of_service: c.place_of_service ?? "Home" });
+                  toast({
+                    title: "Couldn't save POS to Monday",
+                    description: (e as Error).message,
+                  });
+                });
+              }
+            }}
+          >
+            <SelectTrigger className={cn("h-7 w-full border-0 text-xs font-medium", NEUTRAL_TONE)}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="Home">Home (12)</SelectItem>
+              <SelectItem value="Office">Office (11)</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+
         <Field label="Type" className={cellCls}>
           {isResubmit ? (
             <Select value={c.type} onValueChange={(v) => onUpdate({ type: v as ThreadClaimType })}>
@@ -368,6 +407,9 @@ function ClaimCard({
           <div>Qty</div>
           <div>Charge</div>
           <div>Est Pay</div>
+          {/* extra blanks pad to 9 cells so subitem rows align with the
+              parent row's 9-column grid (Patient/Payer/MemberID/DOS/Dx/POS/Type/Submit) */}
+          <div />
           <div />
         </div>
 
@@ -410,6 +452,9 @@ function ClaimCard({
               />
             </div>
             <div className="text-xs tabular-nums text-muted-foreground">${i.est_pay.toFixed(2)}</div>
+            {/* extra blank cell — parent grid is 9 wide (POS added between
+                Dx and Type); subitem rows pad to match alignment. */}
+            <div />
             {isLocked ? (
               <span aria-hidden className="h-6 w-6" />
             ) : (
