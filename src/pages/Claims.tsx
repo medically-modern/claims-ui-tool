@@ -46,8 +46,6 @@ import {
   priorityOf, shortIssue, variance,
 } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
-import { EditEraDialog, type EditEraConfirm } from "@/components/claims/EditEraDialog";
-import { applyManualEra, ManualEraError } from "@/api/manualEra";
 import {
   AlertTriangle, ArrowRight, Check, Clock, FileJson, FileSearch, MoreHorizontal, RefreshCw, Search, Send, Wallet, XCircle,
 } from "lucide-react";
@@ -448,37 +446,6 @@ const Claims = () => {
   // which claim is being confirmed and whether the request is in flight.
   const [markPaidTarget, setMarkPaidTarget] = useState<Claim | null>(null);
   const [markPaidBusy, setMarkPaidBusy] = useState(false);
-
-  // Manual ERA entry — fires from the Outstanding bucket's "Edit ERA"
-  // row action. Operator types per-line paid + adjustments by hand when
-  // no automated 835 came through; backend writes them, flips the row
-  // into ERA Review, and tags Raw ERA Claim Status as "Manual entry".
-  const [editEraTarget, setEditEraTarget] = useState<Claim | null>(null);
-  const [editEraBusy, setEditEraBusy] = useState(false);
-  async function handleEditEraConfirm(req: EditEraConfirm) {
-    if (!editEraTarget || editEraBusy) return;
-    setEditEraBusy(true);
-    try {
-      const res = await applyManualEra({
-        itemId: editEraTarget.mondayItemId,
-        primaryPaidDate: req.primaryPaidDate,
-        lines: req.lines,
-      });
-      toast({
-        title: `Manual ERA saved: ${editEraTarget.patientName}`,
-        description:
-          `Paid ${fmtMoney(res.primary_paid_total)} · PR ${fmtMoney(res.pr_total)} · ` +
-          `${res.lines_updated} line(s) updated. Row moved to ERA Review.`,
-      });
-      setEditEraTarget(null);
-      void refetchClaims();
-    } catch (e) {
-      const msg = e instanceof ManualEraError ? e.message : (e as Error).message;
-      toast({ title: "Manual ERA save failed", description: msg });
-    } finally {
-      setEditEraBusy(false);
-    }
-  }
 
   async function confirmMarkPaidFromRow() {
     const target = markPaidTarget;
@@ -1231,27 +1198,11 @@ const Claims = () => {
                                     }
                                     return (
                                       <TableCell key={col} className="text-right">
-                                        <div className="inline-flex items-center justify-end gap-2">
-                                          {category === "outstanding" && (
-                                            // Edit ERA — for the "payer paid but no 835 came"
-                                            // case. Opens the manual-entry dialog; on save,
-                                            // backend writes per-line breakdown + flips row
-                                            // into ERA Review.
-                                            <Button
-                                              size="sm"
-                                              variant="ghost"
-                                              onClick={() => setEditEraTarget(c)}
-                                              title="Manually enter ERA payment details for this claim"
-                                            >
-                                              Edit ERA
-                                            </Button>
-                                          )}
-                                          <Button asChild size="sm" variant="outline">
-                                            <Link to={`/claims/${c.id}`}>
-                                              {rowCta(c)} <ArrowRight className="ml-1 h-3.5 w-3.5" />
-                                            </Link>
-                                          </Button>
-                                        </div>
+                                        <Button asChild size="sm" variant="outline">
+                                          <Link to={`/claims/${c.id}`}>
+                                            {rowCta(c)} <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                                          </Link>
+                                        </Button>
                                       </TableCell>
                                     );
                                   default:
@@ -1288,18 +1239,6 @@ const Claims = () => {
           </>
         )}
       </main>
-
-      {/* Manual ERA entry — Outstanding bucket. Opens when operator clicks
-          Edit ERA on a row that paid but never produced an 835. */}
-      {editEraTarget && (
-        <EditEraDialog
-          open={!!editEraTarget}
-          onOpenChange={(o) => !o && setEditEraTarget(null)}
-          claim={editEraTarget}
-          busy={editEraBusy}
-          onConfirm={handleEditEraConfirm}
-        />
-      )}
 
       {/* Row-level Mark Paid confirmation. Opens when the checkmark icon on
           any row is clicked; calls the same /claims/mark-paid backend

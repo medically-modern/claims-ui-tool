@@ -63,6 +63,9 @@ import {
   SpawnResubmissionError,
 } from "@/api/spawnResubmission";
 import { LineResubmitDialog, type LineResubmitConfirm } from "@/components/claims/LineResubmitDialog";
+import { applyManualEra, isManualEraConfigured, ManualEraError } from "@/api/manualEra";
+import { Input } from "@/components/ui/input";
+import { Pencil, X as XIcon, Save } from "lucide-react";
 
 type LineUserStatus = "Paid" | "Underpaid" | "Denied";
 
@@ -287,6 +290,120 @@ const ClaimDetail = () => {
   // Monday item linked to this one via Parent Claim ID.
   const [resubmitOpen, setResubmitOpen] = useState(false);
   const [resubmitBusy, setResubmitBusy] = useState(false);
+
+  // Edit ERA — inline manual entry on the Service Lines table.
+  // When eraEditing is true, the Paid / Ded / Coins / Copay cells turn
+  // into Inputs. Save calls /claims/manual-era which writes the per-line
+  // values + parent rollups, stamps Raw ERA Claim Status="Manual entry",
+  // flips Primary Status=Review so the row joins the normal ERA Review
+  // flow. Use case: payer paid but didn't send an 835, or we got the
+  // breakdown by phone.
+  const [eraEditing, setEraEditing] = useState(false);
+  const [eraEditBusy, setEraEditBusy] = useState(false);
+  const [eraEditDate, setEraEditDate] = useState<string>(() =>
+    new Date().toISOString().slice(0, 10),
+  );
+  // Per-line editable fields. Initialized from claim.lines when edit
+  // mode opens; PR derives from Ded + Coins + Copay on save.
+  const [eraEdits, setEraEdits] = useState<Record<string, {
+    primaryPaid: number; deductible: number; coinsurance: number; copay: number;
+  }>>({});
+
+  function startEraEdit() {
+    setEraEdits(Object.fromEntries(
+      claim.lines.map((l) => [l.id, {
+        primaryPaid: l.primaryPaid || 0,
+        deductible: l.deductible || 0,
+        coinsurance: l.coinsurance || 0,
+        copay: l.copay || 0,
+      }]),
+    ));
+    setEraEditDate(new Date().toISOString().slice(0, 10));
+    setEraEditing(true);
+  }
+  function cancelEraEdit() {
+    setEraEditing(false);
+    setEraEdits({});
+  }
+  function setEraField(
+    lineId: string,
+    field: "primaryPaid" | "deductible" | "coinsurance" | "copay",
+    value: number,
+  ) {
+    setEraEdits((prev) => ({
+      ...prev,
+      [lineId]: { ...prev[lineId], [field]: value },
+    }));
+  }
+  async function saveEraEdit() {
+    if (eraEditBusy) return;
+    if (!isManualEraConfigured()) {
+      toast.error("Manual ERA not configured", {
+        description: "VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+      });
+      return;
+    }
+    setEraEditBusy(true);
+    try {
+      const lines = claim.lines.map((l) => {
+        const e = eraEdits[l.id] ?? {
+          primaryPaid: 0, deductible: 0, coinsurance: 0, copay: 0,
+        };
+        return {
+          subitemId: l.id,
+          primaryPaid: e.primaryPaid,
+          deductible: e.deductible,
+          coinsurance: e.coinsurance,
+          copay: e.copay,
+          // PR auto-derived from D + C + Copay; backend uses this when
+          // we don't override.
+          pr: e.deductible + e.coinsurance + e.copay,
+        };
+      });
+      const res = await applyManualEra({
+        itemId: claim.mondayItemId,
+        primaryPaidDate: eraEditDate,
+        lines,
+      });
+      toast.success("ERA saved", {
+        description:
+          `Paid ${fmtMoney(res.primary_paid_total)} · PR ${fmtMoney(res.pr_total)} · ` +
+          `${res.lines_updated} line(s). Row moved to ERA Review.`,
+      });
+      // Optimistic local update so the table reflects the new values
+      // immediately. A real refetch will fire on next bucket render.
+      const updatedLines = claim.lines.map((l) => {
+        const e = eraEdits[l.id] ?? {
+          primaryPaid: 0, deductible: 0, coinsurance: 0, copay: 0,
+        };
+        return {
+          ...l,
+          primaryPaid: e.primaryPaid,
+          deductible: e.deductible,
+          coinsurance: e.coinsurance,
+          copay: e.copay,
+          patientResponsibility: e.deductible + e.coinsurance + e.copay,
+        };
+      });
+      setClaim({
+        ...claim,
+        primaryStatus: "Review",
+        primaryPaid: res.primary_paid_total,
+        prAmount: res.pr_total,
+        primaryPaidDate: res.primary_paid_date,
+        rawEraClaimStatus: "Manual entry",
+        rawEraDate: res.primary_paid_date,
+        lines: updatedLines,
+      });
+      setEraEditing(false);
+      setEraEdits({});
+    } catch (e) {
+      const msg = e instanceof ManualEraError ? e.message : (e as Error).message;
+      toast.error("Couldn't save ERA", { description: msg });
+    } finally {
+      setEraEditBusy(false);
+    }
+  }
 
   async function handleResubmitConfirm(req: LineResubmitConfirm) {
     if (resubmitBusy) return;
@@ -738,7 +855,49 @@ const ClaimDetail = () => {
         {/* ERA table */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Service Lines</CardTitle>
+            <div className="flex items-center justify-between gap-3">
+              <CardTitle className="text-base">Service Lines</CardTitle>
+              {/* Edit ERA — toggle the per-line Paid/Ded/Coins/Copay cells
+                  into Inputs. Used when payer paid but no 835 came (or
+                  we got the breakdown by phone). Save → /claims/manual-era,
+                  row moves to ERA Review with the entered values. */}
+              {eraEditing ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-2 py-1">
+                    <label className="text-xs font-medium text-muted-foreground">
+                      Primary Paid Date
+                    </label>
+                    <Input
+                      type="date"
+                      value={eraEditDate}
+                      onChange={(e) => setEraEditDate(e.target.value)}
+                      className="h-7 w-36"
+                      disabled={eraEditBusy}
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={cancelEraEdit}
+                    disabled={eraEditBusy}
+                  >
+                    <XIcon className="mr-1 h-4 w-4" /> Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => void saveEraEdit()}
+                    disabled={eraEditBusy}
+                  >
+                    <Save className="mr-1 h-4 w-4" />
+                    {eraEditBusy ? "Saving…" : "Save ERA"}
+                  </Button>
+                </div>
+              ) : (
+                <Button size="sm" variant="outline" onClick={startEraEdit}>
+                  <Pencil className="mr-1 h-4 w-4" /> Edit ERA
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
@@ -767,6 +926,9 @@ const ClaimDetail = () => {
                       line={l}
                       status={lineUserStatus[l.id]}
                       onStatusChange={(s) => setLineUserStatus((p) => ({ ...p, [l.id]: s }))}
+                      eraEditing={eraEditing}
+                      eraEdit={eraEdits[l.id]}
+                      onEraFieldChange={(field, value) => setEraField(l.id, field, value)}
                     />
                   ))}
                 </TableBody>
@@ -1083,13 +1245,36 @@ function CodeChip({ code, meaning }: { code: string; meaning: string | null }) {
 
 function LineRow({
   line, status, onStatusChange,
+  eraEditing, eraEdit, onEraFieldChange,
 }: {
   line: ServiceLine;
   status: LineUserStatus;
   onStatusChange: (s: LineUserStatus) => void;
+  /** When true, Paid/Ded/Coins/Copay cells render as Inputs bound to
+   *  eraEdit. Save lives on the parent (ClaimDetail), so this component
+   *  just emits onEraFieldChange and the parent collects + dispatches. */
+  eraEditing?: boolean;
+  eraEdit?: {
+    primaryPaid: number; deductible: number; coinsurance: number; copay: number;
+  };
+  onEraFieldChange?: (
+    field: "primaryPaid" | "deductible" | "coinsurance" | "copay",
+    value: number,
+  ) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const diff = line.estPay - line.primaryPaid - line.patientResponsibility;
+  // When editing, use eraEdit values for the live diff so the operator
+  // sees totals update as they type. Otherwise the persisted values.
+  const editing = !!eraEditing && !!eraEdit;
+  const livePaid = editing ? eraEdit.primaryPaid : line.primaryPaid;
+  const liveCoinsCopay = editing
+    ? eraEdit.coinsurance + eraEdit.copay
+    : line.coinsurance + line.copay;
+  const liveDed = editing ? eraEdit.deductible : line.deductible;
+  const livePr = editing
+    ? eraEdit.deductible + eraEdit.coinsurance + eraEdit.copay
+    : line.patientResponsibility;
+  const diff = line.estPay - livePaid - livePr;
   const diffTone =
     Math.abs(diff) <= 0.5 ? "text-muted-foreground" :
     diff > 0 ? "text-danger-soft-foreground" : "text-info-soft-foreground";
@@ -1118,9 +1303,59 @@ function LineRow({
         <TableCell className="text-right tabular-nums">{line.units}</TableCell>
         <TableCell className="text-right tabular-nums">{fmtMoney(line.charge)}</TableCell>
         <TableCell className="text-right tabular-nums">{fmtMoney(line.estPay)}</TableCell>
-        <TableCell className="text-right tabular-nums">{fmtMoney(line.primaryPaid)}</TableCell>
-        <TableCell className="text-right tabular-nums">{fmtMoney(line.deductible)}</TableCell>
-        <TableCell className="text-right tabular-nums">{fmtMoney(line.coinsurance + line.copay)}</TableCell>
+        <TableCell className="text-right tabular-nums">
+          {editing ? (
+            <Input
+              type="number" min={0} step={0.01}
+              className="h-7 w-24 text-right ml-auto"
+              value={eraEdit!.primaryPaid}
+              onChange={(e) => onEraFieldChange?.("primaryPaid", Number(e.target.value) || 0)}
+            />
+          ) : (
+            fmtMoney(line.primaryPaid)
+          )}
+        </TableCell>
+        <TableCell className="text-right tabular-nums">
+          {editing ? (
+            <Input
+              type="number" min={0} step={0.01}
+              className="h-7 w-24 text-right ml-auto"
+              value={eraEdit!.deductible}
+              onChange={(e) => onEraFieldChange?.("deductible", Number(e.target.value) || 0)}
+            />
+          ) : (
+            fmtMoney(line.deductible)
+          )}
+        </TableCell>
+        <TableCell className="text-right tabular-nums">
+          {editing ? (
+            // Coins/Copay column is normally one merged readonly number;
+            // in edit mode we split it into two stacked Inputs so each
+            // bucket can be set independently.
+            <div className="flex flex-col items-end gap-1">
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] uppercase text-muted-foreground">Co</span>
+                <Input
+                  type="number" min={0} step={0.01}
+                  className="h-6 w-20 text-right"
+                  value={eraEdit!.coinsurance}
+                  onChange={(e) => onEraFieldChange?.("coinsurance", Number(e.target.value) || 0)}
+                />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] uppercase text-muted-foreground">Cp</span>
+                <Input
+                  type="number" min={0} step={0.01}
+                  className="h-6 w-20 text-right"
+                  value={eraEdit!.copay}
+                  onChange={(e) => onEraFieldChange?.("copay", Number(e.target.value) || 0)}
+                />
+              </div>
+            </div>
+          ) : (
+            fmtMoney(liveCoinsCopay)
+          )}
+        </TableCell>
         <TableCell className={cn("text-right tabular-nums", diffTone)}>{fmtMoney(diff)}</TableCell>
         <TableCell>
           <div className="flex flex-wrap gap-1">
