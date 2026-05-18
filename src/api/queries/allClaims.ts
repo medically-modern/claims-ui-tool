@@ -43,6 +43,10 @@ const COL = {
   PRIMARY_STATUS: "color_mkxmywtb",
   CLAIM_TYPE: "color_mm2nvk1p",
   PARENT_CLAIM_ID: "text_mm3559h4",
+  // Place of Service status column. Maps to CMS-1500 Box 24B:
+  // Home -> 12 (DME shipped, default), Office -> 11 (clinical visit).
+  // The backend's 837 builder reads this; blank defaults to Home/12.
+  PLACE_OF_SERVICE: "color_mm3fk3qv",
   DIAGNOSIS: "color_mky2gpz5",
   PRIMARY_PAID: "numeric_mm115q76",
   PR_AMOUNT: "numeric_mkxmc2rh",
@@ -453,6 +457,7 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     // whole set is loaded; leaving it undefined on this row is correct.
     parentClaimItemId: txt(item, COL.PARENT_CLAIM_ID) || null,
     claimType: mapClaimType(txt(item, COL.CLAIM_TYPE)),
+    placeOfService: mapPlaceOfService(txt(item, COL.PLACE_OF_SERVICE)),
     activity: [],
     lines,
   };
@@ -460,6 +465,11 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
 
 function mapClaimType(s: string): "Original" | "Corrected" | "Void" | null {
   if (s === "Original" || s === "Corrected" || s === "Void") return s;
+  return null;
+}
+
+function mapPlaceOfService(s: string): "Home" | "Office" | null {
+  if (s === "Home" || s === "Office") return s;
   return null;
 }
 

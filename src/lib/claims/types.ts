@@ -168,6 +168,13 @@ export interface Claim {
   /** True when any other claim in the current load has this item id as
    *  its parent. Derived at the query layer — not read from Monday. */
   hasChildren?: boolean;
+  /** Place of Service — drives CMS-1500 Box 24B / 837 placeOfServiceCode.
+   *  Status column color_mm3fk3qv with two labels:
+   *    "Home"   → CMS code 12 (default; what DME shipped to the patient is)
+   *    "Office" → CMS code 11 (clinical-setting visit)
+   *  Null when the column is blank on Monday; the backend defaults to 12
+   *  in that case so historical rows behave like before the column existed. */
+  placeOfService?: "Home" | "Office" | null;
   activity?: ActivityEntry[];
   lines: ServiceLine[];
 }

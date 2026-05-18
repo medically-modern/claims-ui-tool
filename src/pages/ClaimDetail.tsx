@@ -63,6 +63,7 @@ import {
   SpawnResubmissionError,
 } from "@/api/spawnResubmission";
 import { LineResubmitDialog, type LineResubmitConfirm } from "@/components/claims/LineResubmitDialog";
+import { setPlaceOfService as apiSetPlaceOfService } from "@/api/setPlaceOfService";
 
 type LineUserStatus = "Paid" | "Underpaid" | "Denied";
 
@@ -279,6 +280,32 @@ const ClaimDetail = () => {
   const [denialResolveBusy, setDenialResolveBusy] = useState<
     "Submit Claim" | "Outstanding" | "Bad Debt" | null
   >(null);
+
+  // Place of Service toggle — Home (CMS code 12, default for DME) vs.
+  // Office (CMS code 11, clinical-setting visit). Reflected on Monday as
+  // color_mm3fk3qv; the backend's 837 builder reads this and writes
+  // placeOfServiceCode accordingly. Optimistic update on click + async
+  // write-through; revert if Monday rejects.
+  const [posBusy, setPosBusy] = useState(false);
+  async function handlePosChange(next: "Home" | "Office") {
+    if (posBusy) return;
+    const current = claim.placeOfService ?? "Home";
+    if (current === next) return;
+    setPosBusy(true);
+    setClaim({ ...claim, placeOfService: next });
+    try {
+      await apiSetPlaceOfService(claim.mondayItemId, next);
+      toast.success(`Place of Service → ${next} (CMS ${next === "Home" ? "12" : "11"})`);
+    } catch (e) {
+      // Revert optimistic update
+      setClaim({ ...claim, placeOfService: current });
+      toast.error("Couldn't save Place of Service to Monday", {
+        description: (e as Error).message,
+      });
+    } finally {
+      setPosBusy(false);
+    }
+  }
 
   // Line-selector dialog for the Submit Claim path. Opens when the
   // operator picks New claim / Corrected claim and clicks Submit Claim —
@@ -684,7 +711,7 @@ const ClaimDetail = () => {
             denials where the line-level codes alone don't tell the story). */}
         <Card>
           <CardContent className="p-4">
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Claim Sent Date
@@ -715,6 +742,42 @@ const ClaimDetail = () => {
                 </div>
                 <div className="mt-1 font-mono text-sm">
                   {claim.payorId || "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Place of Service
+                </div>
+                {/* Two-state pill toggle. Default Home (CMS 12). Click to
+                    flip — writes through to Monday immediately; the 837
+                    builder reads the column on next submit. */}
+                <div className="mt-1 inline-flex overflow-hidden rounded-md border text-xs">
+                  {(["Home", "Office"] as const).map((opt) => {
+                    const active = (claim.placeOfService ?? "Home") === opt;
+                    return (
+                      <button
+                        key={opt}
+                        type="button"
+                        onClick={() => void handlePosChange(opt)}
+                        disabled={posBusy}
+                        className={cn(
+                          "px-3 py-1 transition-colors disabled:opacity-50",
+                          active
+                            ? "bg-foreground text-background font-medium"
+                            : "bg-background text-foreground hover:bg-muted",
+                        )}
+                        aria-pressed={active}
+                      >
+                        {opt}{" "}
+                        <span className={cn(
+                          "ml-0.5 font-mono",
+                          active ? "opacity-80" : "opacity-50",
+                        )}>
+                          {opt === "Home" ? "12" : "11"}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </div>
