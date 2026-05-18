@@ -17,7 +17,8 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { MOCK_CLAIMS as MOCK_CLAIMS_FALLBACK } from "@/lib/claims/mockData";
-import { useAllClaims } from "@/hooks/useAllClaims";
+import { useAllClaims, ALL_CLAIMS_QUERY_KEY } from "@/hooks/useAllClaims";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
 import { hasMondayToken } from "@/api/monday";
 import { LoadingOverlay } from "@/components/claims/LoadingOverlay";
@@ -384,6 +385,10 @@ const Claims = () => {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [expandedThread, setExpandedThread] = useState<string | null>(null);
   const { claims: threadClaims } = useThreadClaims();
+  // Direct cache access — needed for the poll-while-processing loop
+  // below. invalidate + refetchQueries on the shared key forces a
+  // fresh fetch and notifies every subscriber including this page.
+  const queryClient = useQueryClient();
 
   // Real claims from Monday (the Primary Board's data source). Fall back to
   // mock data when no Monday token is configured so local dev still works.
@@ -510,18 +515,26 @@ const Claims = () => {
     });
   }, [claimStatusById]);
 
-  // While anything is processing, re-fire the Monday refetch every 3s
-  // so we don't have to wait for React Query's default staleTime to
-  // notice the status flip on the Claims Board. The poll stops once
-  // the processing dict empties.
+  // While anything is processing, re-fire the Monday refetch every 3s.
+  // We use queryClient.invalidateQueries + refetchQueries instead of
+  // refetchClaims() directly because:
+  //   (a) invalidate marks the cache stale so any other subscriber
+  //       (e.g. ClaimDetail mounted elsewhere) also re-fetches
+  //   (b) refetchQueries bypasses React Query's structural-sharing
+  //       optimization that can return the same object reference when
+  //       it thinks data is unchanged — that was leaving claimStatusById
+  //       pointing at the old status dict so the cleanup useEffect
+  //       didn't re-run.
   const anyProcessing = Object.keys(markPaidProcessing).length > 0;
   useEffect(() => {
     if (!anyProcessing) return;
-    const id = window.setInterval(() => {
-      void refetchClaims();
-    }, 3000);
+    const tick = () => {
+      void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
+      void queryClient.refetchQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
+    };
+    const id = window.setInterval(tick, 3000);
     return () => window.clearInterval(id);
-  }, [anyProcessing, refetchClaims]);
+  }, [anyProcessing, queryClient]);
 
   // Send to Denial — row-level button on the ERA Review bucket. Calls the
   // backend which flips Primary Status to "Denied (Or Partly)" AND writes
