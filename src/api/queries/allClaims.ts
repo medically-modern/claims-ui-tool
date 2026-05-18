@@ -149,6 +149,9 @@ interface MondayItem {
   id: string;
   name: string;
   created_at: string;
+  /** Monday group containing this item. We read group.id so the frontend
+   *  can filter on it (e.g. exclude Medicaid Outstanding from ERA Review). */
+  group?: { id: string; title?: string } | null;
   column_values: MondayColumnValue[];
   subitems: MondaySubitem[] | null;
 }
@@ -179,6 +182,7 @@ const PAGE_QUERY = `
           id
           name
           created_at
+          group { id title }
           column_values(ids: [${PARENT_COLUMN_IDS}]) {
             id
             text
@@ -458,6 +462,7 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     parentClaimItemId: txt(item, COL.PARENT_CLAIM_ID) || null,
     claimType: mapClaimType(txt(item, COL.CLAIM_TYPE)),
     placeOfService: mapPlaceOfService(txt(item, COL.PLACE_OF_SERVICE)),
+    groupId: item.group?.id ?? null,
     activity: [],
     lines,
   };

@@ -175,6 +175,10 @@ export interface Claim {
    *  Null when the column is blank on Monday; the backend defaults to 12
    *  in that case so historical rows behave like before the column existed. */
   placeOfService?: "Home" | "Office" | null;
+  /** Monday group id this item sits in (e.g. group_mm332zns for Medicaid
+   *  Outstanding). Used by bucket filters that need to exclude or include
+   *  rows based on group placement, not just Primary Status. */
+  groupId?: string | null;
   activity?: ActivityEntry[];
   lines: ServiceLine[];
 }

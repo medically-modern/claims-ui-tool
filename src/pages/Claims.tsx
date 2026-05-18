@@ -113,9 +113,21 @@ type BoardKey = "primary" | "secondary" | "cashflow" | "playbook";
 type ModeKey = "submit" | "review";
 type CategoryKey = "era" | "late" | "denied" | "outstanding" | "paid" | "all";
 
+// Medicaid Outstanding group (= "Paid but didn't hit bank yet"). Claims
+// living here have been pre-filled with projected eMedNY values on 837
+// submission (Primary Paid + Primary Paid Date) but have NO real ERA
+// yet — the operator shouldn't review them until the actual 835 lands
+// and overwrites the projection with real numbers.
+const MEDICAID_OUTSTANDING_GROUP_ID = "group_mm332zns";
+
 function inEraReview(c: Claim) {
   // Replaced parents drop out — the child carries any active review.
   if (c.hasChildren) return false;
+  // Skip Medicaid pre-fills sitting in Medicaid Outstanding. They look
+  // like ERA Review (status=Review + primaryPaid>0 + primaryPaidDate set)
+  // because the pre-fill writes those projected values, but there's
+  // nothing for the operator to review until the real ERA arrives.
+  if (c.groupId === MEDICAID_OUTSTANDING_GROUP_ID) return false;
   return eraReceived(c) && c.primaryStatus === "Review";
 }
 
