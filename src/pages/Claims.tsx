@@ -463,6 +463,19 @@ const Claims = () => {
 
   function startMarkPaidProcessing(claimId: string) {
     setMarkPaidProcessing((p) => ({ ...p, [claimId]: true }));
+    // Safety net — 45s hard timeout. If Monday's response cache or
+    // anything else upstream is holding stale "Review" status past
+    // the normal propagation window, drop the spinner so the operator
+    // can move on. The claim is almost certainly already Paid on
+    // Monday by this point; refresh the page to confirm.
+    window.setTimeout(() => {
+      setMarkPaidProcessing((p) => {
+        if (!p[claimId]) return p;
+        const next = { ...p };
+        delete next[claimId];
+        return next;
+      });
+    }, 45000);
   }
 
   // Drop processing ids once the claim's Primary Status is no longer
