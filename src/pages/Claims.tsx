@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AppHeader } from "@/components/claims/AppHeader";
 import {
@@ -451,30 +451,53 @@ const Claims = () => {
   // Per-row "marking paid" state. After confirm fires, the backend
   // returns in ~1-2s but the Monday status propagation + our React Query
   // refetch take another few seconds before the row actually drops out
-  // of the ERA Review bucket. During that gap the row used to sit
-  // unchanged — operator couldn't tell whether they'd already clicked
-  // the row. This tracks the rows that are mid-processing so we can
-  // render a clear "Marking paid…" loading state inline until they're
-  // gone. Auto-cleared after a 12s safety timeout in case the refetch
-  // never removes the row (slow Monday propagation).
+  // of the ERA Review bucket. Operator needs continuous visual feedback
+  // ("we're still working on this") until the row actually disappears.
+  //
+  // Loading state is keyed off claim id and persists until the claim is
+  // no longer in the active list — useEffect below sweeps the dict each
+  // render to drop ids that have already left the load. So the spinner
+  // is gone exactly when the row is, never earlier.
   const [markPaidProcessing, setMarkPaidProcessing] = useState<Record<string, boolean>>({});
+
   function startMarkPaidProcessing(claimId: string) {
     setMarkPaidProcessing((p) => ({ ...p, [claimId]: true }));
-    // Fire follow-up refetches to catch slow Monday writes. The first
-    // refetch fires in confirmMarkPaidFromRow itself.
-    [3000, 6000, 9000].forEach((delay) => {
-      window.setTimeout(() => { void refetchClaims(); }, delay);
-    });
-    // Hard timeout — clear the processing flag after 12s even if the
-    // row hasn't dropped out, so it doesn't sit dimmed forever.
-    window.setTimeout(() => {
-      setMarkPaidProcessing((p) => {
-        const next = { ...p };
-        delete next[claimId];
-        return next;
-      });
-    }, 12000);
   }
+
+  // Drop processing ids whose claim is no longer present in the loaded
+  // claim set (i.e. the row has fallen out — refetch propagated). Runs
+  // after every claims update so the spinner clears precisely when the
+  // row goes away.
+  const liveClaimIds = useMemo(
+    () => new Set((mondayClaims ?? []).map((c) => c.id)),
+    [mondayClaims],
+  );
+  useEffect(() => {
+    setMarkPaidProcessing((p) => {
+      let dirty = false;
+      const next = { ...p };
+      for (const id of Object.keys(next)) {
+        if (!liveClaimIds.has(id)) {
+          delete next[id];
+          dirty = true;
+        }
+      }
+      return dirty ? next : p;
+    });
+  }, [liveClaimIds]);
+
+  // While anything is processing, re-fire the Monday refetch every 3s
+  // so we don't have to wait for React Query's default staleTime to
+  // notice the status flip on the Claims Board. The poll stops once
+  // the processing dict empties.
+  const anyProcessing = Object.keys(markPaidProcessing).length > 0;
+  useEffect(() => {
+    if (!anyProcessing) return;
+    const id = window.setInterval(() => {
+      void refetchClaims();
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, [anyProcessing, refetchClaims]);
 
   // Send to Denial — row-level button on the ERA Review bucket. Calls the
   // backend which flips Primary Status to "Denied (Or Partly)" AND writes
