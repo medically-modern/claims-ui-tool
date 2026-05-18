@@ -126,6 +126,23 @@ export function isForwardedByPrimary(
   return /forwarded to secondary/i.test(rawEraClaimStatus || "");
 }
 
+/**
+ * True when the ERA file that produced this row contained a Reversal CLP
+ * (X12 CLP-02 = 22 "Reversal of Previous Payment" or 17 "Payment Reversed")
+ * paired with the reissue. The backend tags the final raw_era_claim_status
+ * with "(Reversal in ERA)" — see process_era_content in stedi_webhook.py.
+ *
+ * Operator-visible signal: a Reversal pill on the row tells them this
+ * claim isn't a clean automated paid — payer flipped the original
+ * decision. Worth investigating before treating as cleanly paid; in some
+ * cases the net effect ends up being a denial after the dust settles.
+ */
+export function hasReversalInEra(
+  rawEraClaimStatus: string | null | undefined,
+): boolean {
+  return /reversal/i.test(rawEraClaimStatus || "");
+}
+
 export function predictSubmissionType(
   primaryPayor: string | null | undefined,
   secondaryPayer: string | null | undefined,

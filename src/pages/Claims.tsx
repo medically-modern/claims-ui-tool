@@ -31,6 +31,7 @@ import {
   markPrimaryPaid as apiMarkPrimaryPaid,
   isMarkPaidConfigured,
   isForwardedByPrimary,
+  hasReversalInEra,
   MarkPaidError,
   secondaryItemUrl,
   summarizeSecondary,
@@ -1206,6 +1207,7 @@ const Claims = () => {
                                     );
                                   case "pr": {
                                     const forwarded = isForwardedByPrimary(c.rawEraClaimStatus);
+                                    const reversal = hasReversalInEra(c.rawEraClaimStatus);
                                     return (
                                       <TableCell
                                         key={col}
@@ -1226,6 +1228,27 @@ const Claims = () => {
                                               <TooltipContent>
                                                 Primary forwarded to secondary
                                                 ({c.rawEraClaimStatus})
+                                              </TooltipContent>
+                                            </Tooltip>
+                                          )}
+                                          {reversal && (
+                                            // Reversal pill — backend tagged this row's
+                                            // raw_era_claim_status with "(Reversal in
+                                            // ERA)" because the 835 carried a Reversal
+                                            // CLP (status 22 or 17) paired with the
+                                            // reissue for the same PCN. Operator should
+                                            // investigate before treating as cleanly
+                                            // paid; some cases net out as denials.
+                                            <Tooltip>
+                                              <TooltipTrigger asChild>
+                                                <span className="inline-flex h-5 items-center rounded-md bg-amber-100 px-1.5 text-[10px] font-medium uppercase tracking-wide text-amber-800 cursor-help">
+                                                  Reversal
+                                                </span>
+                                              </TooltipTrigger>
+                                              <TooltipContent className="max-w-xs">
+                                                ERA contained a Reversal CLP. Payer flipped
+                                                an earlier decision on this claim — verify
+                                                the net cash effect before marking paid.
                                               </TooltipContent>
                                             </Tooltip>
                                           )}
