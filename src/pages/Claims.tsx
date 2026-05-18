@@ -295,11 +295,21 @@ function inOutstanding(c: Claim) {
   // Open primary work that isn't already in ERA Review / Late ERAs / Denials
   if (c.hasChildren) return false;
   if (c.primaryStatus === "Paid" || c.primaryStatus === "Bad Debt") return false;
+  // Medicaid Outstanding ("Paid but didn't hit bank yet") rows have
+  // status=Review (auto pre-fill) but there's nothing for the operator
+  // to act on — they're just waiting on the eMedNY EFT to land. Route
+  // them to Paid instead so they don't pile up in Outstanding.
+  if (c.groupId === MEDICAID_OUTSTANDING_GROUP_ID) return false;
   if (inEraReview(c) || inLateEra(c) || inDenied(c)) return false;
   return true;
 }
 function inPaid(c: Claim) {
-  return c.primaryStatus === "Paid";
+  if (c.primaryStatus === "Paid") return true;
+  // Medicaid pre-fill rows sit in group_mm332zns awaiting the EFT —
+  // visually grouped under Paid since the primary's done its job. The
+  // Cash Flow tile tracks the timing separately via primaryPaidDate.
+  if (c.groupId === MEDICAID_OUTSTANDING_GROUP_ID) return true;
+  return false;
 }
 function inAllOpen(c: Claim) {
   return c.primaryStatus !== "Paid" && c.primaryStatus !== "Bad Debt";
