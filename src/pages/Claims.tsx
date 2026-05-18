@@ -448,6 +448,34 @@ const Claims = () => {
   const [markPaidTarget, setMarkPaidTarget] = useState<Claim | null>(null);
   const [markPaidBusy, setMarkPaidBusy] = useState(false);
 
+  // Per-row "marking paid" state. After confirm fires, the backend
+  // returns in ~1-2s but the Monday status propagation + our React Query
+  // refetch take another few seconds before the row actually drops out
+  // of the ERA Review bucket. During that gap the row used to sit
+  // unchanged — operator couldn't tell whether they'd already clicked
+  // the row. This tracks the rows that are mid-processing so we can
+  // render a clear "Marking paid…" loading state inline until they're
+  // gone. Auto-cleared after a 12s safety timeout in case the refetch
+  // never removes the row (slow Monday propagation).
+  const [markPaidProcessing, setMarkPaidProcessing] = useState<Record<string, boolean>>({});
+  function startMarkPaidProcessing(claimId: string) {
+    setMarkPaidProcessing((p) => ({ ...p, [claimId]: true }));
+    // Fire follow-up refetches to catch slow Monday writes. The first
+    // refetch fires in confirmMarkPaidFromRow itself.
+    [3000, 6000, 9000].forEach((delay) => {
+      window.setTimeout(() => { void refetchClaims(); }, delay);
+    });
+    // Hard timeout — clear the processing flag after 12s even if the
+    // row hasn't dropped out, so it doesn't sit dimmed forever.
+    window.setTimeout(() => {
+      setMarkPaidProcessing((p) => {
+        const next = { ...p };
+        delete next[claimId];
+        return next;
+      });
+    }, 12000);
+  }
+
   // Send to Denial — row-level button on the ERA Review bucket. Calls the
   // backend which flips Primary Status to "Denied (Or Partly)" AND writes
   // the Subscription Board's Primary Claim Paid? column to Denied (when
@@ -498,6 +526,13 @@ const Claims = () => {
     try {
       const result = await apiMarkPrimaryPaid(target.mondayItemId);
       setMarkPaidTarget(null);
+
+      // Flip the row into the inline "Marking paid…" loading state.
+      // The dialog closes; the row stays visible but dimmed with a
+      // spinner until it drops out of the bucket on the next refetch.
+      // startMarkPaidProcessing also fires follow-up refetches at 3s,
+      // 6s, 9s to catch slow Monday propagation.
+      startMarkPaidProcessing(target.id);
 
       // Backend returns in ~1-2s after the Primary Status flip; the
       // secondary spawn + Subscription sync run as a Railway background
@@ -859,9 +894,19 @@ const Claims = () => {
                           }
                           const age = claimAge(c);
                           const detail = statusChecks[c.id];
+                          const isMarkingPaid = !!markPaidProcessing[c.id];
                           return (
                             <Fragment key={c.id}>
-                            <TableRow className={cn(cls, "hover:bg-muted/40")}>
+                            <TableRow
+                              className={cn(
+                                cls,
+                                "hover:bg-muted/40",
+                                // Dim + pulse the row while the mark-paid
+                                // write propagates through Monday + refetch.
+                                isMarkingPaid && "opacity-60 animate-pulse pointer-events-none",
+                              )}
+                              aria-busy={isMarkingPaid || undefined}
+                            >
                               {columns.map((col) => {
                                 switch (col) {
                                   case "patient": {
@@ -1183,6 +1228,20 @@ const Claims = () => {
                                     return <TableCell key={col} className="text-sm">{fmtDate(c.nextActionDate)}</TableCell>;
                                   case "action":
                                     if (category === "era") {
+                                      // Inline "Marking paid…" status replaces the action
+                                      // buttons while the backend write + Monday propagation
+                                      // settle. Operator sees a clear processing signal
+                                      // instead of staring at an unchanged row for 5-10s.
+                                      if (isMarkingPaid) {
+                                        return (
+                                          <TableCell key={col} className="text-right">
+                                            <span className="inline-flex items-center gap-1.5 rounded-md bg-success-soft px-3 py-1.5 text-xs font-medium text-success-soft-foreground">
+                                              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                              Marking paid…
+                                            </span>
+                                          </TableCell>
+                                        );
+                                      }
                                       return (
                                         <TableCell key={col} className="text-right">
                                           <TooltipProvider delayDuration={150}>
