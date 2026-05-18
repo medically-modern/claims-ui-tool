@@ -464,27 +464,37 @@ const Claims = () => {
     setMarkPaidProcessing((p) => ({ ...p, [claimId]: true }));
   }
 
-  // Drop processing ids whose claim is no longer present in the loaded
-  // claim set (i.e. the row has fallen out — refetch propagated). Runs
-  // after every claims update so the spinner clears precisely when the
-  // row goes away.
-  const liveClaimIds = useMemo(
-    () => new Set((mondayClaims ?? []).map((c) => c.id)),
-    [mondayClaims],
-  );
+  // Drop processing ids once the claim's Primary Status is no longer
+  // "Review" — i.e. Mark Paid actually took effect on Monday and our
+  // refetch has noticed. We can't key off "claim disappeared from the
+  // list" because fetchAllClaims returns every claim regardless of
+  // status; only the bucket filter (inEraReview) hides it.
+  //
+  // Status set that ends Mark Paid processing: anything that's NOT
+  // Review. Paid is the happy path; Denied / Bad Debt / Review-flipped-
+  // back-by-the-operator all count as "done processing" too.
+  const claimStatusById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of mondayClaims ?? []) m.set(c.id, c.primaryStatus);
+    return m;
+  }, [mondayClaims]);
   useEffect(() => {
     setMarkPaidProcessing((p) => {
       let dirty = false;
       const next = { ...p };
       for (const id of Object.keys(next)) {
-        if (!liveClaimIds.has(id)) {
+        const status = claimStatusById.get(id);
+        // Status === undefined means the claim is fully gone from the
+        // load (rare but possible — also clear). Otherwise clear when
+        // Mark Paid landed and the row is no longer in Review.
+        if (status === undefined || status !== "Review") {
           delete next[id];
           dirty = true;
         }
       }
       return dirty ? next : p;
     });
-  }, [liveClaimIds]);
+  }, [claimStatusById]);
 
   // While anything is processing, re-fire the Monday refetch every 3s
   // so we don't have to wait for React Query's default staleTime to
