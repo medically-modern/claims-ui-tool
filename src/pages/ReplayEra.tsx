@@ -471,7 +471,12 @@ export default function ReplayEra() {
 
               {result.results.length > 0 && (
                 <div className="rounded-md border">
-                  <div className="grid grid-cols-[1fr_1fr_0.8fr_0.8fr_1fr_1fr] items-center gap-2 border-b bg-muted/40 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
+                  {/* 7-col grid: Patient | PCN | Status | Paid | PR | Route | Outcome.
+                      Patient column added so the result table mirrors the
+                      preview — operator can recognize who got written
+                      without cross-referencing the PCN against the preview. */}
+                  <div className="grid grid-cols-[1fr_1fr_1fr_0.8fr_0.8fr_0.8fr_1.2fr] items-center gap-2 border-b bg-muted/40 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
+                    <span>Patient</span>
                     <span>PCN</span>
                     <span>Status</span>
                     <span className="text-right">Paid</span>
@@ -482,8 +487,11 @@ export default function ReplayEra() {
                   {result.results.map((r, i) => (
                     <div
                       key={`${r.pcn}-${i}`}
-                      className="grid grid-cols-[1fr_1fr_0.8fr_0.8fr_1fr_1fr] items-center gap-2 border-b px-3 py-2 text-xs last:border-b-0"
+                      className="grid grid-cols-[1fr_1fr_1fr_0.8fr_0.8fr_0.8fr_1.2fr] items-center gap-2 border-b px-3 py-2 text-xs last:border-b-0"
                     >
+                      <span className="truncate font-medium" title={r.patient_name}>
+                        {r.patient_name || <span className="text-muted-foreground">—</span>}
+                      </span>
                       <span className="font-mono">{r.pcn || "—"}</span>
                       <span className="truncate" title={r.claim_status}>{r.claim_status || "—"}</span>
                       <span className="text-right tabular-nums">{r.primary_paid || "—"}</span>
