@@ -46,6 +46,7 @@ import {
   priorityOf, shortIssue, variance,
 } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
+import { sendToDenial, isSendToDenialConfigured, SendToDenialError } from "@/api/sendToDenial";
 import {
   AlertTriangle, ArrowRight, Check, Clock, FileJson, FileSearch, MoreHorizontal, RefreshCw, Search, Send, Wallet, XCircle,
 } from "lucide-react";
@@ -446,6 +447,39 @@ const Claims = () => {
   // which claim is being confirmed and whether the request is in flight.
   const [markPaidTarget, setMarkPaidTarget] = useState<Claim | null>(null);
   const [markPaidBusy, setMarkPaidBusy] = useState(false);
+
+  // Send to Denial — row-level button on the ERA Review bucket. Calls the
+  // backend which flips Primary Status to "Denied (Or Partly)" AND writes
+  // the Subscription Board's Primary Claim Paid? column to Denied (when
+  // every line paid $0) or Partial (at least one line paid > 0).
+  // Tracks the in-flight row so the icon can disable while writing.
+  const [sendDenialBusy, setSendDenialBusy] = useState<Record<string, boolean>>({});
+  async function sendToDenialForRow(c: Claim) {
+    if (sendDenialBusy[c.id]) return;
+    if (!isSendToDenialConfigured()) {
+      toast({
+        title: "Send to Denial not configured",
+        description: "VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+      });
+      return;
+    }
+    setSendDenialBusy((p) => ({ ...p, [c.id]: true }));
+    try {
+      const res = await sendToDenial(c.mondayItemId);
+      toast({
+        title: `Sent to Denial: ${c.patientName}`,
+        description:
+          `Primary status flipped. Subscription marked ${res.denial_label}` +
+          (res.subscription_synced ? "." : " (subscription sync warning — check Railway logs)."),
+      });
+      void refetchClaims();
+    } catch (e) {
+      const msg = e instanceof SendToDenialError ? e.message : (e as Error).message;
+      toast({ title: "Couldn't send to denial", description: msg });
+    } finally {
+      setSendDenialBusy((p) => ({ ...p, [c.id]: false }));
+    }
+  }
 
   async function confirmMarkPaidFromRow() {
     const target = markPaidTarget;
@@ -1170,14 +1204,20 @@ const Claims = () => {
                                                 <TooltipTrigger asChild>
                                                   <button
                                                     type="button"
-                                                    aria-label="Mark denied or partial"
-                                                    onClick={() => toast({ title: "Marked Denied / Partial", description: c.patientName })}
-                                                    className="grid h-9 w-9 place-items-center rounded-md bg-danger-soft text-danger-soft-foreground hover:bg-danger hover:text-danger-foreground transition-colors shadow-sm"
+                                                    aria-label="Send to Denial"
+                                                    onClick={() => void sendToDenialForRow(c)}
+                                                    disabled={!!sendDenialBusy[c.id]}
+                                                    className={cn(
+                                                      "grid h-9 w-9 place-items-center rounded-md bg-danger-soft text-danger-soft-foreground hover:bg-danger hover:text-danger-foreground transition-colors shadow-sm",
+                                                      sendDenialBusy[c.id] && "opacity-60",
+                                                    )}
                                                   >
-                                                    <XCircle className="h-4 w-4" />
+                                                    {sendDenialBusy[c.id]
+                                                      ? <RefreshCw className="h-4 w-4 animate-spin" />
+                                                      : <XCircle className="h-4 w-4" />}
                                                   </button>
                                                 </TooltipTrigger>
-                                                <TooltipContent>Mark denied / partial</TooltipContent>
+                                                <TooltipContent>Send to Denial</TooltipContent>
                                               </Tooltip>
                                               <Tooltip>
                                                 <TooltipTrigger asChild>

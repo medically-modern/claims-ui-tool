@@ -45,6 +45,9 @@ export default function ReplayEra() {
   const [result, setResult] = useState<ReplayEraResult | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Drag-and-drop state — true while a file is hovering over the drop
+  // zone. Drives the highlight + "drop to load" affordance.
+  const [dragOver, setDragOver] = useState(false);
 
   // Detect payload type — text starts with ISA = raw X12 .835, otherwise
   // assume JSON. Drives the validation path + the label shown next to
@@ -222,10 +225,42 @@ export default function ReplayEra() {
           </AlertDescription>
         </Alert>
 
-        <Card>
+        <Card
+          // Drop zone — operators can drag a .835 / .json file straight
+          // onto the card instead of clicking the Upload button. Same
+          // handleFileSelected handler kicks in.
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            if (!dragOver) setDragOver(true);
+          }}
+          onDragLeave={(e) => {
+            // Only clear when leaving the card entirely; child element
+            // drags fire a dragleave on the parent too.
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+              setDragOver(false);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) void handleFileSelected(f);
+          }}
+          className={
+            dragOver
+              ? "ring-2 ring-info ring-offset-2 transition-shadow"
+              : "transition-shadow"
+          }
+        >
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <FileJson className="h-4 w-4" /> ERA Payload
+              {dragOver && (
+                <span className="ml-2 rounded bg-info-soft px-2 py-0.5 text-xs font-semibold uppercase text-info-soft-foreground">
+                  Drop to load
+                </span>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -269,7 +304,7 @@ export default function ReplayEra() {
               <span className="text-xs text-muted-foreground">
                 {uploadedFilename
                   ? <>Loaded: <span className="font-mono">{uploadedFilename}</span></>
-                  : "or paste payload below"}
+                  : "drag and drop a file anywhere on this card, or paste below"}
               </span>
               {payload && (
                 <span className={
