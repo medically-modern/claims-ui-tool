@@ -6,37 +6,79 @@
 // uses. Matched claims land in ERA Review just like an automated ERA;
 // unmatched rows surface in the result panel for debugging.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AppHeader } from "@/components/claims/AppHeader";
-import { ArrowLeft, FileJson, Send } from "lucide-react";
+import { ArrowLeft, FileJson, Send, Upload } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import {
   replayEra, isReplayEraConfigured, ReplayEraError,
   type ReplayEraResult,
 } from "@/api/replayEra";
 
+/** True when a payload looks like raw X12 (.835 file content), not JSON.
+ *  Real 835 files always start with the ISA segment after whitespace
+ *  trim. Backend uses the same detector — keeping them in sync.  */
+function looksLikeX12(text: string): boolean {
+  return text.trimStart().startsWith("ISA");
+}
+
 export default function ReplayEra() {
-  const [json, setJson] = useState("");
+  const [payload, setPayload] = useState("");
+  const [uploadedFilename, setUploadedFilename] = useState<string | null>(null);
   const [transactionId, setTransactionId] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ReplayEraResult | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  function validateJson(text: string): unknown | null {
+  // Detect payload type — text starts with ISA = raw X12 .835, otherwise
+  // assume JSON. Drives the validation path + the label shown next to
+  // the textarea so the operator knows what they're working with.
+  const isX12 = payload.trim().length > 0 && looksLikeX12(payload);
+
+  function validatePayload(text: string): { mode: "x12" | "json"; data: unknown } | null {
     if (!text.trim()) {
-      setParseError("Paste an 835 JSON payload first.");
+      setParseError("Paste an 835 payload or upload a .835 file first.");
       return null;
     }
+    if (looksLikeX12(text)) {
+      // Backend's parse_era_from_string detects ISA-prefixed payloads and
+      // converts X12 → typed JSON internally. We just pass the raw text.
+      return { mode: "x12", data: text };
+    }
     try {
-      return JSON.parse(text);
+      return { mode: "json", data: JSON.parse(text) };
     } catch (e) {
-      setParseError(`Invalid JSON: ${(e as Error).message}`);
+      setParseError(
+        `Doesn't look like X12 (no leading ISA) and JSON.parse failed: ${(e as Error).message}`,
+      );
       return null;
+    }
+  }
+
+  async function handleFileSelected(file: File) {
+    try {
+      const text = await file.text();
+      setPayload(text);
+      setUploadedFilename(file.name);
+      setParseError(null);
+      setResult(null);
+      toast({
+        title: `Loaded ${file.name}`,
+        description: `${(text.length / 1024).toFixed(1)} KB · ${
+          looksLikeX12(text) ? "X12 .835 detected" : "treated as JSON"
+        }`,
+      });
+    } catch (e) {
+      toast({
+        title: "Couldn't read file",
+        description: (e as Error).message,
+      });
     }
   }
 
@@ -53,12 +95,12 @@ export default function ReplayEra() {
       return;
     }
 
-    const parsed = validateJson(json);
-    if (parsed === null) return;
+    const v = validatePayload(payload);
+    if (!v) return;
 
     setBusy(true);
     try {
-      const res = await replayEra(parsed, {
+      const res = await replayEra(v.data, {
         transactionId: transactionId.trim() || undefined,
       });
       setResult(res);
@@ -92,10 +134,11 @@ export default function ReplayEra() {
 
         <Alert>
           <AlertDescription>
-            Paste the raw 835 JSON below. Same writeback path as the live
-            Stedi webhook — matched claims land in ERA Review. Use when an
-            ERA arrived at Stedi but the webhook didn't fire on our side,
-            or when re-processing an older payload by hand.
+            Upload a raw <code className="font-mono">.835</code> file OR paste
+            the 835 payload (JSON or X12 text) below. Same writeback path as
+            the live Stedi webhook — matched claims land in ERA Review. Use
+            when an ERA arrived at Stedi but the webhook didn't fire on our
+            side, or when re-processing an older payload by hand.
           </AlertDescription>
         </Alert>
 
@@ -118,10 +161,60 @@ export default function ReplayEra() {
                 className="h-8 flex-1 rounded border px-2 text-sm"
               />
             </div>
+
+            {/* File upload row. Hidden native input, button triggers it.
+                Accepts .835 (X12 text) and .json for completeness; users
+                often have both shapes lying around. */}
+            <div className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".835,.txt,.json,application/json,text/plain"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleFileSelected(f);
+                  // reset so the same file can be re-picked if needed
+                  e.target.value = "";
+                }}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Upload className="mr-1 h-4 w-4" /> Upload .835 file
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {uploadedFilename
+                  ? <>Loaded: <span className="font-mono">{uploadedFilename}</span></>
+                  : "or paste payload below"}
+              </span>
+              {payload && (
+                <span className={
+                  isX12
+                    ? "ml-auto rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-900"
+                    : "ml-auto rounded bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-blue-900"
+                }>
+                  {isX12 ? "X12 detected" : "JSON detected"}
+                </span>
+              )}
+            </div>
+
             <Textarea
-              value={json}
-              onChange={(e) => setJson(e.target.value)}
-              placeholder='Paste 835 JSON here. Supports Stedi X12-typed (heading/detail), classic Stedi SDK (transactions[]), or flat single-claim format.'
+              value={payload}
+              onChange={(e) => {
+                setPayload(e.target.value);
+                // Typing into the textarea invalidates the prior file
+                // attribution. Keeps the label honest.
+                if (uploadedFilename) setUploadedFilename(null);
+              }}
+              placeholder={
+                "Paste raw X12 (.835 starts with `ISA*…~`) or 835 JSON " +
+                "(X12-typed heading/detail, Stedi SDK transactions[], or " +
+                "flat single-claim)."
+              }
               className="min-h-[400px] font-mono text-xs"
             />
             {parseError && (
