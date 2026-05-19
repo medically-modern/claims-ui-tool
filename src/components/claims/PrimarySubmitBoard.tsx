@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -340,6 +340,75 @@ function ClaimCard({
     });
   };
 
+  // Debounce text/number cell writes so Monday updates within ~500ms
+  // of the last keystroke instead of waiting for blur. Keyed by a
+  // string (e.g. "auth-<subitemId>") so concurrent edits on different
+  // cells don't trample each other. flushTimer cancels any pending
+  // write for the same key — used by blur handlers so leaving the
+  // input commits immediately rather than waiting out the debounce.
+  const writeTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
+  useEffect(() => {
+    // Cleanup on unmount: clear pending timers so we don't fire a
+    // write after the component is gone (causes a stale-state warning
+    // and serves no purpose).
+    const timers = writeTimers.current;
+    return () => {
+      timers.forEach((t) => clearTimeout(t));
+      timers.clear();
+    };
+  }, []);
+  const scheduleWrite = (key: string, fn: () => void, ms = 500) => {
+    const existing = writeTimers.current.get(key);
+    if (existing) clearTimeout(existing);
+    writeTimers.current.set(
+      key,
+      setTimeout(() => {
+        writeTimers.current.delete(key);
+        fn();
+      }, ms),
+    );
+  };
+  const flushWrite = (key: string, fn: () => void) => {
+    const existing = writeTimers.current.get(key);
+    if (existing) clearTimeout(existing);
+    writeTimers.current.delete(key);
+    fn();
+  };
+
+  // Auth ID write helper. Used by both the debounced onChange and the
+  // blur flush. Trims the new value, rebuilds the parent concat from
+  // all subitems (deduped), and fires the subitem + parent writes in
+  // parallel. No revert path — by the time a debounced write resolves,
+  // the local state has already moved on, so reverting would only
+  // re-introduce the failed value briefly. Failures still surface as
+  // a toast via writeWithRevert.
+  const writeAuth = (subitem: ThreadItem, rawValue: string) => {
+    const trimmed = rawValue.trim();
+    const parentConcat = Array.from(
+      new Set(
+        c.items
+          .map((x) => (x.id === subitem.id ? trimmed : (x.auth_id ?? "")))
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+    ).join(", ");
+    const subitemWrite = setClaimSubitemText(
+      subitem.id, CLAIM_SUBITEM_COL.auth_id, trimmed,
+    );
+    const parentWrite = c.monday_item_id
+      ? setClaimParentText(
+          c.monday_item_id, CLAIM_PARENT_COL.auth, parentConcat,
+        )
+      : Promise.resolve();
+    writeWithRevert(
+      Promise.all([subitemWrite, parentWrite]).then(() => {}),
+      () => { /* no-op — see comment above */ },
+      "Auth ID",
+    );
+  };
+
   // 9 grid cells: Patient | Payer | Member ID | DOS | Dx | POS | Type | Submit (col-span-2)
   // POS sits between Dx and Type per the operator's preferred read order.
   const gridCols =
@@ -396,19 +465,38 @@ function ClaimCard({
           <Input
             value={c.patient.member_id}
             disabled={isLocked}
-            onChange={(e) => onUpdate({ patient: { ...c.patient, member_id: e.target.value } })}
-            // onBlur to avoid hammering Monday on every keystroke. The
-            // operator's done editing when focus leaves the cell.
+            onChange={(e) => {
+              const next = e.target.value;
+              const prev = c.patient.member_id;
+              onUpdate({ patient: { ...c.patient, member_id: next } });
+              if (!c.monday_item_id) return;
+              scheduleWrite(`member-${c.id}`, () => {
+                writeWithRevert(
+                  setClaimParentText(
+                    c.monday_item_id!, CLAIM_PARENT_COL.member_id, next,
+                  ),
+                  () => onUpdate({ patient: { ...c.patient, member_id: prev } }),
+                  "Member ID",
+                );
+              });
+            }}
+            // Blur flushes immediately — covers the click-Submit-right-
+            // after-typing case where the debounced timer hasn't fired
+            // yet. The scheduleWrite is cancelled inside flushWrite so
+            // we don't double-write.
             onBlur={(e) => {
               const next = e.target.value;
               if (!c.monday_item_id) return;
-              if (next === c.patient.member_id && next !== "") return;
               const prev = c.patient.member_id;
-              writeWithRevert(
-                setClaimParentText(c.monday_item_id, CLAIM_PARENT_COL.member_id, next),
-                () => onUpdate({ patient: { ...c.patient, member_id: prev } }),
-                "Member ID",
-              );
+              flushWrite(`member-${c.id}`, () => {
+                writeWithRevert(
+                  setClaimParentText(
+                    c.monday_item_id!, CLAIM_PARENT_COL.member_id, next,
+                  ),
+                  () => onUpdate({ patient: { ...c.patient, member_id: prev } }),
+                  "Member ID",
+                );
+              });
             }}
             className="h-7 w-full text-xs md:text-xs"
           />
@@ -650,67 +738,50 @@ function ClaimCard({
               placeholder="—"
               disabled={isLocked}
               value={i.auth_id ?? ""}
-              onChange={(e) => onUpdateItem(i.id, { auth_id: e.target.value })}
-              // On blur, write the subitem's Auth ID AND rewrite the parent's
-              // concatenated Authorization field so the 837 builder picks up
-              // the latest set when the operator hits Submit. Two writes go
-              // in parallel; either failing reverts the local value.
-              onBlur={(e) => {
-                const next = e.target.value.trim();
-                if (!canPersist) return;
-                const prevSubitem = i.auth_id;
-                if (next === (prevSubitem ?? "")) return;
-
-                // Build the new parent concat from all of this claim's
-                // subitems, using `next` for the row being edited. Dedupe
-                // identical values so a single auth covering every line
-                // doesn't show up three times; join with ", " for board
-                // readability.
-                const parentConcat = Array.from(
-                  new Set(
-                    c.items
-                      .map((it) => (it.id === i.id ? next : (it.auth_id ?? "")))
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  ),
-                ).join(", ");
-
-                // Optimistic local state for the subitem only — the parent
-                // auth field isn't shown on this row, so we don't need to
-                // mirror it in ThreadClaim state.
+              onChange={(e) => {
+                const next = e.target.value;
                 onUpdateItem(i.id, { auth_id: next });
-
-                const subitemWrite = setClaimSubitemText(
-                  i.id, CLAIM_SUBITEM_COL.auth_id, next,
-                );
-                const parentWrite = c.monday_item_id
-                  ? setClaimParentText(
-                      c.monday_item_id, CLAIM_PARENT_COL.auth, parentConcat,
-                    )
-                  : Promise.resolve();
-
-                writeWithRevert(
-                  Promise.all([subitemWrite, parentWrite]).then(() => {}),
-                  () => onUpdateItem(i.id, { auth_id: prevSubitem }),
-                  "Auth ID",
-                );
+                if (!canPersist) return;
+                scheduleWrite(`auth-${i.id}`, () => writeAuth(i, next));
+              }}
+              // Blur flushes any pending debounce immediately so click-
+              // Submit-right-after-typing doesn't race the Monday write.
+              onBlur={(e) => {
+                const next = e.target.value;
+                if (!canPersist) return;
+                flushWrite(`auth-${i.id}`, () => writeAuth(i, next));
               }}
             />
             <Input
               type="number"
               value={i.qty}
               disabled={isLocked}
-              onChange={(e) => onUpdateItem(i.id, { qty: Number(e.target.value) })}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                onUpdateItem(i.id, { qty: next });
+                if (!canPersist) return;
+                scheduleWrite(`qty-${i.id}`, () => {
+                  writeWithRevert(
+                    setClaimSubitemNumber(
+                      i.id, CLAIM_SUBITEM_COL.claim_quantity, next,
+                    ),
+                    () => { /* see writeAuth comment */ },
+                    "Qty",
+                  );
+                });
+              }}
               onBlur={(e) => {
                 const next = Number(e.target.value);
                 if (!canPersist) return;
-                if (next === i.qty) return;
-                const prev = i.qty;
-                writeWithRevert(
-                  setClaimSubitemNumber(i.id, CLAIM_SUBITEM_COL.claim_quantity, next),
-                  () => onUpdateItem(i.id, { qty: prev }),
-                  "Qty",
-                );
+                flushWrite(`qty-${i.id}`, () => {
+                  writeWithRevert(
+                    setClaimSubitemNumber(
+                      i.id, CLAIM_SUBITEM_COL.claim_quantity, next,
+                    ),
+                    () => {},
+                    "Qty",
+                  );
+                });
               }}
               className="h-7 w-full text-xs md:text-xs"
             />
@@ -720,17 +791,32 @@ function ClaimCard({
                 type="number"
                 value={i.charge}
                 disabled={isLocked}
-                onChange={(e) => onUpdateItem(i.id, { charge: Number(e.target.value) })}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  onUpdateItem(i.id, { charge: next });
+                  if (!canPersist) return;
+                  scheduleWrite(`charge-${i.id}`, () => {
+                    writeWithRevert(
+                      setClaimSubitemNumber(
+                        i.id, CLAIM_SUBITEM_COL.charge_amount, next,
+                      ),
+                      () => {},
+                      "Charge",
+                    );
+                  });
+                }}
                 onBlur={(e) => {
                   const next = Number(e.target.value);
                   if (!canPersist) return;
-                  if (next === i.charge) return;
-                  const prev = i.charge;
-                  writeWithRevert(
-                    setClaimSubitemNumber(i.id, CLAIM_SUBITEM_COL.charge_amount, next),
-                    () => onUpdateItem(i.id, { charge: prev }),
-                    "Charge",
-                  );
+                  flushWrite(`charge-${i.id}`, () => {
+                    writeWithRevert(
+                      setClaimSubitemNumber(
+                        i.id, CLAIM_SUBITEM_COL.charge_amount, next,
+                      ),
+                      () => {},
+                      "Charge",
+                    );
+                  });
                 }}
                 className="h-7 w-full pl-5 text-xs md:text-xs"
               />
