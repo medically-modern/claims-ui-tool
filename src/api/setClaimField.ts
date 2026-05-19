@@ -1,0 +1,161 @@
+// Generic Monday column writers for the Claims Board (parent items and
+// subitems). Used by PrimarySubmitBoard and any other component that lets
+// the operator edit a cell — every UI edit fires through here so the
+// Monday board stays the source of truth and the backend's Submit flow
+// (which re-reads Monday at submission time) picks up the latest values.
+//
+// Design choices:
+//   - One function per kind (status / text / date / dropdown / numbers)
+//     keeps the JSON encoding shapes explicit at the call site rather
+//     than buried in a switch. The cell components already know what
+//     kind of column they're editing.
+//   - `create_labels_if_missing: true` on status / dropdown writes so a
+//     payer or diagnosis that isn't in Monday's option list yet auto-
+//     creates instead of failing. The Claims Board dropdowns evolve
+//     organically and we don't want a hard rejection from a missing
+//     option to block a submission.
+//   - Subitem writers target SUBITEMS_BOARD_ID; parent writers target
+//     CLAIMS_BOARD_ID. Both share the same mutation shape.
+//   - Synthetic subitem IDs (from addLine, e.g. "abc-L1234567890")
+//     should be filtered out by the caller — those subitems don't
+//     exist on Monday yet. The functions here will fail loudly if you
+//     pass one, on purpose.
+
+import { mondayQuery, CLAIMS_BOARD_ID, SUBITEMS_BOARD_ID } from "./monday";
+
+const CHANGE_MULTI = `
+  mutation ChangeMulti(
+    $itemId: ID!,
+    $boardId: ID!,
+    $columnValues: JSON!,
+    $createLabels: Boolean!
+  ) {
+    change_multiple_column_values(
+      item_id: $itemId,
+      board_id: $boardId,
+      column_values: $columnValues,
+      create_labels_if_missing: $createLabels
+    ) { id }
+  }
+`;
+
+async function writeOne(
+  boardId: number,
+  itemId: string,
+  columnId: string,
+  encodedValue: unknown,
+  createLabels: boolean,
+): Promise<void> {
+  await mondayQuery(CHANGE_MULTI, {
+    itemId,
+    boardId: String(boardId),
+    columnValues: JSON.stringify({ [columnId]: encodedValue }),
+    createLabels,
+  });
+}
+
+// ---------- Parent (Claims Board) writers ----------
+
+/** Status column write — value is the human label. Auto-creates the
+ *  label on Monday if it doesn't exist yet. */
+export function setClaimParentStatus(
+  itemId: string,
+  columnId: string,
+  label: string,
+): Promise<void> {
+  return writeOne(CLAIMS_BOARD_ID, itemId, columnId, { label }, true);
+}
+
+/** Text column write — plain string. Empty string is allowed and
+ *  clears the cell. */
+export function setClaimParentText(
+  itemId: string,
+  columnId: string,
+  text: string,
+): Promise<void> {
+  return writeOne(CLAIMS_BOARD_ID, itemId, columnId, text, false);
+}
+
+/** Date column write — YYYY-MM-DD. Empty string clears the cell. */
+export function setClaimParentDate(
+  itemId: string,
+  columnId: string,
+  isoDate: string,
+): Promise<void> {
+  const value = isoDate ? { date: isoDate } : {};
+  return writeOne(CLAIMS_BOARD_ID, itemId, columnId, value, false);
+}
+
+// ---------- Subitem (Claims Subitems Board) writers ----------
+
+/** Status column write on a subitem. */
+export function setClaimSubitemStatus(
+  subitemId: string,
+  columnId: string,
+  label: string,
+): Promise<void> {
+  return writeOne(SUBITEMS_BOARD_ID, subitemId, columnId, { label }, true);
+}
+
+/** Dropdown (multi-label) column write on a subitem. Empty array clears. */
+export function setClaimSubitemDropdown(
+  subitemId: string,
+  columnId: string,
+  labels: string[],
+): Promise<void> {
+  return writeOne(
+    SUBITEMS_BOARD_ID,
+    subitemId,
+    columnId,
+    { labels },
+    true,
+  );
+}
+
+/** Text column write on a subitem. */
+export function setClaimSubitemText(
+  subitemId: string,
+  columnId: string,
+  text: string,
+): Promise<void> {
+  return writeOne(SUBITEMS_BOARD_ID, subitemId, columnId, text, false);
+}
+
+/** Numeric column write on a subitem. Monday expects a stringified
+ *  number; empty string clears the cell. */
+export function setClaimSubitemNumber(
+  subitemId: string,
+  columnId: string,
+  n: number | "",
+): Promise<void> {
+  const value = n === "" ? "" : String(n);
+  return writeOne(SUBITEMS_BOARD_ID, subitemId, columnId, value, false);
+}
+
+// ---------- Column IDs (parent + subitem) ----------
+//
+// Centralised here so cell components don't sprinkle Monday IDs through
+// their JSX. Keep in sync with MONDAY_BOARD_SCHEMA.md.
+
+export const CLAIM_PARENT_COL = {
+  primary_payor:   "color_mkxmhypt",
+  member_id:       "text_mktat89m",
+  dos:             "date_mkwr7spz",
+  diagnosis:       "color_mky2gpz5",
+  place_of_service:"color_mm3fk3qv",
+  claim_type:      "color_mm2nvk1p",
+} as const;
+
+export const CLAIM_SUBITEM_COL = {
+  hcpc_code:       "color_mm1cdvq8",
+  modifiers:       "dropdown_mm1z7je9",
+  auth_id:         "text_mm1z8nks",
+  claim_quantity:  "numeric_mm20r76b",
+  charge_amount:   "numeric_mm1za8v5",
+} as const;
+
+/** True when a ThreadItem.id looks like a real Monday subitem id (numeric)
+ *  rather than a synthetic id from addLine (which contains "-L"). */
+export function isMondaySubitemId(id: string): boolean {
+  return /^\d+$/.test(id);
+}

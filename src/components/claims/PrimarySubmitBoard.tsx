@@ -24,6 +24,18 @@ import { toast } from "@/hooks/use-toast";
 import { ThreadPanel, ThreadContextStrip } from "./ThreadPanel";
 import { setPlaceOfService } from "@/api/setPlaceOfService";
 import { setPrimaryStatus } from "@/api/setPrimaryStatus";
+import {
+  setClaimParentStatus,
+  setClaimParentText,
+  setClaimParentDate,
+  setClaimSubitemStatus,
+  setClaimSubitemDropdown,
+  setClaimSubitemText,
+  setClaimSubitemNumber,
+  CLAIM_PARENT_COL,
+  CLAIM_SUBITEM_COL,
+  isMondaySubitemId,
+} from "@/api/setClaimField";
 
 type QueueKey = "new" | "resubmit";
 type SortKey = "payor" | "dos";
@@ -274,6 +286,24 @@ function ClaimCard({
 }) {
   const dosDate = c.dos ? new Date(c.dos + "T00:00:00") : undefined;
 
+  // Shared optimistic-write pattern. Updates local state immediately,
+  // fires the Monday write in the background, reverts + toasts on
+  // failure. Same shape the existing POS handler used — generalised so
+  // every cell can follow it.
+  const writeWithRevert = (
+    promise: Promise<void>,
+    revert: () => void,
+    label: string,
+  ) => {
+    promise.catch((e) => {
+      revert();
+      toast({
+        title: `Couldn't save ${label} to Monday`,
+        description: (e as Error).message,
+      });
+    });
+  };
+
   // 9 grid cells: Patient | Payer | Member ID | DOS | Dx | POS | Type | Submit (col-span-2)
   // POS sits between Dx and Type per the operator's preferred read order.
   const gridCols =
@@ -299,7 +329,20 @@ function ClaimCard({
         </Field>
 
         <Field label="Payor" className={cellCls}>
-          <Select value={c.payer} onValueChange={(v) => onUpdate({ payer: v })}>
+          <Select
+            value={c.payer}
+            onValueChange={(v) => {
+              const prev = c.payer;
+              onUpdate({ payer: v });
+              if (c.monday_item_id) {
+                writeWithRevert(
+                  setClaimParentStatus(c.monday_item_id, CLAIM_PARENT_COL.primary_payor, v),
+                  () => onUpdate({ payer: prev }),
+                  "Payor",
+                );
+              }
+            }}
+          >
             <SelectTrigger className={cn("h-7 w-full border-0 text-xs font-medium", NEUTRAL_TONE)}>
               <SelectValue />
             </SelectTrigger>
@@ -315,6 +358,19 @@ function ClaimCard({
           <Input
             value={c.patient.member_id}
             onChange={(e) => onUpdate({ patient: { ...c.patient, member_id: e.target.value } })}
+            // onBlur to avoid hammering Monday on every keystroke. The
+            // operator's done editing when focus leaves the cell.
+            onBlur={(e) => {
+              const next = e.target.value;
+              if (!c.monday_item_id) return;
+              if (next === c.patient.member_id && next !== "") return;
+              const prev = c.patient.member_id;
+              writeWithRevert(
+                setClaimParentText(c.monday_item_id, CLAIM_PARENT_COL.member_id, next),
+                () => onUpdate({ patient: { ...c.patient, member_id: prev } }),
+                "Member ID",
+              );
+            }}
             className="h-7 w-full text-xs md:text-xs"
           />
         </Field>
@@ -331,7 +387,18 @@ function ClaimCard({
               <Calendar
                 mode="single"
                 selected={dosDate}
-                onSelect={(d) => onUpdate({ dos: d ? d.toISOString().slice(0, 10) : "" })}
+                onSelect={(d) => {
+                  const next = d ? d.toISOString().slice(0, 10) : "";
+                  const prev = c.dos;
+                  onUpdate({ dos: next });
+                  if (c.monday_item_id) {
+                    writeWithRevert(
+                      setClaimParentDate(c.monday_item_id, CLAIM_PARENT_COL.dos, next),
+                      () => onUpdate({ dos: prev }),
+                      "DOS",
+                    );
+                  }
+                }}
                 initialFocus
                 className={cn("p-3 pointer-events-auto")}
               />
@@ -342,7 +409,17 @@ function ClaimCard({
         <Field label="Dx" className={cellCls}>
           <Select
             value={c.diagnosis ?? DIAGNOSIS_OPTIONS[0]}
-            onValueChange={(v) => onUpdate({ diagnosis: v })}
+            onValueChange={(v) => {
+              const prev = c.diagnosis ?? DIAGNOSIS_OPTIONS[0];
+              onUpdate({ diagnosis: v });
+              if (c.monday_item_id) {
+                writeWithRevert(
+                  setClaimParentStatus(c.monday_item_id, CLAIM_PARENT_COL.diagnosis, v),
+                  () => onUpdate({ diagnosis: prev }),
+                  "Diagnosis",
+                );
+              }
+            }}
           >
             <SelectTrigger className={cn("h-7 w-full border-0 text-xs font-medium", NEUTRAL_TONE)}>
               <SelectValue />
@@ -391,7 +468,21 @@ function ClaimCard({
 
         <Field label="Type" className={cellCls}>
           {isResubmit ? (
-            <Select value={c.type} onValueChange={(v) => onUpdate({ type: v as ThreadClaimType })}>
+            <Select
+              value={c.type}
+              onValueChange={(v) => {
+                const prev = c.type;
+                const next = v as ThreadClaimType;
+                onUpdate({ type: next });
+                if (c.monday_item_id) {
+                  writeWithRevert(
+                    setClaimParentStatus(c.monday_item_id, CLAIM_PARENT_COL.claim_type, next),
+                    () => onUpdate({ type: prev }),
+                    "Claim Type",
+                  );
+                }
+              }}
+            >
               <SelectTrigger className={cn("h-7 w-full border-0 text-xs font-medium", NEUTRAL_TONE)}>
                 <SelectValue />
               </SelectTrigger>
@@ -441,7 +532,12 @@ function ClaimCard({
           <div />
         </div>
 
-        {c.items.map((i) => (
+        {c.items.map((i) => {
+          // Only items loaded from Monday have a real (numeric) id. Items
+          // added locally via addLine carry a synthetic "<claimId>-L<ts>" id
+          // and have no Monday backing yet — skip writes for those.
+          const canPersist = isMondaySubitemId(i.id);
+          return (
           <div key={i.id} className={cn(gridCols, "border-b px-3 py-1.5 hover:bg-muted/20 !items-center")}>
             <Input
               value={productForHcpc(i.hcpc)}
@@ -449,7 +545,20 @@ function ClaimCard({
               readOnly
               className="h-7 w-full border-0 bg-transparent px-1 text-[11px] font-normal text-muted-foreground focus-visible:bg-background"
             />
-            <Select value={i.hcpc} onValueChange={(v) => onUpdateItem(i.id, { hcpc: v })}>
+            <Select
+              value={i.hcpc}
+              onValueChange={(v) => {
+                const prev = i.hcpc;
+                onUpdateItem(i.id, { hcpc: v });
+                if (canPersist) {
+                  writeWithRevert(
+                    setClaimSubitemStatus(i.id, CLAIM_SUBITEM_COL.hcpc_code, v),
+                    () => onUpdateItem(i.id, { hcpc: prev }),
+                    "HCPC",
+                  );
+                }
+              }}
+            >
               <SelectTrigger className={cn("h-7 w-full border-0 text-xs font-semibold", NEUTRAL_TONE)}>
                 <SelectValue />
               </SelectTrigger>
@@ -461,13 +570,49 @@ function ClaimCard({
             </Select>
             <ModifierMultiSelect
               value={i.modifiers}
-              onChange={(v) => onUpdateItem(i.id, { modifiers: v })}
+              onChange={(v) => {
+                const prev = i.modifiers;
+                onUpdateItem(i.id, { modifiers: v });
+                if (canPersist) {
+                  writeWithRevert(
+                    setClaimSubitemDropdown(i.id, CLAIM_SUBITEM_COL.modifiers, v),
+                    () => onUpdateItem(i.id, { modifiers: prev }),
+                    "Modifiers",
+                  );
+                }
+              }}
             />
-            <Input className="h-7 w-full text-xs md:text-xs" placeholder="—" />
+            <Input
+              className="h-7 w-full text-xs md:text-xs"
+              placeholder="—"
+              // Auth ID isn't tracked in ThreadItem yet, so we can't
+              // round-trip an optimistic update. Just blind-write on
+              // blur — failures surface in a toast.
+              onBlur={(e) => {
+                const next = e.target.value.trim();
+                if (!canPersist || !next) return;
+                writeWithRevert(
+                  setClaimSubitemText(i.id, CLAIM_SUBITEM_COL.auth_id, next),
+                  () => { /* no local state to revert */ },
+                  "Auth ID",
+                );
+              }}
+            />
             <Input
               type="number"
               value={i.qty}
               onChange={(e) => onUpdateItem(i.id, { qty: Number(e.target.value) })}
+              onBlur={(e) => {
+                const next = Number(e.target.value);
+                if (!canPersist) return;
+                if (next === i.qty) return;
+                const prev = i.qty;
+                writeWithRevert(
+                  setClaimSubitemNumber(i.id, CLAIM_SUBITEM_COL.claim_quantity, next),
+                  () => onUpdateItem(i.id, { qty: prev }),
+                  "Qty",
+                );
+              }}
               className="h-7 w-full text-xs md:text-xs"
             />
             <div className="relative w-full">
@@ -476,6 +621,17 @@ function ClaimCard({
                 type="number"
                 value={i.charge}
                 onChange={(e) => onUpdateItem(i.id, { charge: Number(e.target.value) })}
+                onBlur={(e) => {
+                  const next = Number(e.target.value);
+                  if (!canPersist) return;
+                  if (next === i.charge) return;
+                  const prev = i.charge;
+                  writeWithRevert(
+                    setClaimSubitemNumber(i.id, CLAIM_SUBITEM_COL.charge_amount, next),
+                    () => onUpdateItem(i.id, { charge: prev }),
+                    "Charge",
+                  );
+                }}
                 className="h-7 w-full pl-5 text-xs md:text-xs"
               />
             </div>
@@ -497,7 +653,8 @@ function ClaimCard({
               </Button>
             )}
           </div>
-        ))}
+          );
+        })}
 
         {!isLocked && (
           <div className="px-3 py-1.5">
