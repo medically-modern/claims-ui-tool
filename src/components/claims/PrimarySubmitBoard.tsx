@@ -345,6 +345,7 @@ function ClaimCard({
           <Input
             value={c.patient.name}
             onChange={(e) => onUpdate({ patient: { ...c.patient, name: e.target.value } })}
+            disabled={isLocked}
             className="h-7 w-full border-0 bg-transparent px-1 text-xs font-semibold focus-visible:bg-background"
           />
         </Field>
@@ -352,6 +353,7 @@ function ClaimCard({
         <Field label="Payor" className={cellCls}>
           <Select
             value={c.payer}
+            disabled={isLocked}
             onValueChange={(v) => {
               const prev = c.payer;
               onUpdate({ payer: v });
@@ -378,6 +380,7 @@ function ClaimCard({
         <Field label="Member ID" className={cellCls}>
           <Input
             value={c.patient.member_id}
+            disabled={isLocked}
             onChange={(e) => onUpdate({ patient: { ...c.patient, member_id: e.target.value } })}
             // onBlur to avoid hammering Monday on every keystroke. The
             // operator's done editing when focus leaves the cell.
@@ -399,7 +402,11 @@ function ClaimCard({
         <Field label="DOS" className={cellCls}>
           <Popover>
             <PopoverTrigger asChild>
-              <Button variant="outline" className="h-7 w-full justify-start px-2 text-xs font-normal">
+              <Button
+                variant="outline"
+                disabled={isLocked}
+                className="h-7 w-full justify-start px-2 text-xs font-normal"
+              >
                 <CalendarIcon className="mr-1 h-3 w-3 shrink-0" />
                 <span className="truncate">{fmtDate(c.dos) || "Pick date"}</span>
               </Button>
@@ -430,6 +437,7 @@ function ClaimCard({
         <Field label="Dx" className={cellCls}>
           <Select
             value={c.diagnosis ?? DIAGNOSIS_OPTIONS[0]}
+            disabled={isLocked}
             onValueChange={(v) => {
               const prev = c.diagnosis ?? DIAGNOSIS_OPTIONS[0];
               onUpdate({ diagnosis: v });
@@ -458,6 +466,7 @@ function ClaimCard({
         <Field label="POS" className={cellCls}>
           <Select
             value={c.place_of_service ?? "Home"}
+            disabled={isLocked}
             onValueChange={(v) => {
               const next = v as "Home" | "Office";
               // Optimistic local update first so the select snaps to the
@@ -491,6 +500,7 @@ function ClaimCard({
           {isResubmit ? (
             <Select
               value={c.type}
+              disabled={isLocked}
               onValueChange={(v) => {
                 const prev = c.type;
                 const next = v as ThreadClaimType;
@@ -521,7 +531,7 @@ function ClaimCard({
 
         <div className="col-span-2 flex justify-end">
           {c.status === "Submitted" ? (
-            <Status277Badge value={c.status277} />
+            <Status277Badge value={c.status277} requestRejected={c.request_rejected} />
           ) : (
             /*
               Live submit. Click → setPrimaryStatus(itemId, "Submitted") on
@@ -572,6 +582,7 @@ function ClaimCard({
             />
             <Select
               value={i.hcpc}
+              disabled={isLocked}
               onValueChange={(v) => {
                 const prev = i.hcpc;
                 onUpdateItem(i.id, { hcpc: v });
@@ -595,6 +606,7 @@ function ClaimCard({
             </Select>
             <ModifierMultiSelect
               value={i.modifiers}
+              disabled={isLocked}
               onChange={(v) => {
                 const prev = i.modifiers;
                 onUpdateItem(i.id, { modifiers: v });
@@ -610,6 +622,7 @@ function ClaimCard({
             <Input
               className="h-7 w-full text-xs md:text-xs"
               placeholder="—"
+              disabled={isLocked}
               // Auth ID isn't tracked in ThreadItem yet, so we can't
               // round-trip an optimistic update. Just blind-write on
               // blur — failures surface in a toast.
@@ -626,6 +639,7 @@ function ClaimCard({
             <Input
               type="number"
               value={i.qty}
+              disabled={isLocked}
               onChange={(e) => onUpdateItem(i.id, { qty: Number(e.target.value) })}
               onBlur={(e) => {
                 const next = Number(e.target.value);
@@ -645,6 +659,7 @@ function ClaimCard({
               <Input
                 type="number"
                 value={i.charge}
+                disabled={isLocked}
                 onChange={(e) => onUpdateItem(i.id, { charge: Number(e.target.value) })}
                 onBlur={(e) => {
                   const next = Number(e.target.value);
@@ -699,16 +714,28 @@ function ClaimCard({
   );
 }
 
-function Status277Badge({ value }: { value?: ThreadClaim["status277"] }) {
-  // Inline-mapped colours so this stays self-contained. The four 277
-  // outcomes plus "no 277 yet" each get a visually-distinct chip in
-  // place of the Submit button on the Awaiting Acceptance tab.
+function Status277Badge({
+  value,
+  requestRejected,
+}: {
+  value?: ThreadClaim["status277"];
+  requestRejected?: boolean;
+}) {
+  // Display priority:
+  //   1. Request Rejected (primary status) — the 837 never made it
+  //      out the door, so 277 doesn't apply yet. Show that first.
+  //   2. Status277 from the 277 acknowledgment.
+  //   3. "None" — submitted but no 277 received yet (and not Request
+  //      Rejected at the Stedi/Primary level either).
+  // "Payer Accepted" graduates out of this tab before render — we
+  // keep it in the switch only for completeness of the type union.
   const { label, classes } =
-    value === "Payer Accepted"  ? { label: "Payer Accepted",  classes: "bg-emerald-100 text-emerald-800 border-emerald-200" }
-    : value === "Stedi Accepted" ? { label: "Stedi Accepted",  classes: "bg-amber-100 text-amber-800 border-amber-200" }
-    : value === "Payer Rejected" ? { label: "Payer Rejected",  classes: "bg-rose-100 text-rose-800 border-rose-200" }
-    : value === "Stedi Rejected" ? { label: "Stedi Rejected",  classes: "bg-rose-100 text-rose-800 border-rose-200" }
-    : { label: "No 277 yet", classes: "bg-muted text-muted-foreground border-muted-foreground/20" };
+    requestRejected           ? { label: "Request Rejected", classes: "bg-rose-100 text-rose-800 border-rose-200" }
+    : value === "Payer Accepted"  ? { label: "Payer Accepted",   classes: "bg-emerald-100 text-emerald-800 border-emerald-200" }
+    : value === "Stedi Accepted"  ? { label: "Stedi Accepted",   classes: "bg-amber-100 text-amber-800 border-amber-200" }
+    : value === "Payer Rejected"  ? { label: "Payer Rejected",   classes: "bg-rose-100 text-rose-800 border-rose-200" }
+    : value === "Stedi Rejected"  ? { label: "Stedi Rejected",   classes: "bg-rose-100 text-rose-800 border-rose-200" }
+    : { label: "None", classes: "bg-muted text-muted-foreground border-muted-foreground/20" };
   return (
     <span
       className={cn(
@@ -730,7 +757,15 @@ function Field({ label, children, className }: { label: string; children: React.
   );
 }
 
-function ModifierMultiSelect({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+function ModifierMultiSelect({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+  disabled?: boolean;
+}) {
   const toggle = (m: string) =>
     onChange(value.includes(m) ? value.filter((x) => x !== m) : [...value, m]);
   const remove = (m: string) => onChange(value.filter((x) => x !== m));
@@ -747,7 +782,14 @@ function ModifierMultiSelect({ value, onChange }: { value: string[]; onChange: (
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button className="inline-flex h-7 min-w-[5rem] flex-wrap items-center gap-1 rounded border border-input bg-background px-1.5 text-xs hover:bg-accent">
+        <button
+          type="button"
+          disabled={disabled}
+          className={cn(
+            "inline-flex h-7 min-w-[5rem] flex-wrap items-center gap-1 rounded border border-input bg-background px-1.5 text-xs hover:bg-accent",
+            disabled && "cursor-not-allowed opacity-50 hover:bg-background",
+          )}
+        >
           {value.length === 0 ? (
             <span className="px-1 text-muted-foreground">—</span>
           ) : (
@@ -757,10 +799,12 @@ function ModifierMultiSelect({ value, onChange }: { value: string[]; onChange: (
                 className="inline-flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-foreground"
               >
                 {m}
-                <X
-                  className="h-2.5 w-2.5 cursor-pointer opacity-60 hover:opacity-100"
-                  onClick={(e) => { e.stopPropagation(); remove(m); }}
-                />
+                {!disabled && (
+                  <X
+                    className="h-2.5 w-2.5 cursor-pointer opacity-60 hover:opacity-100"
+                    onClick={(e) => { e.stopPropagation(); remove(m); }}
+                  />
+                )}
               </span>
             ))
           )}

@@ -65,6 +65,12 @@ export interface ThreadClaim {
     | "Stedi Accepted"
     | "Payer Rejected"
     | "Stedi Rejected";
+  /** True when the Primary Status (color_mkxmywtb) was set to
+   *  "Request rejected" — the 837 never made it to the payer (for
+   *  example, future DOS, structural validation failure). Shown
+   *  alongside the 277 statuses in the Awaiting Acceptance tab so
+   *  these stuck claims surface for operator attention. */
+  request_rejected?: boolean;
   items: ThreadItem[];
   notes?: string;
   createdAt: number;

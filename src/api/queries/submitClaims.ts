@@ -60,6 +60,10 @@ const SUBMIT_CLAIM_LABEL_INDEX = 6;
 // to exclude rows already at status277="Payer Accepted" (which graduate to
 // the main Claims page's Outstanding/ERA-Review buckets).
 const SUBMITTED_LABEL_INDEX = 2;
+// "Request rejected" — the 837 never reached the payer (future DOS,
+// structural validation error, etc.). Surfaces in Awaiting Acceptance
+// so the operator can fix the row and resubmit, instead of disappearing.
+const REQUEST_REJECTED_LABEL_INDEX = 9;
 
 interface MondayColumnValue {
   id: string;
@@ -102,7 +106,7 @@ const QUERY = `
         limit: 200
         query_params: {
           rules: [
-            { column_id: "${COL.PRIMARY_STATUS}", compare_value: [${SUBMIT_CLAIM_LABEL_INDEX}, ${SUBMITTED_LABEL_INDEX}], operator: any_of }
+            { column_id: "${COL.PRIMARY_STATUS}", compare_value: [${SUBMIT_CLAIM_LABEL_INDEX}, ${SUBMITTED_LABEL_INDEX}, ${REQUEST_REJECTED_LABEL_INDEX}], operator: any_of }
           ]
         }
       ) {
@@ -220,11 +224,17 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
   const parentClaimId = textOf(item, COL.PARENT_CLAIM_ID);
   const posLabel = textOf(item, COL.PLACE_OF_SERVICE);
   const primaryStatusLabel = textOf(item, COL.PRIMARY_STATUS).trim();
-  // Map Primary Status -> ThreadClaimStatus. The query already filters
-  // to "Submit Claim" or "Submitted" — anything else here is a Monday
-  // data anomaly, default to Awaiting Submission to keep the row visible.
-  const claimStatus =
-    primaryStatusLabel === "Submitted" ? "Submitted" : "Awaiting Submission";
+  // Map Primary Status -> ThreadClaimStatus. The query filters to
+  // Submit Claim / Submitted / Request rejected (lowercase 'r' on
+  // Monday). The latter two share the "Submitted" bucket on the
+  // frontend so they all live in the Awaiting Acceptance tab; the
+  // request_rejected flag below distinguishes which.
+  const isRequestRejected =
+    primaryStatusLabel.toLowerCase() === "request rejected";
+  const claimStatus: "Awaiting Submission" | "Submitted" =
+    primaryStatusLabel === "Submitted" || isRequestRejected
+      ? "Submitted"
+      : "Awaiting Submission";
   return {
     id: textOf(item, COL.CLAIM_ID) || item.id, // prefer Claim ID column when set
     // Always carry the raw Monday item id separately so writes (status,
@@ -237,6 +247,7 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
       : undefined,
     status: claimStatus,
     status277: mapStatus277(textOf(item, COL.S277_STATUS)),
+    request_rejected: isRequestRejected || undefined,
     patient: {
       name: item.name,
       dob: textOf(item, COL.DOB),
