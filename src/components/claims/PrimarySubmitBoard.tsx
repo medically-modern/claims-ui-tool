@@ -51,7 +51,22 @@ const QUEUE_META: Record<QueueKey, { label: string; icon: React.ReactNode; descr
   awaiting: { label: "Awaiting Acceptance", icon: <Hourglass className="h-4 w-4" />, description: "Submitted to the payer (or Stedi) but no 'Payer Accepted' 277 yet. Stays here until the payer acknowledges, then graduates to Outstanding / ERA Review on the main Claims page." },
 };
 
-const DIAGNOSIS_OPTIONS = ["E10.65", "E11.9", "E10.9", "E11.65", "E10.40", "E11.40"];
+// Mirrored from Monday Claims Board column color_mky2gpz5 (33 labels).
+// Refresh via scripts/refresh-monday-schema.sh after any column edit.
+// Monday has a couple of label duplicates (e.g. "E10.649" appears at both
+// indices 17 and 106) — we dedupe via Set when rendering. The dropdown
+// already includes the row's active value at render time, so a code we
+// don't list still appears for the row it's on.
+const DIAGNOSIS_OPTIONS = [
+  "E08.43",
+  "E10.10", "E10.22", "E10.29", "E10.311", "E10.3393", "E10.3559",
+  "E10.40", "E10.42", "E10.649", "E10.65", "E10.69", "E10.8", "E10.9",
+  "E11.21", "E11.22", "E11.29", "E11.3292", "E11.40", "E11.42",
+  "E11.45", "E11.49", "E11.59", "E11.649", "E11.65", "E11.69",
+  "E11.8", "E11.9",
+  "E13.65", "E13.9",
+  "O24.111",
+];
 const PAYER_OPTIONS = [
   "Anthem BCBS Co.", "Aetna", "Fidelis Medicaid", "United Healthcare",
   "Cigna", "Humana", "Medicare", "Medicaid",
@@ -454,7 +469,18 @@ function ClaimCard({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {DIAGNOSIS_OPTIONS.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+              {Array.from(
+                new Set([
+                  ...DIAGNOSIS_OPTIONS,
+                  // If the row currently carries a code not in the canonical
+                  // list (e.g. board added a new label since our last schema
+                  // refresh, or a typo'd legacy value), include it so the
+                  // operator can still see + keep the existing selection.
+                  ...(c.diagnosis ? [c.diagnosis] : []),
+                ]),
+              ).map((d) => (
+                <SelectItem key={d} value={d}>{d}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </Field>
