@@ -26,8 +26,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { addProcessing as addMarkPaidProcessing } from "@/lib/markPaidProcessing";
 import { hasMondayToken } from "@/api/monday";
 import {
-  carcMeaning, claimAge, eraReceived, fmtDate, fmtMoney, lineStatus,
-  suggestedOutcome, variance, variancePretty,
+  carcMeaning, claimAge, effectivePr, eraReceived, fmtDate, fmtMoney,
+  lineStatus, suggestedOutcome, variance, variancePretty,
 } from "@/lib/claims/logic";
 import type {
   Claim, DenialAction, DenialAnalysis, ServiceLine,
@@ -802,7 +802,11 @@ const ClaimDetail = () => {
             sub={claim.primaryPaidDate ? `Paid ${fmtDate(claim.primaryPaidDate)}` : "Not paid yet"} />
           <SummaryStat
             label="Patient Responsibility"
-            value={fmtMoney(claim.prAmount)}
+            // Uses effectivePr (sums per-line deductible + coinsurance +
+            // copay) so the headline agrees with the line-item Difference
+            // column. The parent prAmount field on Monday is stale on
+            // many rows after an ERA writeback.
+            value={fmtMoney(effectivePr(claim))}
             sub={`Deductible ${fmtMoney(claim.lines.reduce((s, l) => s + l.deductible, 0))} · Coins ${fmtMoney(claim.lines.reduce((s, l) => s + l.coinsurance, 0))}`}
             badge={
               isForwardedByPrimary(claim.rawEraClaimStatus) ? (

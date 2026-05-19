@@ -49,10 +49,30 @@ export function eraReceived(claim: Claim): boolean {
   );
 }
 
+/**
+ * Effective Patient Responsibility — sum of deductible + coinsurance +
+ * copay across all service lines on the claim. The parent's prAmount
+ * field on Monday is denormalized and routinely lags the per-line ERA
+ * breakdown (e.g. an ERA writeback updates each line's coinsurance but
+ * not the parent's PR Amount column). The line totals are the source
+ * of truth from the 835; use them.
+ *
+ * Falls back to claim.prAmount when there are no line items (legacy /
+ * pre-ERA rows where only the parent column is populated).
+ */
+export function effectivePr(claim: Claim): number {
+  if (!claim.lines || claim.lines.length === 0) return claim.prAmount;
+  return claim.lines.reduce(
+    (sum, l) => sum + l.deductible + l.coinsurance + l.copay,
+    0,
+  );
+}
+
 export function variance(claim: Claim): number {
   // Variance = what's still missing after the primary paid AND the patient
-  // owes their share. estPay − primaryPaid − prAmount.
-  return claim.estPay - claim.primaryPaid - claim.prAmount;
+  // owes their share. estPay − primaryPaid − PR. PR uses effectivePr so
+  // the math agrees with the per-line Difference column on ClaimDetail.
+  return claim.estPay - claim.primaryPaid - effectivePr(claim);
 }
 
 export function variancePretty(claim: Claim): { label: string; tone: "balanced" | "short" | "over" } {
