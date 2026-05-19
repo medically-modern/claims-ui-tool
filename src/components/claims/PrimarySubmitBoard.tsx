@@ -645,73 +645,44 @@ function ClaimCard({
 
         <div className="col-span-2 flex justify-end">
           {c.status === "Submitted" ? (
-            // Any rejection state shows the same Move-to-Submit button
-            // with a tooltip carrying the rejection_reason from Monday.
-            // Three sources can land a row here:
-            //   - request_rejected=true  (backend never reached Stedi)
-            //   - status277="Stedi Rejected"
-            //   - status277="Payer Rejected"
-            // All three are recoverable by flipping Primary Status back
-            // to "Submit Claim" — the row unlocks, the operator fixes
-            // whatever the reason says, and resubmits.
+            // Three rejection states all share the same surface: a
+            // tooltip-bearing badge showing WHICH leg of the pipeline
+            // rejected, plus a refresh-icon button to flip Primary
+            // Status back to "Submit Claim" and unlock the row.
             //
-            // Non-rejection states (Submitted=no 277 yet, Stedi Accepted)
-            // still show the read-only badge.
+            //   - request_rejected=true   → "Request Rejected"
+            //   - status277="Stedi Rejected" → "Stedi Rejected"
+            //   - status277="Payer Rejected" → "Payer Rejected"
+            //
+            // Non-rejection states (Submitted-no-277-yet, Stedi Accepted)
+            // still show the read-only Status277Badge.
             (c.request_rejected
               || c.status277 === "Stedi Rejected"
               || c.status277 === "Payer Rejected") ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="sm"
-                    className="h-7 w-full border border-rose-200 bg-rose-100 text-rose-800 hover:bg-rose-200"
-                    onClick={() => {
-                      if (!c.monday_item_id) return;
-                      // Snapshot prior state for revert on failure.
-                      const prevStatus277 = c.status277;
-                      const prevRequestRejected = c.request_rejected;
-                      onUpdate({
-                        status: "Awaiting Submission",
-                        request_rejected: undefined,
-                        status277: undefined,
-                      });
-                      setPrimaryStatus(c.monday_item_id, "Submit Claim").catch((e) => {
-                        onUpdate({
-                          status: "Submitted",
-                          request_rejected: prevRequestRejected,
-                          status277: prevStatus277,
-                        });
-                        toast({
-                          title: "Couldn't move row back to Submit Claim",
-                          description: (e as Error).message,
-                        });
-                      });
-                    }}
-                  >
-                    <RefreshCw className="mr-1 h-3 w-3" />
-                    Move to Submit
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="left" className="max-w-sm whitespace-pre-wrap text-xs">
-                  {c.rejection_reason ? (
-                    <>
-                      <div className="font-semibold mb-0.5">
-                        {c.request_rejected
-                          ? "Request Rejected"
-                          : c.status277 === "Stedi Rejected"
-                          ? "Stedi Rejected"
-                          : "Payer Rejected"}
-                      </div>
-                      <div>{c.rejection_reason}</div>
-                    </>
-                  ) : (
-                    <div className="italic text-muted-foreground">
-                      No reason recorded — check the Monday Updates tab
-                      on this row for details.
-                    </div>
-                  )}
-                </TooltipContent>
-              </Tooltip>
+              <RejectionCell
+                claim={c}
+                onMoveToSubmit={() => {
+                  if (!c.monday_item_id) return;
+                  const prevStatus277 = c.status277;
+                  const prevRequestRejected = c.request_rejected;
+                  onUpdate({
+                    status: "Awaiting Submission",
+                    request_rejected: undefined,
+                    status277: undefined,
+                  });
+                  setPrimaryStatus(c.monday_item_id, "Submit Claim").catch((e) => {
+                    onUpdate({
+                      status: "Submitted",
+                      request_rejected: prevRequestRejected,
+                      status277: prevStatus277,
+                    });
+                    toast({
+                      title: "Couldn't move row back to Submit Claim",
+                      description: (e as Error).message,
+                    });
+                  });
+                }}
+              />
             ) : (
               <Status277Badge value={c.status277} requestRejected={false} />
             )
@@ -962,6 +933,84 @@ function Status277Badge({
     >
       {label}
     </span>
+  );
+}
+
+function RejectionCell({
+  claim,
+  onMoveToSubmit,
+}: {
+  claim: ThreadClaim;
+  onMoveToSubmit: () => void;
+}) {
+  // Pick the rejection label to display. request_rejected takes
+  // precedence — if the 837 never made it to Stedi, the 277 chain
+  // never started, so we don't want to show a stale Stedi/Payer
+  // status that might still be lingering on the row from a prior
+  // submission attempt.
+  const label =
+    claim.request_rejected               ? "Request Rejected"
+    : claim.status277 === "Stedi Rejected" ? "Stedi Rejected"
+    : claim.status277 === "Payer Rejected" ? "Payer Rejected"
+    : "Rejected";
+
+  return (
+    <div className="flex w-full items-center gap-1.5">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/*
+            Badge surface — shows the rejection type. Wrapped in a
+            tooltip so hovering reveals the full rejection_reason
+            from Monday (column text_mm1zsp2x). Falls back to a
+            "check the Updates tab" hint for rows that were rejected
+            before the backend started populating the column.
+          */}
+          <span
+            className={cn(
+              "inline-flex h-7 flex-1 cursor-help items-center justify-center rounded-md border px-2 text-xs font-medium",
+              "border-rose-200 bg-rose-100 text-rose-800",
+            )}
+          >
+            {label}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="left" className="max-w-sm whitespace-pre-wrap text-xs">
+          {claim.rejection_reason ? (
+            <>
+              <div className="mb-0.5 font-semibold">{label}</div>
+              <div>{claim.rejection_reason}</div>
+            </>
+          ) : (
+            <div className="italic text-muted-foreground">
+              No reason recorded yet for this rejection — check the
+              Updates tab on this row in Monday for details.
+            </div>
+          )}
+        </TooltipContent>
+      </Tooltip>
+      {/*
+        Action button — refresh icon only to keep the cell compact.
+        Tooltip clarifies what it does. Click flips Primary Status
+        back to "Submit Claim" so the row unlocks and re-appears in
+        the New Claims tab for editing + re-submission.
+      */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 w-7 shrink-0 p-0"
+            onClick={onMoveToSubmit}
+            aria-label="Move back to Submit Claim"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="left" className="text-xs">
+          Move back to Submit Claim
+        </TooltipContent>
+      </Tooltip>
+    </div>
   );
 }
 
