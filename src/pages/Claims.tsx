@@ -1182,6 +1182,25 @@ const Claims = () => {
                                               </Tooltip>
                                             );
                                             const runCheck = () => void runStatusCheckForRow(c);
+                                            // See-details button — gives the operator the same
+                                            // ClaimDetail entry point that Outstanding/Denied
+                                            // rows have. Without it, the only way to drill in
+                                            // from Late ERA is the patient-name link in the
+                                            // first column, which isn't obvious.
+                                            const detailsBtn = (
+                                              <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                  <Link
+                                                    to={`/claims/${c.id}`}
+                                                    aria-label="See details"
+                                                    className="grid h-7 w-7 place-items-center rounded-md bg-muted text-muted-foreground hover:bg-primary hover:text-primary-foreground transition-colors shadow-sm"
+                                                  >
+                                                    <ArrowRight className="h-3.5 w-3.5" />
+                                                  </Link>
+                                                </TooltipTrigger>
+                                                <TooltipContent>See details</TooltipContent>
+                                              </Tooltip>
+                                            );
                                             return (
                                               <TooltipProvider delayDuration={150}>
                                                 <div className="flex items-center gap-2">
@@ -1210,28 +1229,48 @@ const Claims = () => {
                                                     </div>
                                                   </div>
                                                   <div className="inline-flex items-center gap-1.5">
-                                                    {keepBtn}{denialBtn}
+                                                    {keepBtn}{denialBtn}{detailsBtn}
                                                   </div>
                                                 </div>
                                               </TooltipProvider>
                                             );
                                           })()
                                         ) : (
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            disabled={!!statusCheckBusy[c.id]}
-                                            onClick={() => void runStatusCheckForRow(c)}
-                                          >
-                                            {statusCheckBusy[c.id] ? (
-                                              <>
-                                                <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
-                                                Running
-                                              </>
-                                            ) : (
-                                              "Run Status Check"
-                                            )}
-                                          </Button>
+                                          // Two buttons: Run Status Check (the API action)
+                                          // and See Details (drill into ClaimDetail). Side-
+                                          // by-side keeps the row compact without losing the
+                                          // ClaimDetail entry point.
+                                          <TooltipProvider delayDuration={150}>
+                                            <div className="inline-flex items-center gap-2">
+                                              <Button
+                                                size="sm"
+                                                variant="outline"
+                                                disabled={!!statusCheckBusy[c.id]}
+                                                onClick={() => void runStatusCheckForRow(c)}
+                                              >
+                                                {statusCheckBusy[c.id] ? (
+                                                  <>
+                                                    <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                                    Running
+                                                  </>
+                                                ) : (
+                                                  "Run Status Check"
+                                                )}
+                                              </Button>
+                                              <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                  <Link
+                                                    to={`/claims/${c.id}`}
+                                                    aria-label="See details"
+                                                    className="grid h-9 w-9 place-items-center rounded-md bg-muted text-muted-foreground hover:bg-primary hover:text-primary-foreground transition-colors shadow-sm"
+                                                  >
+                                                    <ArrowRight className="h-4 w-4" />
+                                                  </Link>
+                                                </TooltipTrigger>
+                                                <TooltipContent>See details</TooltipContent>
+                                              </Tooltip>
+                                            </div>
+                                          </TooltipProvider>
                                         )}
                                       </TableCell>
                                     );
