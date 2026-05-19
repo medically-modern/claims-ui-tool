@@ -33,17 +33,17 @@ export function isPureMedicaid(payer: string | null | undefined): boolean {
 }
 
 /**
- * eMedNY payment cycle rule.
- * Reference: https://www.emedny.org/hipaa/news/PDFS/CYCLE_CALENDAR.pdf
+ * eMedNY payment cycle rule. Verified against eMedNY's official
+ * published cycle calendar (cycle 2543: end Wed 5/13/2026, check
+ * release Wed 6/3/2026):
  *
  *   EFT date = cycle_end_Wednesday + 21 days
  *
- * where cycle_end_Wednesday is the next Wednesday STRICTLY AFTER the
- * submission date. Claims sent ON a Wednesday roll into the FOLLOWING
- * Wednesday's cycle — eMedNY's batch cutoff is earlier in the day than
- * billing typically submits, so a Wed-day claim misses that day's run.
+ * where cycle_end_Wednesday is the next Wednesday ON OR AFTER the
+ * submission date. Claims sent ON a Wednesday stay in THAT day's
+ * cycle — they do not roll forward.
  *
- * Example: claim sent Wed 5/13 → cycle ends Wed 5/20 → EFT Wed 6/10.
+ * Example: claim sent Wed 5/13 → cycle ends 5/13 → EFT Wed 6/3.
  * Example: claim sent Mon 5/18 → cycle ends Wed 5/20 → EFT Wed 6/10.
  *
  * Mirrors the backend _emedny_pay_date in services/claims_submission_
@@ -51,11 +51,7 @@ export function isPureMedicaid(payer: string | null | undefined): boolean {
  */
 export function medicaidPaymentDate(sentDate: Date): Date {
   const dow = sentDate.getDay(); // 0=Sun, 3=Wed
-  let daysUntilWed = (3 - dow + 7) % 7;
-  if (daysUntilWed === 0) {
-    // Sent on a Wednesday → roll to next week's cycle.
-    daysUntilWed = 7;
-  }
+  const daysUntilWed = (3 - dow + 7) % 7;
   const cycleEnd = new Date(sentDate);
   cycleEnd.setDate(cycleEnd.getDate() + daysUntilWed);
   const eft = new Date(cycleEnd);
