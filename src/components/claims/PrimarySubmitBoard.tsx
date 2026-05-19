@@ -110,8 +110,25 @@ function fmtDate(iso: string): string {
   return d.toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" });
 }
 
+// Same-family HCPC aliases — different code, same product name. Aetna
+// uses A4231 instead of A4230 for infusion sets; Medicare uses A4225
+// instead of A4232 for cartridges; Medicare also uses A4224 for the
+// infusion-set line. Without these the row's Subitem label falls back
+// to the raw HCPC code, which is ugly and inconsistent with how the
+// other payer variants render. Keep this in sync with claim_assumptions.
+// _INFUSION_HCPCS / _CARTRIDGE_HCPCS sets on the backend.
+const HCPC_ALIAS_PRODUCT: Record<string, string> = {
+  A4224: "Infusion Set",
+  A4231: "Infusion Set",
+  A4225: "Cartridges",
+};
+
 function productForHcpc(hcpc: string) {
-  return PRODUCT_CATALOG.find((p) => p.hcpcs === hcpc)?.product ?? hcpc;
+  return (
+    HCPC_ALIAS_PRODUCT[hcpc]
+    ?? PRODUCT_CATALOG.find((p) => p.hcpcs === hcpc)?.product
+    ?? hcpc
+  );
 }
 
 export function PrimarySubmitBoard() {
