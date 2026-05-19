@@ -32,6 +32,8 @@ import {
   setClaimSubitemDropdown,
   setClaimSubitemText,
   setClaimSubitemNumber,
+  createClaimSubitem,
+  deleteClaimSubitem,
   CLAIM_PARENT_COL,
   CLAIM_SUBITEM_COL,
   isMondaySubitemId,
@@ -218,11 +220,25 @@ export function PrimarySubmitBoard() {
     }
   };
 
+  // Add a new subitem to a claim. Two writes happen in parallel:
+  //   1. Optimistic local insert with a synthetic id so the row renders
+  //      immediately (no spinner waiting on Monday).
+  //   2. Monday create_subitem + initial column writes (hcpc, modifiers,
+  //      qty, charge, est_pay) so the row exists when the operator hits
+  //      Submit. On success, the synthetic id is swapped for the real
+  //      Monday id via updateItem so any subsequent cell edits write
+  //      through to the right subitem.
+  // Failure path: remove the locally-added item + toast. Caller has no
+  // stale "added but not persisted" row sitting around.
   const addLine = (claimId: string, product: string) => {
     const cat = PRODUCT_CATALOG.find((p) => p.product === product);
     if (!cat) return;
+    const claim = claims.find((c) => c.id === claimId);
+    const mondayParentId = claim?.monday_item_id;
+
+    const syntheticId = `${claimId}-L${Date.now()}`;
     const item: ThreadItem = {
-      id: `${claimId}-L${Date.now()}`,
+      id: syntheticId,
       hcpc: cat.hcpcs,
       modifiers: [...cat.modifiers],
       qty: cat.units,
@@ -231,6 +247,46 @@ export function PrimarySubmitBoard() {
       status: "Pending",
     };
     addItem(claimId, item);
+
+    if (!mondayParentId) return;  // local-only claim, nothing to persist
+
+    void createClaimSubitem(mondayParentId, {
+      name: cat.product,
+      hcpc: cat.hcpcs,
+      modifiers: cat.modifiers,
+      qty: cat.units,
+      charge: cat.charge,
+      est_pay: cat.estPay,
+    }).then((realId) => {
+      // Swap synthetic id for the Monday-assigned id so future cell
+      // edits hit the right subitem (isMondaySubitemId guards cell-edit
+      // writes against synthetic ids).
+      updateItem(claimId, syntheticId, { id: realId });
+    }).catch((e) => {
+      removeItem(claimId, syntheticId);
+      toast({
+        title: `Couldn't add ${cat.product} on Monday`,
+        description: (e as Error).message,
+      });
+    });
+  };
+
+  // Delete a subitem from a claim. Local removal is immediate; Monday
+  // delete fires in the background for real subitems. Synthetic ids
+  // (locally-added items whose Monday create failed or hasn't landed
+  // yet) just disappear from local state — there's nothing on Monday
+  // to delete.
+  const handleRemoveItem = (claimId: string, itemId: string) => {
+    removeItem(claimId, itemId);
+    if (!isMondaySubitemId(itemId)) return;
+    void deleteClaimSubitem(itemId).catch((e) => {
+      toast({
+        title: "Couldn't delete line on Monday",
+        description:
+          (e as Error).message +
+          " — refresh to see the current Monday state.",
+      });
+    });
   };
 
   return (
@@ -314,7 +370,7 @@ export function PrimarySubmitBoard() {
               onUpdate={(patch) => updateClaim(c.id, patch)}
               onUpdateItem={(iid, patch) => updateItem(c.id, iid, patch)}
               onAddItem={(product) => addLine(c.id, product)}
-              onRemoveItem={(iid) => removeItem(c.id, iid)}
+              onRemoveItem={(iid) => handleRemoveItem(c.id, iid)}
               onSubmit={() => submitOne(c)}
             />
           ))}

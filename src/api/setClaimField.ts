@@ -166,3 +166,92 @@ export const CLAIM_SUBITEM_COL = {
 export function isMondaySubitemId(id: string): boolean {
   return /^\d+$/.test(id);
 }
+
+// ---------- Subitem structural mutations (create / delete) ----------
+//
+// Without these, the operator can use the "+ Add subitem" / trash icons
+// on PrimarySubmitBoard and think they're editing the claim — but the
+// changes never reach Monday, and the next Submit picks up the OLD
+// Monday state. These mutations close that gap: add fires create_subitem
+// + the initial column writes; delete fires delete_item.
+
+const CREATE_SUBITEM = `
+  mutation CreateSubitem($parentId: ID!, $itemName: String!) {
+    create_subitem(parent_item_id: $parentId, item_name: $itemName) {
+      id
+      board { id }
+    }
+  }
+`;
+
+const DELETE_ITEM = `
+  mutation DeleteItem($itemId: ID!) {
+    delete_item(item_id: $itemId) { id }
+  }
+`;
+
+/**
+ * Create a new subitem under the given Claims Board parent and set
+ * its starting field values in one call. Returns the new Monday
+ * subitem id so the caller can swap its synthetic local id.
+ *
+ * Why a single helper for create + initial fields: a freshly created
+ * subitem has blank HCPC / Modifiers / Qty / Charge, and Submit would
+ * read those blanks into the 837. Setting them up-front means the
+ * row is submission-ready the moment the operator clicks Add.
+ */
+export async function createClaimSubitem(
+  parentItemId: string,
+  args: {
+    name: string;
+    hcpc?: string;
+    modifiers?: string[];
+    qty?: number;
+    charge?: number;
+    est_pay?: number;
+  },
+): Promise<string> {
+  // 1) Create the subitem and get back its id + the subitem board id.
+  const created = await mondayQuery<{
+    create_subitem: { id: string; board: { id: string } };
+  }>(CREATE_SUBITEM, {
+    parentId: parentItemId,
+    itemName: args.name,
+  });
+  const subitemId = created.create_subitem.id;
+  const boardId = created.create_subitem.board.id;
+
+  // 2) Build the per-column values, omitting any that weren't passed.
+  // Mirrors the encoding the cell-edit writers use.
+  const columnValues: Record<string, unknown> = {};
+  if (args.hcpc) columnValues[CLAIM_SUBITEM_COL.hcpc_code] = { label: args.hcpc };
+  if (args.modifiers !== undefined) {
+    columnValues[CLAIM_SUBITEM_COL.modifiers] = { labels: args.modifiers };
+  }
+  if (args.qty !== undefined) {
+    columnValues[CLAIM_SUBITEM_COL.claim_quantity] = String(args.qty);
+  }
+  if (args.charge !== undefined) {
+    columnValues[CLAIM_SUBITEM_COL.charge_amount] = String(args.charge);
+  }
+  // Est. Pay column (only set if explicitly provided). Default to charge
+  // for parity with how backend spawns populate this field.
+  if (args.est_pay !== undefined) {
+    columnValues["numeric_mm1zspsy"] = String(args.est_pay);
+  }
+
+  if (Object.keys(columnValues).length > 0) {
+    await mondayQuery(CHANGE_MULTI, {
+      itemId: subitemId,
+      boardId,
+      columnValues: JSON.stringify(columnValues),
+      createLabels: true,
+    });
+  }
+  return subitemId;
+}
+
+/** Delete a Monday subitem (or any item). Used by the row's trash button. */
+export async function deleteClaimSubitem(subitemId: string): Promise<void> {
+  await mondayQuery(DELETE_ITEM, { itemId: subitemId });
+}
