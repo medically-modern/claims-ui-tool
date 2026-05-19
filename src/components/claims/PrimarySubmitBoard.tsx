@@ -649,15 +649,49 @@ function ClaimCard({
               className="h-7 w-full text-xs md:text-xs"
               placeholder="—"
               disabled={isLocked}
-              // Auth ID isn't tracked in ThreadItem yet, so we can't
-              // round-trip an optimistic update. Just blind-write on
-              // blur — failures surface in a toast.
+              value={i.auth_id ?? ""}
+              onChange={(e) => onUpdateItem(i.id, { auth_id: e.target.value })}
+              // On blur, write the subitem's Auth ID AND rewrite the parent's
+              // concatenated Authorization field so the 837 builder picks up
+              // the latest set when the operator hits Submit. Two writes go
+              // in parallel; either failing reverts the local value.
               onBlur={(e) => {
                 const next = e.target.value.trim();
-                if (!canPersist || !next) return;
+                if (!canPersist) return;
+                const prevSubitem = i.auth_id;
+                if (next === (prevSubitem ?? "")) return;
+
+                // Build the new parent concat from all of this claim's
+                // subitems, using `next` for the row being edited. Dedupe
+                // identical values so a single auth covering every line
+                // doesn't show up three times; join with ", " for board
+                // readability.
+                const parentConcat = Array.from(
+                  new Set(
+                    c.items
+                      .map((it) => (it.id === i.id ? next : (it.auth_id ?? "")))
+                      .map((s) => s.trim())
+                      .filter(Boolean),
+                  ),
+                ).join(", ");
+
+                // Optimistic local state for the subitem only — the parent
+                // auth field isn't shown on this row, so we don't need to
+                // mirror it in ThreadClaim state.
+                onUpdateItem(i.id, { auth_id: next });
+
+                const subitemWrite = setClaimSubitemText(
+                  i.id, CLAIM_SUBITEM_COL.auth_id, next,
+                );
+                const parentWrite = c.monday_item_id
+                  ? setClaimParentText(
+                      c.monday_item_id, CLAIM_PARENT_COL.auth, parentConcat,
+                    )
+                  : Promise.resolve();
+
                 writeWithRevert(
-                  setClaimSubitemText(i.id, CLAIM_SUBITEM_COL.auth_id, next),
-                  () => { /* no local state to revert */ },
+                  Promise.all([subitemWrite, parentWrite]).then(() => {}),
+                  () => onUpdateItem(i.id, { auth_id: prevSubitem }),
                   "Auth ID",
                 );
               }}

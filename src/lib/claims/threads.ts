@@ -23,6 +23,12 @@ export interface ThreadItem {
   charge: number;
   est_pay: number;
   status: ItemStatus;
+  /** Subitem Auth ID (column text_mm1z8nks on the Claims Subitems board).
+   *  Each service line can carry its own prior-auth ID. When this changes
+   *  on a subitem, the parent's Authorization text column (text_mkwrb2t9)
+   *  is rewritten with the comma-joined union of all non-empty subitem
+   *  Auth IDs so the 837 builder picks up the latest. */
+  auth_id?: string;
   paid_amount?: number;
   carc_codes?: string;
   rarc_codes?: string;

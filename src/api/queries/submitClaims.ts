@@ -49,6 +49,7 @@ const SUB_COL = {
   RARC: "dropdown_mm2pjdcf",
   DENIAL_ANALYSIS: "color_mm2ppwry",
   LINK_TO_ORIGINAL: "text_mm35d81y",
+  AUTH_ID: "text_mm1z8nks",
 } as const;
 
 // Status label index for "Submit Claim" on the Primary column. The Monday
@@ -203,6 +204,7 @@ function mapSubitem(sub: MondaySubitem): ThreadItem {
     charge: numberOf(sub, SUB_COL.CHARGE_AMOUNT),
     est_pay: numberOf(sub, SUB_COL.EST_PAY),
     status: mapItemStatus(statusLabel),
+    auth_id: textOf(sub, SUB_COL.AUTH_ID) || undefined,
     paid_amount: numberOf(sub, SUB_COL.PRIMARY_PAID),
     carc_codes: textOf(sub, SUB_COL.CARC) || undefined,
     rarc_codes: textOf(sub, SUB_COL.RARC) || undefined,

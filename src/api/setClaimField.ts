@@ -144,6 +144,13 @@ export const CLAIM_PARENT_COL = {
   diagnosis:       "color_mky2gpz5",
   place_of_service:"color_mm3fk3qv",
   claim_type:      "color_mm2nvk1p",
+  // Parent-level Authorization text. Holds the comma-joined union of
+  // all subitem Auth IDs — rewritten whenever a subitem auth changes
+  // so the 837 builder (services/claims_submission_service.py reads
+  // parent.auth) picks up the latest set. Line-level auth IDs are also
+  // sent individually via the SV1 REF*G1 loop, but this parent string
+  // is what the operator + board see at a glance.
+  auth:            "text_mkwrb2t9",
 } as const;
 
 export const CLAIM_SUBITEM_COL = {
