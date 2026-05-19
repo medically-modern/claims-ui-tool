@@ -871,8 +871,10 @@ function Status277Badge({
   //   1. Request Rejected (primary status) — the 837 never made it
   //      out the door, so 277 doesn't apply yet. Show that first.
   //   2. Status277 from the 277 acknowledgment.
-  //   3. "None" — submitted but no 277 received yet (and not Request
-  //      Rejected at the Stedi/Primary level either).
+  //   3. "Submitted" — Primary Status flipped to Submitted on Monday,
+  //      backend posted the 837, but no 277 acknowledgment back yet.
+  //      Reads more naturally than "None" because it matches the
+  //      lifecycle stage: Submitted → Stedi Accepted → Payer Accepted.
   // "Payer Accepted" graduates out of this tab before render — we
   // keep it in the switch only for completeness of the type union.
   const { label, classes } =
@@ -881,7 +883,7 @@ function Status277Badge({
     : value === "Stedi Accepted"  ? { label: "Stedi Accepted",   classes: "bg-amber-100 text-amber-800 border-amber-200" }
     : value === "Payer Rejected"  ? { label: "Payer Rejected",   classes: "bg-rose-100 text-rose-800 border-rose-200" }
     : value === "Stedi Rejected"  ? { label: "Stedi Rejected",   classes: "bg-rose-100 text-rose-800 border-rose-200" }
-    : { label: "None", classes: "bg-muted text-muted-foreground border-muted-foreground/20" };
+    : { label: "Submitted", classes: "bg-sky-100 text-sky-800 border-sky-200" };
   return (
     <span
       className={cn(
