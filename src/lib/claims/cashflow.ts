@@ -38,12 +38,24 @@ export function isPureMedicaid(payer: string | null | undefined): boolean {
  *
  *   EFT date = cycle_end_Wednesday + 21 days
  *
- * where cycle_end_Wednesday is the next Wednesday on or after the
- * submission date.
+ * where cycle_end_Wednesday is the next Wednesday STRICTLY AFTER the
+ * submission date. Claims sent ON a Wednesday roll into the FOLLOWING
+ * Wednesday's cycle — eMedNY's batch cutoff is earlier in the day than
+ * billing typically submits, so a Wed-day claim misses that day's run.
+ *
+ * Example: claim sent Wed 5/13 → cycle ends Wed 5/20 → EFT Wed 6/10.
+ * Example: claim sent Mon 5/18 → cycle ends Wed 5/20 → EFT Wed 6/10.
+ *
+ * Mirrors the backend _emedny_pay_date in services/claims_submission_
+ * service.py — keep both in sync.
  */
 export function medicaidPaymentDate(sentDate: Date): Date {
   const dow = sentDate.getDay(); // 0=Sun, 3=Wed
-  const daysUntilWed = (3 - dow + 7) % 7;
+  let daysUntilWed = (3 - dow + 7) % 7;
+  if (daysUntilWed === 0) {
+    // Sent on a Wednesday → roll to next week's cycle.
+    daysUntilWed = 7;
+  }
   const cycleEnd = new Date(sentDate);
   cycleEnd.setDate(cycleEnd.getDate() + daysUntilWed);
   const eft = new Date(cycleEnd);
