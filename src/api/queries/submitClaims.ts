@@ -34,6 +34,10 @@ const COL = {
   // submitted claims sit there until the payer's 277 confirms
   // "Payer Accepted".
   S277_STATUS: "color_mm1z1pb2",
+  // Rejection reason — column was originally "277 Rejected Reason" but
+  // the backend now also writes Request Rejected reasons here so the
+  // operator has a single column for "why was this rejected".
+  REJECTION_REASON: "text_mm1zsp2x",
 } as const;
 
 // Column IDs on the Subitems board. See MONDAY_BOARD_SCHEMA.md.
@@ -250,6 +254,7 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
     status: claimStatus,
     status277: mapStatus277(textOf(item, COL.S277_STATUS)),
     request_rejected: isRequestRejected || undefined,
+    rejection_reason: textOf(item, COL.REJECTION_REASON) || undefined,
     patient: {
       name: item.name,
       dob: textOf(item, COL.DOB),

@@ -77,6 +77,12 @@ export interface ThreadClaim {
    *  alongside the 277 statuses in the Awaiting Acceptance tab so
    *  these stuck claims surface for operator attention. */
   request_rejected?: boolean;
+  /** Rejection reason text (column text_mm1zsp2x — originally
+   *  "277 Rejected Reason", reused by the backend for Request
+   *  Rejected reasons too). Powers the tooltip on the
+   *  Move-to-Submit button so the operator can see why a row
+   *  bounced without having to open the Monday Updates tab. */
+  rejection_reason?: string;
   items: ThreadItem[];
   notes?: string;
   createdAt: number;

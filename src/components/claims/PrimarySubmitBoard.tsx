@@ -645,35 +645,73 @@ function ClaimCard({
 
         <div className="col-span-2 flex justify-end">
           {c.status === "Submitted" ? (
-            c.request_rejected ? (
-              // Request Rejected rows are the operator's "fix and retry"
-              // path: the 837 never reached the payer, so we just need
-              // to flip Primary Status back to "Submit Claim". That will:
-              //   1. Unlock all cells on this row (isLocked is gated on
-              //      status === "Submitted")
-              //   2. Move the row out of Awaiting Acceptance and back
-              //      into New Claims on the next refresh.
-              // Single button replaces the badge so the rejected state +
-              // action are on the same surface.
-              <Button
-                size="sm"
-                className="h-7 w-full border border-rose-200 bg-rose-100 text-rose-800 hover:bg-rose-200"
-                onClick={() => {
-                  if (!c.monday_item_id) return;
-                  // Optimistic local flip; revert on Monday-write failure.
-                  onUpdate({ status: "Awaiting Submission", request_rejected: undefined });
-                  setPrimaryStatus(c.monday_item_id, "Submit Claim").catch((e) => {
-                    onUpdate({ status: "Submitted", request_rejected: true });
-                    toast({
-                      title: "Couldn't move row back to Submit Claim",
-                      description: (e as Error).message,
-                    });
-                  });
-                }}
-              >
-                <RefreshCw className="mr-1 h-3 w-3" />
-                Move to Submit
-              </Button>
+            // Any rejection state shows the same Move-to-Submit button
+            // with a tooltip carrying the rejection_reason from Monday.
+            // Three sources can land a row here:
+            //   - request_rejected=true  (backend never reached Stedi)
+            //   - status277="Stedi Rejected"
+            //   - status277="Payer Rejected"
+            // All three are recoverable by flipping Primary Status back
+            // to "Submit Claim" — the row unlocks, the operator fixes
+            // whatever the reason says, and resubmits.
+            //
+            // Non-rejection states (Submitted=no 277 yet, Stedi Accepted)
+            // still show the read-only badge.
+            (c.request_rejected
+              || c.status277 === "Stedi Rejected"
+              || c.status277 === "Payer Rejected") ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    className="h-7 w-full border border-rose-200 bg-rose-100 text-rose-800 hover:bg-rose-200"
+                    onClick={() => {
+                      if (!c.monday_item_id) return;
+                      // Snapshot prior state for revert on failure.
+                      const prevStatus277 = c.status277;
+                      const prevRequestRejected = c.request_rejected;
+                      onUpdate({
+                        status: "Awaiting Submission",
+                        request_rejected: undefined,
+                        status277: undefined,
+                      });
+                      setPrimaryStatus(c.monday_item_id, "Submit Claim").catch((e) => {
+                        onUpdate({
+                          status: "Submitted",
+                          request_rejected: prevRequestRejected,
+                          status277: prevStatus277,
+                        });
+                        toast({
+                          title: "Couldn't move row back to Submit Claim",
+                          description: (e as Error).message,
+                        });
+                      });
+                    }}
+                  >
+                    <RefreshCw className="mr-1 h-3 w-3" />
+                    Move to Submit
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="left" className="max-w-sm whitespace-pre-wrap text-xs">
+                  {c.rejection_reason ? (
+                    <>
+                      <div className="font-semibold mb-0.5">
+                        {c.request_rejected
+                          ? "Request Rejected"
+                          : c.status277 === "Stedi Rejected"
+                          ? "Stedi Rejected"
+                          : "Payer Rejected"}
+                      </div>
+                      <div>{c.rejection_reason}</div>
+                    </>
+                  ) : (
+                    <div className="italic text-muted-foreground">
+                      No reason recorded — check the Monday Updates tab
+                      on this row for details.
+                    </div>
+                  )}
+                </TooltipContent>
+              </Tooltip>
             ) : (
               <Status277Badge value={c.status277} requestRejected={false} />
             )
