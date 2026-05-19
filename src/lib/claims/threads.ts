@@ -52,6 +52,19 @@ export interface ThreadClaim {
    *  color_mm3fk3qv). "Home" -> CMS POS 12, "Office" -> CMS POS 11.
    *  Defaults to Home in the UI when undefined. */
   place_of_service?: "Home" | "Office";
+  /** 277 claim-status acknowledgment from Stedi / payer (column
+   *  color_mm1z1pb2). Lives on Submitted claims and tells the
+   *  operator whether the payer has accepted the 837 yet:
+   *    - "Stedi Accepted"  → Stedi forwarded successfully, awaiting payer
+   *    - "Payer Accepted"  → payer received it cleanly, awaiting ERA
+   *    - "Stedi Rejected" / "Payer Rejected" → bounced, needs attention
+   *    - undefined         → no 277 received yet
+   *  Used by the "Awaiting Acceptance" tab on PrimarySubmitBoard. */
+  status277?:
+    | "Payer Accepted"
+    | "Stedi Accepted"
+    | "Payer Rejected"
+    | "Stedi Rejected";
   items: ThreadItem[];
   notes?: string;
   createdAt: number;

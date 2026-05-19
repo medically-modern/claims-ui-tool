@@ -30,6 +30,10 @@ const COL = {
   // Read here so the Submit Claim board's inline editor can render the
   // current value and let the operator switch before submitting.
   PLACE_OF_SERVICE: "color_mm3fk3qv",
+  // 277 acknowledgment status. Drives the "Awaiting Acceptance" tab —
+  // submitted claims sit there until the payer's 277 confirms
+  // "Payer Accepted".
+  S277_STATUS: "color_mm1z1pb2",
 } as const;
 
 // Column IDs on the Subitems board. See MONDAY_BOARD_SCHEMA.md.
@@ -51,6 +55,11 @@ const SUB_COL = {
 // items_page query_params filter operates on numeric label index for status
 // columns. If a label is renamed/re-indexed, refresh the schema and update.
 const SUBMIT_CLAIM_LABEL_INDEX = 6;
+// "Submitted" — claim 837 has gone out; awaiting payer's 277 acknowledgment.
+// These feed the "Awaiting Acceptance" tab, filtered further on the frontend
+// to exclude rows already at status277="Payer Accepted" (which graduate to
+// the main Claims page's Outstanding/ERA-Review buckets).
+const SUBMITTED_LABEL_INDEX = 2;
 
 interface MondayColumnValue {
   id: string;
@@ -90,10 +99,10 @@ const QUERY = `
   query SubmitClaims {
     boards(ids: [${CLAIMS_BOARD_ID}]) {
       items_page(
-        limit: 100
+        limit: 200
         query_params: {
           rules: [
-            { column_id: "${COL.PRIMARY_STATUS}", compare_value: [${SUBMIT_CLAIM_LABEL_INDEX}], operator: any_of }
+            { column_id: "${COL.PRIMARY_STATUS}", compare_value: [${SUBMIT_CLAIM_LABEL_INDEX}, ${SUBMITTED_LABEL_INDEX}], operator: any_of }
           ]
         }
       ) {
@@ -198,9 +207,24 @@ function mapSubitem(sub: MondaySubitem): ThreadItem {
   };
 }
 
+function mapStatus277(label: string): ThreadClaim["status277"] {
+  const t = label.trim();
+  if (t === "Payer Accepted") return "Payer Accepted";
+  if (t === "Stedi Accepted") return "Stedi Accepted";
+  if (t === "Payer Rejected") return "Payer Rejected";
+  if (t === "Stedi Rejected") return "Stedi Rejected";
+  return undefined;
+}
+
 function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
   const parentClaimId = textOf(item, COL.PARENT_CLAIM_ID);
   const posLabel = textOf(item, COL.PLACE_OF_SERVICE);
+  const primaryStatusLabel = textOf(item, COL.PRIMARY_STATUS).trim();
+  // Map Primary Status -> ThreadClaimStatus. The query already filters
+  // to "Submit Claim" or "Submitted" — anything else here is a Monday
+  // data anomaly, default to Awaiting Submission to keep the row visible.
+  const claimStatus =
+    primaryStatusLabel === "Submitted" ? "Submitted" : "Awaiting Submission";
   return {
     id: textOf(item, COL.CLAIM_ID) || item.id, // prefer Claim ID column when set
     // Always carry the raw Monday item id separately so writes (status,
@@ -211,9 +235,8 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
       posLabel === "Office" ? "Office"
       : posLabel === "Home" ? "Home"
       : undefined,
-    // Everything fetched here is filtered to Primary=Submit Claim,
-    // which corresponds to the frontend's "Awaiting Submission" state.
-    status: "Awaiting Submission",
+    status: claimStatus,
+    status277: mapStatus277(textOf(item, COL.S277_STATUS)),
     patient: {
       name: item.name,
       dob: textOf(item, COL.DOB),

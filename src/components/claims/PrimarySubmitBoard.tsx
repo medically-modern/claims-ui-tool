@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   ChevronDown, Plus, Send, Search, FilePlus2, RefreshCw,
-  CalendarIcon, Trash2, ArrowUpDown, X,
+  CalendarIcon, Trash2, ArrowUpDown, X, Hourglass,
 } from "lucide-react";
 import { useThreadClaims } from "@/lib/claims/threadStore";
 import type { ThreadClaim, ThreadClaimType, ThreadItem } from "@/lib/claims/threads";
@@ -37,12 +37,18 @@ import {
   isMondaySubitemId,
 } from "@/api/setClaimField";
 
-type QueueKey = "new" | "resubmit";
+type QueueKey = "new" | "resubmit" | "awaiting";
 type SortKey = "payor" | "dos";
 
 const QUEUE_META: Record<QueueKey, { label: string; icon: React.ReactNode; description: string }> = {
-  new:      { label: "New Claims", icon: <FilePlus2 className="h-4 w-4" />, description: "" },
-  resubmit: { label: "Resubmit",   icon: <RefreshCw className="h-4 w-4" />, description: "Auto-generated from denied / underpaid line items. Linked to original claim." },
+  new:      { label: "New Claims",         icon: <FilePlus2 className="h-4 w-4" />, description: "" },
+  resubmit: { label: "Resubmit",           icon: <RefreshCw className="h-4 w-4" />, description: "Auto-generated from denied / underpaid line items. Linked to original claim." },
+  // "Awaiting Acceptance" — claims that have been 837'd but the
+  // payer's 277 hasn't confirmed "Payer Accepted" yet. Includes
+  // Stedi-Accepted, Stedi-Rejected, Payer-Rejected, and no-277-yet
+  // states so the operator sees everything in flight, with a badge
+  // on each row indicating where it's stuck.
+  awaiting: { label: "Awaiting Acceptance", icon: <Hourglass className="h-4 w-4" />, description: "Submitted to the payer (or Stedi) but no 'Payer Accepted' 277 yet. Stays here until the payer acknowledges, then graduates to Outstanding / ERA Review on the main Claims page." },
 };
 
 const DIAGNOSIS_OPTIONS = ["E10.65", "E11.9", "E10.9", "E11.65", "E10.40", "E11.40"];
@@ -101,20 +107,35 @@ export function PrimarySubmitBoard() {
   const [sortBy, setSortBy] = useState<SortKey>("dos");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  // Submit board only shows claims that haven't been submitted yet
-  const awaiting = useMemo(
+  // Two top-level cohorts the Submit board cares about:
+  //   - awaitingSubmit: Primary Status = "Submit Claim" (queues New + Resubmit)
+  //   - awaitingAcceptance: Primary Status = "Submitted" AND status277 !=
+  //     "Payer Accepted" — claim is in flight to the payer.
+  // Rows graduate out of awaitingAcceptance as soon as status277 hits
+  // "Payer Accepted"; from there they live on the main Claims page.
+  const awaitingSubmit = useMemo(
     () => claims.filter((c) => c.status === "Awaiting Submission"),
+    [claims],
+  );
+  const awaitingAcceptance = useMemo(
+    () => claims.filter(
+      (c) => c.status === "Submitted" && c.status277 !== "Payer Accepted",
+    ),
     [claims],
   );
 
   const counts = useMemo(() => ({
-    new: awaiting.filter((c) => !c.parent_claim_id).length,
-    resubmit: awaiting.filter((c) => !!c.parent_claim_id).length,
-  }), [awaiting]);
+    new:       awaitingSubmit.filter((c) => !c.parent_claim_id).length,
+    resubmit:  awaitingSubmit.filter((c) => !!c.parent_claim_id).length,
+    awaiting:  awaitingAcceptance.length,
+  }), [awaitingSubmit, awaitingAcceptance]);
 
   const visible = useMemo(() => {
-    const filtered = awaiting
-      .filter((c) => (queue === "new" ? !c.parent_claim_id : !!c.parent_claim_id))
+    const pool =
+      queue === "awaiting" ? awaitingAcceptance
+      : queue === "new"    ? awaitingSubmit.filter((c) => !c.parent_claim_id)
+                           : awaitingSubmit.filter((c) => !!c.parent_claim_id);
+    const filtered = pool
       .filter((c) => payerFilter === "all" || c.payer === payerFilter)
       .filter((c) => {
         if (!search) return true;
@@ -129,7 +150,7 @@ export function PrimarySubmitBoard() {
     return [...filtered].sort((a, b) =>
       sortBy === "payor" ? a.payer.localeCompare(b.payer) : a.dos.localeCompare(b.dos),
     );
-  }, [awaiting, queue, payerFilter, search, sortBy]);
+  }, [awaitingSubmit, awaitingAcceptance, queue, payerFilter, search, sortBy]);
 
   // Submit: write Primary Status="Submitted" to Monday, which triggers
   // the existing claims_webhook on the backend that calls
@@ -183,7 +204,7 @@ export function PrimarySubmitBoard() {
   return (
     <div className="space-y-4">
       <TooltipProvider delayDuration={150}>
-        <section className="grid grid-cols-2 gap-3">
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {(Object.keys(QUEUE_META) as QueueKey[]).map((k) => {
             const tile = (
               <button
@@ -499,21 +520,25 @@ function ClaimCard({
         </Field>
 
         <div className="col-span-2 flex justify-end">
-          {/*
-            Live submit. Click → setPrimaryStatus(itemId, "Submitted") on
-            Monday → /claims/webhook on the backend fires → 837 to Stedi →
-            writeback (Claim ID / PCN / Claim Sent Date). isLocked guards
-            against re-clicking after the first submit lands.
-          */}
-          <Button
-            size="sm"
-            className="h-7 w-full bg-emerald-700 text-white hover:bg-emerald-800"
-            disabled={isLocked || c.items.length === 0}
-            onClick={() => void onSubmit()}
-          >
-            <Send className="mr-1 h-3.5 w-3.5" />
-            {isLocked ? "Submitted" : "Submit"}
-          </Button>
+          {c.status === "Submitted" ? (
+            <Status277Badge value={c.status277} />
+          ) : (
+            /*
+              Live submit. Click → setPrimaryStatus(itemId, "Submitted") on
+              Monday → /claims/webhook on the backend fires → 837 to Stedi →
+              writeback (Claim ID / PCN / Claim Sent Date). isLocked guards
+              against re-clicking after the first submit lands.
+            */
+            <Button
+              size="sm"
+              className="h-7 w-full bg-emerald-700 text-white hover:bg-emerald-800"
+              disabled={isLocked || c.items.length === 0}
+              onClick={() => void onSubmit()}
+            >
+              <Send className="mr-1 h-3.5 w-3.5" />
+              {isLocked ? "Submitted" : "Submit"}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -671,6 +696,28 @@ function ClaimCard({
         />
       )}
     </Card>
+  );
+}
+
+function Status277Badge({ value }: { value?: ThreadClaim["status277"] }) {
+  // Inline-mapped colours so this stays self-contained. The four 277
+  // outcomes plus "no 277 yet" each get a visually-distinct chip in
+  // place of the Submit button on the Awaiting Acceptance tab.
+  const { label, classes } =
+    value === "Payer Accepted"  ? { label: "Payer Accepted",  classes: "bg-emerald-100 text-emerald-800 border-emerald-200" }
+    : value === "Stedi Accepted" ? { label: "Stedi Accepted",  classes: "bg-amber-100 text-amber-800 border-amber-200" }
+    : value === "Payer Rejected" ? { label: "Payer Rejected",  classes: "bg-rose-100 text-rose-800 border-rose-200" }
+    : value === "Stedi Rejected" ? { label: "Stedi Rejected",  classes: "bg-rose-100 text-rose-800 border-rose-200" }
+    : { label: "No 277 yet", classes: "bg-muted text-muted-foreground border-muted-foreground/20" };
+  return (
+    <span
+      className={cn(
+        "inline-flex h-7 w-full items-center justify-center rounded-md border px-2 text-xs font-medium",
+        classes,
+      )}
+    >
+      {label}
+    </span>
   );
 }
 
