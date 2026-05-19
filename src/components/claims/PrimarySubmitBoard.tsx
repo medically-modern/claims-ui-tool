@@ -645,7 +645,38 @@ function ClaimCard({
 
         <div className="col-span-2 flex justify-end">
           {c.status === "Submitted" ? (
-            <Status277Badge value={c.status277} requestRejected={c.request_rejected} />
+            c.request_rejected ? (
+              // Request Rejected rows are the operator's "fix and retry"
+              // path: the 837 never reached the payer, so we just need
+              // to flip Primary Status back to "Submit Claim". That will:
+              //   1. Unlock all cells on this row (isLocked is gated on
+              //      status === "Submitted")
+              //   2. Move the row out of Awaiting Acceptance and back
+              //      into New Claims on the next refresh.
+              // Single button replaces the badge so the rejected state +
+              // action are on the same surface.
+              <Button
+                size="sm"
+                className="h-7 w-full border border-rose-200 bg-rose-100 text-rose-800 hover:bg-rose-200"
+                onClick={() => {
+                  if (!c.monday_item_id) return;
+                  // Optimistic local flip; revert on Monday-write failure.
+                  onUpdate({ status: "Awaiting Submission", request_rejected: undefined });
+                  setPrimaryStatus(c.monday_item_id, "Submit Claim").catch((e) => {
+                    onUpdate({ status: "Submitted", request_rejected: true });
+                    toast({
+                      title: "Couldn't move row back to Submit Claim",
+                      description: (e as Error).message,
+                    });
+                  });
+                }}
+              >
+                <RefreshCw className="mr-1 h-3 w-3" />
+                Move to Submit
+              </Button>
+            ) : (
+              <Status277Badge value={c.status277} requestRejected={false} />
+            )
           ) : (
             /*
               Live submit. Click → setPrimaryStatus(itemId, "Submitted") on
