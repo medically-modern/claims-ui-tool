@@ -1,18 +1,19 @@
 // Top-of-page cash flow summary. Four tiles: Total Open, Soon, Expected,
 // High Risk. Spans both Primary and Secondary claims. Each breakdown row
-// is a button that opens a drill-down drawer listing the underlying
-// claims (Name / DOS / Pay date / Amount). See CashFlowDetailDrawer.tsx.
+// is a button — clicking it expands an inline detail panel directly
+// below the tile grid (Name / DOS / Pay date / Amount per claim).
+// Clicking the same row again collapses it.
 
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { TrendingUp, Calendar, Clock, AlertTriangle, Info } from "lucide-react";
-import { computeCashFlow, type BucketStat } from "@/lib/claims/cashflow";
-import { fmtMoney } from "@/lib/claims/logic";
+import { TrendingUp, Calendar, Clock, AlertTriangle, Info, X } from "lucide-react";
+import { computeCashFlow, type BucketStat, type CashFlowEntry } from "@/lib/claims/cashflow";
+import { fmtDate, fmtMoney } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
 import type { SecClaim } from "@/components/claims/SecondaryBoard";
 import { cn } from "@/lib/utils";
-import { CashFlowDetailDrawer } from "./CashFlowDetailDrawer";
 
 interface Props {
   claims: Claim[];
@@ -24,27 +25,38 @@ function money(n: number): string {
   return fmtMoney(Math.round(n)).replace(/\.00$/, "");
 }
 
+// A breakdown row identifier — the tile it lives on plus the row label.
+// We compose these into a stable key so we can highlight the active row
+// across renders and so toggling a row off works (click same key twice).
+type BucketKey = `${string}::${string}`;
+
+interface ActiveBucket {
+  key: BucketKey;
+  title: string;
+  description?: string;
+  stat: BucketStat;
+}
+
 export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
   const stats = useMemo(
     () => computeCashFlow(claims, secondaryClaims),
     [claims, secondaryClaims],
   );
 
-  // Active drawer: title + entries from whichever breakdown row was
-  // clicked. Closing the drawer leaves the cached values in place so
-  // the slide-out animation doesn't show an empty body mid-frame.
-  const [drawer, setDrawer] = useState<{
-    open: boolean;
-    title: string;
-    description?: string;
-    stat: BucketStat;
-  } | null>(null);
+  const [active, setActive] = useState<ActiveBucket | null>(null);
 
-  function openDrawer(title: string, stat: BucketStat, description?: string) {
-    setDrawer({ open: true, title, description, stat });
-  }
-  function closeDrawer() {
-    setDrawer((d) => (d ? { ...d, open: false } : d));
+  function toggleBucket(
+    tile: string,
+    label: string,
+    stat: BucketStat,
+    description?: string,
+  ) {
+    const key: BucketKey = `${tile}::${label}`;
+    setActive((prev) =>
+      prev?.key === key
+        ? null
+        : { key, title: `${tile} — ${label}`, description, stat },
+    );
   }
 
   const avgClaim =
@@ -83,6 +95,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             amount={stats.totalOpen.total}
             count={stats.totalOpen.count}
             avg={avgClaim}
+            activeKey={active?.key}
             breakdown={[
               {
                 label: "Primary",
@@ -101,7 +114,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
                 description: "Open claims with an insulin pump (HCPCS E0784).",
               },
             ]}
-            onOpenBucket={openDrawer}
+            onToggle={(label, stat, desc) => toggleBucket("Total open", label, stat, desc)}
           />
           <Tile
             tone="success"
@@ -110,6 +123,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             amount={stats.soon.total}
             count={stats.soon.count}
             subtitle="Received ERA / Medicaid next 7 days"
+            activeKey={active?.key}
             breakdown={[
               {
                 label: "Received ERA",
@@ -129,7 +143,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
               },
             ]}
             tooltipText="Claims with the EFT pay date within 7 days, OR pure-Medicaid awaiting ERA whose eMedNY settle date is within 7 days. Spans both Primary and Secondary."
-            onOpenBucket={openDrawer}
+            onToggle={(label, stat, desc) => toggleBucket("Soon", label, stat, desc)}
           />
           <Tile
             tone="neutral"
@@ -138,6 +152,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             amount={stats.expected.total}
             count={stats.expected.count}
             subtitle="ERA's outstanding within 21 days of DOS / Medicaid 7-21 days"
+            activeKey={active?.key}
             breakdown={[
               {
                 label: "Primary (non-medicaid)",
@@ -167,7 +182,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
               },
             ]}
             tooltipText="Non-Medicaid primaries awaiting ERA within their normal turnaround window, pure-Medicaid more than a week from their eMedNY settle date, and secondaries (Forwarded/Insurance/Patient) still awaiting payment."
-            onOpenBucket={openDrawer}
+            onToggle={(label, stat, desc) => toggleBucket("Expected", label, stat, desc)}
           />
           <Tile
             tone="danger"
@@ -176,6 +191,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             amount={stats.highRisk.total}
             count={stats.highRisk.count}
             subtitle="No primary ERA, sent 21+ days ago"
+            activeKey={active?.key}
             breakdown={[
               {
                 label: "Pump claims",
@@ -185,24 +201,131 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
               },
             ]}
             tooltipText="Non-Medicaid primary claims submitted 21+ days ago that still have no ERA. Past normal payer turnaround — something may be wrong (denial, payer issue, lost claim)."
-            onOpenBucket={openDrawer}
+            onToggle={(label, stat, desc) => toggleBucket("High risk", label, stat, desc)}
           />
         </div>
-      </section>
 
-      {drawer && (
-        <CashFlowDetailDrawer
-          open={drawer.open}
-          onOpenChange={(o) => (o ? null : closeDrawer())}
-          title={drawer.title}
-          description={drawer.description}
-          entries={drawer.stat.entries}
-          total={drawer.stat.total}
-        />
-      )}
+        {active && (
+          <DetailPanel active={active} onClose={() => setActive(null)} />
+        )}
+      </section>
     </TooltipProvider>
   );
 }
+
+// =============================================================================
+// Inline detail panel — renders right below the tile grid when a
+// breakdown row is active. Same Name/DOS/Pay date/Amount columns the
+// drawer carried, but inline so the tiles stay visible above.
+// =============================================================================
+
+function payDateSortKey(s: string | null): number {
+  if (!s) return Number.POSITIVE_INFINITY;
+  const t = new Date(s).getTime();
+  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+}
+
+function DetailPanel({
+  active,
+  onClose,
+}: {
+  active: ActiveBucket;
+  onClose: () => void;
+}) {
+  const navigate = useNavigate();
+  const sorted = useMemo(
+    () =>
+      [...active.stat.entries].sort(
+        (a, b) => payDateSortKey(a.payDate) - payDateSortKey(b.payDate),
+      ),
+    [active.stat.entries],
+  );
+
+  function go(entry: CashFlowEntry) {
+    navigate(`/claims/${entry.id}`);
+  }
+
+  return (
+    <Card className="mt-3 p-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">{active.title}</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            <span className="font-medium">
+              {sorted.length.toLocaleString()} claim{sorted.length === 1 ? "" : "s"}
+            </span>
+            <span className="mx-1">·</span>
+            <span className="tabular-nums">{money(active.stat.total)}</span>
+            {active.description && (
+              <>
+                <span className="mx-1">·</span>
+                <span>{active.description}</span>
+              </>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close details"
+          className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {sorted.length === 0 ? (
+        <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+          No claims in this bucket right now.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              <tr className="border-b">
+                <th className="py-1.5 pr-3 text-left font-medium">Name</th>
+                <th className="py-1.5 pr-3 text-left font-medium">DOS</th>
+                <th className="py-1.5 pr-3 text-left font-medium">Pay date</th>
+                <th className="py-1.5 text-right font-medium">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((e) => (
+                <tr
+                  key={`${e.kind}-${e.id}`}
+                  onClick={() => go(e)}
+                  className="cursor-pointer border-b last:border-0 hover:bg-muted/50"
+                >
+                  <td className="py-2 pr-3">
+                    <div className="font-medium text-foreground">{e.name}</div>
+                    {e.kind === "secondary" && (
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        Secondary
+                      </div>
+                    )}
+                  </td>
+                  <td className="py-2 pr-3 tabular-nums text-muted-foreground">
+                    {fmtDate(e.dos)}
+                  </td>
+                  <td className="py-2 pr-3 tabular-nums text-muted-foreground">
+                    {fmtDate(e.payDate)}
+                  </td>
+                  <td className="py-2 text-right tabular-nums font-medium text-foreground">
+                    {fmtMoney(e.amount)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// =============================================================================
+// Tile
+// =============================================================================
 
 type Tone = "info" | "success" | "neutral" | "danger";
 
@@ -219,7 +342,7 @@ interface BreakdownRow {
   // Pump rows are visually separated — pumps are $4-6k each, so the
   // operator wants to see the pump-only contribution at a glance.
   emphasis?: boolean;
-  /** Short hint shown under the drawer title when this row is opened. */
+  /** Short hint shown next to the active row's title in the detail panel. */
   description?: string;
 }
 
@@ -233,7 +356,8 @@ function Tile({
   tone,
   tooltipText,
   breakdown,
-  onOpenBucket,
+  onToggle,
+  activeKey,
 }: {
   label: string;
   amount: number;
@@ -244,7 +368,8 @@ function Tile({
   tone: Tone;
   tooltipText?: string;
   breakdown?: BreakdownRow[];
-  onOpenBucket: (title: string, stat: BucketStat, description?: string) => void;
+  onToggle: (label: string, stat: BucketStat, description?: string) => void;
+  activeKey?: BucketKey;
 }) {
   const t = TONE_CLASSES[tone];
   const body = (
@@ -287,16 +412,16 @@ function Tile({
               // empty rather than thinking the data didn't load. Empty
               // rows are non-interactive (no hover, no click).
               const isEmpty = row.stat.count === 0;
+              const rowKey: BucketKey = `${label}::${row.label}`;
+              const isActive = activeKey === rowKey;
               return (
                 <button
                   key={row.label}
                   type="button"
                   disabled={isEmpty}
                   onClick={(e) => {
-                    // Stop propagation so the tile-wrapping tooltip
-                    // trigger doesn't also fire on click.
                     e.stopPropagation();
-                    onOpenBucket(row.label, row.stat, row.description);
+                    onToggle(row.label, row.stat, row.description);
                   }}
                   className={cn(
                     "flex w-full items-baseline justify-between gap-2 rounded px-1 py-0.5 text-left transition-colors",
@@ -304,6 +429,7 @@ function Tile({
                     isEmpty
                       ? "cursor-default opacity-60"
                       : "hover:bg-muted/60 cursor-pointer",
+                    isActive && "bg-muted/70 ring-1 ring-inset ring-border",
                   )}
                 >
                   <span className={cn(row.emphasis && "font-medium text-foreground")}>
