@@ -431,20 +431,36 @@ function correctedLineEstPay(
 ): { amount: number; corrected: boolean } {
   const code = (line.hcpcs || "").trim();
 
-  // Medicare pump rental short-circuit. PAYER_RATE_SCHEDULE writes
-  // Medicare A&B E0784 charge = \$600 which then flows into the
-  // line's estPay, but the actual reimbursable monthly rental amount
-  // is closer to \$300 (see CONSERVATIVE_PER_UNIT_ESTIMATE). Without
-  // this override the legacy detection would skip the line (charge
-  // doesn't match the \$1000 flat) and cash flow would project at
-  // the inflated \$600. Force the correction whenever the payor is
-  // Medicare and the line is E0784, regardless of what's in charge.
-  const isMedicarePump = code === "E0784" && payorClass(payor) === "medicare";
+  // Pump short-circuit. PAYER_RATE_SCHEDULE writes whatever each
+  // payer's billable charge is into the line's estPay (Medicare A&B
+  // \$600/month, commercial plans \$4-6k purchase, etc.), but the
+  // CASH FLOW projection should always use the realistic expected-
+  // payment estimate, not the billed amount. For Medicare A&B that
+  // estimate is \$300/month; for everything else it's \$2,500 as a
+  // conservative one-shot purchase. correctedLineEstPay routes E0784
+  // through the same history-or-conservative machinery used for
+  // legacy fallbacks, regardless of the raw charge — so all pump
+  // lines get the realistic projection without altering anything on
+  // the claim itself (rate schedule, billed charge, submitted est
+  // pay are all untouched; this lives only in the cash flow tile).
+  const isPump = code === "E0784";
 
-  if (!isLegacyFallbackLine(line) && !isMedicarePump) {
+  if (!isLegacyFallbackLine(line) && !isPump) {
     return { amount: line.estPay ?? 0, corrected: false };
   }
   const units = Math.max(1, line.units ?? 1);
+
+  // Pumps use the FIXED conservative — never historical. Operator's
+  // mental model is "Medicare A&B = \$300, everything else = \$2,500"
+  // and we don't want one outlier paid amount drifting that. Supplies
+  // continue to prefer historical-average over conservative so they
+  // auto-tune toward real per-payor paid rates as data accumulates.
+  if (isPump) {
+    const c = conservativeFor(code, payor);
+    if (c != null) return { amount: c * units, corrected: true };
+    return { amount: line.estPay ?? 0, corrected: true };
+  }
+
   const historical = history[historyKey(code, payor)];
   if (historical != null && Number.isFinite(historical)) {
     return { amount: historical * units, corrected: true };
