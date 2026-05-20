@@ -197,20 +197,20 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
           <Tile
             tone="violet"
             icon={<Activity className="h-5 w-5" />}
-            label="Future pump"
+            label="Future Medicare Pumps"
             amount={stats.futurePump.total}
             count={stats.futurePump.count}
-            subtitle="Medicare 13-month rental schedule"
+            subtitle="13-month rental schedule"
             activeKey={active?.key}
             breakdown={[
               {
                 label: "Scheduled claims",
                 stat: stats.futurePump,
-                description: "Medicare A&B pump rentals with status 'Future Claim' — billed one per month over the 13-month rental.",
+                description: "Medicare pump rentals with status 'Future Claim' — billed one per month over the 13-month rental.",
               },
             ]}
-            tooltipText="Medicare A&B pump rentals scheduled for future months but not yet billed. These claims sit in 'Future Claim' on the Claims Board until the next monthly cycle. Separated out so the open-A/R tiles aren't dominated by far-future rental cycles."
-            onToggle={(label, stat, desc) => toggleBucket("Future pump", label, stat, desc)}
+            tooltipText="Medicare pump rentals scheduled for future months but not yet billed. These claims sit in 'Future Claim' on the Claims Board until the next monthly cycle. Separated out so the open-A/R tiles aren't dominated by far-future rental cycles."
+            onToggle={(label, stat, desc) => toggleBucket("Future Medicare Pumps", label, stat, desc)}
           />
           <Tile
             tone="danger"

@@ -413,6 +413,14 @@ const Claims = () => {
       )
     : MOCK_CLAIMS_FALLBACK;
 
+  // CashFlow needs the full set — "Future Claim" rows are filtered out
+  // of MOCK_CLAIMS above (operational buckets like Outstanding / Denials
+  // shouldn't show them), but the Future Medicare Pumps tile depends on
+  // them being present. Pass the unfiltered list to the cash flow view.
+  const ALL_CLAIMS_FOR_CASHFLOW = hasMondayToken()
+    ? (mondayClaims ?? [])
+    : MOCK_CLAIMS_FALLBACK;
+
   // Secondary claims — feed into the Cash Flow tile so Soon/Expected
   // include the secondary side. Empty array when token missing.
   const { data: secondaryClaims } = useAllSecondaryClaims();
@@ -813,7 +821,7 @@ const Claims = () => {
           <DenialAnalysisTable />
         ) : board === "cashflow" ? (
           <CashFlowSummary
-            claims={MOCK_CLAIMS}
+            claims={ALL_CLAIMS_FOR_CASHFLOW}
             secondaryClaims={secondaryClaims ?? []}
           />
         ) : board === "secondary" ? (

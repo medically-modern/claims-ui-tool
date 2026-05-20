@@ -158,17 +158,19 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
 
   // Medicare pump rentals: a 13-month schedule, one claim per month.
   // The scheduled-but-not-yet-billed claims sit on Monday as "Future
-  // Claim" with primaryPayor "Medicare A&B" and an E0784 line. They're
-  // not part of the open cycle yet, but they ARE projected inflow —
-  // surfaced on the dedicated Future Pump tile.
+  // Claim" with an E0784 line. We don't gate on payor here — Medicare
+  // is the only payer that bills E0784 as a recurring monthly rental,
+  // so the combination of "Future Claim" + E0784 is unambiguous on
+  // its own. (A previous version required the primaryPayor regex to
+  // match /^Medicare A&B/, which silently dropped rows whose payor
+  // column read "Medicare" or any other variant.)
   if (
     claim.primaryStatus === "Future Claim" &&
-    /^Medicare A&B/i.test(claim.primaryPayor || "") &&
     (claim.lines || []).some((l) => (l.hcpcs || "").trim() === "E0784")
   ) {
     return "futurePump";
   }
-  // Future Claim that isn't a Medicare pump → genuinely pre-submission;
+  // Future Claim that isn't a pump rental → genuinely pre-submission;
   // not yet expected inflow.
   if (claim.primaryStatus === "Future Claim") return "out";
 
