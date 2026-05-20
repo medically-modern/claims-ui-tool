@@ -299,21 +299,46 @@ const LEGACY_PER_UNIT_AMOUNT = 500;
 
 /**
  * Conservative per-unit fallback estimates — used only when we have
- * NO paid-history data for this HCPCS in the loaded claims set yet.
- * Values set by Brandon based on observed Medicare and commercial
- * payer rates; pumps + monitor are per-claim flat (units=1), the
- * rest are per-unit. Bump these as more real rate data accumulates.
+ * NO paid-history data for this HCPCS+payorClass combination yet.
+ *
+ * Payor-aware because Medicare and commercial price the same HCPCS
+ * very differently in some cases. E0784 is the canonical example:
+ * Medicare bills it as a $300/month 13-month rental, commercial
+ * bills it as a one-shot ~$2,500 purchase. Sharing one estimate
+ * would either under-price commercials or over-price Medicare;
+ * worse, a single commercial pump payment in the history would
+ * pull the global E0784 average up and inflate every Medicare
+ * patient's projected inflow.
+ *
+ * For HCPCS where Medicare and commercial price similarly (supplies,
+ * sensors), only `default` is set and Medicare falls through to it.
  */
-const CONSERVATIVE_PER_UNIT_ESTIMATE: Record<string, number> = {
-  E0784: 300, // Medicare pump monthly rental
-  E2103: 150, // monitor flat
-  A4224: 15,
-  A4225: 3,
-  A4230: 6,
-  A4231: 6,
-  A4232: 3,
-  A4239: 150, // CGM sensors per unit
+type PayorClass = "medicare" | "other";
+
+const CONSERVATIVE_PER_UNIT_ESTIMATE: Record<
+  string,
+  Partial<Record<PayorClass, number>> & { default: number }
+> = {
+  E0784: { medicare: 300, default: 2500 }, // Medicare rental vs commercial purchase
+  E2103: { default: 150 }, // monitor flat
+  A4224: { default: 6 },
+  A4225: { default: 3 },
+  A4230: { default: 6 },
+  A4231: { default: 6 },
+  A4232: { default: 3 },
+  A4239: { default: 150 }, // CGM sensors per unit
 };
+
+function payorClass(payor: string | null | undefined): PayorClass {
+  return /^Medicare/i.test((payor || "").trim()) ? "medicare" : "other";
+}
+
+function conservativeFor(hcpcs: string, payor: string | null | undefined): number | undefined {
+  const entry = CONSERVATIVE_PER_UNIT_ESTIMATE[hcpcs];
+  if (!entry) return undefined;
+  const cls = payorClass(payor);
+  return entry[cls] ?? entry.default;
+}
 
 /** True when a line's charge looks exactly like the backend's legacy
  *  fallback (flat $1000 for the flat HCPCS set, or $500 × units for
@@ -338,10 +363,18 @@ function isLegacyFallbackLine(line: {
   return false;
 }
 
-/** Per-HCPCS average paid-per-unit, computed from all paid lines in
- *  the loaded primary claims. Used to replace legacy-fallback estPay
- *  with a more realistic projection. */
+/** Per-HCPCS-and-payor-class average paid-per-unit, computed from all
+ *  paid lines in the loaded primary claims. Keyed by `${hcpcs}::${cls}`
+ *  so Medicare and commercial averages don't bleed into each other
+ *  (an inflated commercial pump payment shouldn't drive up the rate
+ *  used to project a Medicare patient's monthly rental, and vice
+ *  versa). Used to replace legacy-fallback estPay with a realistic
+ *  projection. */
 export type HistoricalRates = Record<string, number>;
+
+function historyKey(hcpcs: string, payor: string | null | undefined): string {
+  return `${hcpcs}::${payorClass(payor)}`;
+}
 
 export function buildHistoricalAverages(claims: Claim[]): HistoricalRates {
   const sums: Record<string, { sum: number; count: number }> = {};
@@ -353,15 +386,16 @@ export function buildHistoricalAverages(claims: Claim[]): HistoricalRates {
       const paid = l.primaryPaid ?? 0;
       if (paid <= 0) continue;
       const perUnit = paid / units;
-      const bucket = sums[code] ?? { sum: 0, count: 0 };
+      const key = historyKey(code, c.primaryPayor);
+      const bucket = sums[key] ?? { sum: 0, count: 0 };
       bucket.sum += perUnit;
       bucket.count += 1;
-      sums[code] = bucket;
+      sums[key] = bucket;
     }
   }
   const avg: HistoricalRates = {};
-  for (const [code, { sum, count }] of Object.entries(sums)) {
-    if (count > 0) avg[code] = sum / count;
+  for (const [key, { sum, count }] of Object.entries(sums)) {
+    if (count > 0) avg[key] = sum / count;
   }
   return avg;
 }
@@ -370,6 +404,10 @@ export function buildHistoricalAverages(claims: Claim[]): HistoricalRates {
  * Corrected estPay for one line. Returns { amount, corrected } —
  * `corrected` is true when we substituted a value because the line
  * looked like a legacy fallback. Caller uses that to flag the row.
+ *
+ * Both the historical-average lookup and the conservative fallback
+ * are scoped by payor class (Medicare vs commercial) so a Medicare
+ * line gets a Medicare estimate and not a commercial one.
  */
 function correctedLineEstPay(
   line: {
@@ -379,17 +417,18 @@ function correctedLineEstPay(
     units?: number;
   },
   history: HistoricalRates,
+  payor: string | null | undefined,
 ): { amount: number; corrected: boolean } {
   if (!isLegacyFallbackLine(line)) {
     return { amount: line.estPay ?? 0, corrected: false };
   }
   const code = (line.hcpcs || "").trim();
   const units = Math.max(1, line.units ?? 1);
-  const historical = history[code];
+  const historical = history[historyKey(code, payor)];
   if (historical != null && Number.isFinite(historical)) {
     return { amount: historical * units, corrected: true };
   }
-  const conservative = CONSERVATIVE_PER_UNIT_ESTIMATE[code];
+  const conservative = conservativeFor(code, payor);
   if (conservative != null) {
     return { amount: conservative * units, corrected: true };
   }
@@ -423,11 +462,12 @@ export function expectedInflowAmount(
   }
 
   // Sum the per-line corrected estPay (legacy fallbacks swapped for
-  // historical averages where applicable).
+  // historical averages where applicable). Payor is threaded through
+  // so the correction picks the right Medicare-vs-commercial bucket.
   let estPayTotal = 0;
   let anyCorrected = false;
   for (const l of claim.lines || []) {
-    const r = correctedLineEstPay(l, history);
+    const r = correctedLineEstPay(l, history, claim.primaryPayor);
     estPayTotal += r.amount;
     if (r.corrected) anyCorrected = true;
   }
