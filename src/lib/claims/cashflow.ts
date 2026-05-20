@@ -371,53 +371,17 @@ function isLegacyFallbackLine(line: {
   return false;
 }
 
-/** Per-HCPCS-and-payor-class average paid-per-unit, computed from all
- *  paid lines in the loaded primary claims. Keyed by `${hcpcs}::${cls}`
- *  so Medicare and commercial averages don't bleed into each other
- *  (an inflated commercial pump payment shouldn't drive up the rate
- *  used to project a Medicare patient's monthly rental, and vice
- *  versa). Used to replace legacy-fallback estPay with a realistic
- *  projection. */
-export type HistoricalRates = Record<string, number>;
-
-function historyKey(hcpcs: string, payor: string | null | undefined): string {
-  return `${hcpcs}::${payorClass(payor)}`;
-}
-
-export function buildHistoricalAverages(claims: Claim[]): HistoricalRates {
-  const sums: Record<string, { sum: number; count: number }> = {};
-  for (const c of claims) {
-    for (const l of c.lines || []) {
-      const code = (l.hcpcs || "").trim();
-      if (!code) continue;
-      const units = Math.max(1, l.units ?? 1);
-      const paid = l.primaryPaid ?? 0;
-      if (paid <= 0) continue;
-      const perUnit = paid / units;
-      const key = historyKey(code, c.primaryPayor);
-      const bucket = sums[key] ?? { sum: 0, count: 0 };
-      bucket.sum += perUnit;
-      bucket.count += 1;
-      sums[key] = bucket;
-    }
-  }
-  const avg: HistoricalRates = {};
-  for (const [key, { sum, count }] of Object.entries(sums)) {
-    if (count > 0) avg[key] = sum / count;
-  }
-  return avg;
-}
-
 /**
  * Corrected estPay for one line. Returns { amount, corrected } —
  * `corrected` is true when we substituted a value because the line
- * looked like a legacy fallback OR because it's a Medicare pump
- * rental (which has a fixed monthly rate independent of what the
- * rate schedule wrote into the charge column).
+ * looked like a legacy fallback OR because it's a pump (E0784) and
+ * we always project pumps off the fixed conservative table.
  *
- * Both the historical-average lookup and the conservative fallback
- * are scoped by payor class (Medicare vs commercial) so a Medicare
- * line gets a Medicare estimate and not a commercial one.
+ * Per Brandon: cash-flow projections use ONLY the fixed
+ * CONSERVATIVE_PER_UNIT_ESTIMATE values, never historical averaging.
+ * A single outlier paid amount used to drift the per-HCPCS average
+ * up or down; flat conservatives are predictable and easier to
+ * eyeball. Bump the constants when contract data changes.
  */
 function correctedLineEstPay(
   line: {
@@ -426,60 +390,37 @@ function correctedLineEstPay(
     estPay?: number;
     units?: number;
   },
-  history: HistoricalRates,
   payor: string | null | undefined,
 ): { amount: number; corrected: boolean } {
   const code = (line.hcpcs || "").trim();
 
-  // Pump short-circuit. PAYER_RATE_SCHEDULE writes whatever each
-  // payer's billable charge is into the line's estPay (Medicare A&B
-  // \$600/month, commercial plans \$4-6k purchase, etc.), but the
-  // CASH FLOW projection should always use the realistic expected-
-  // payment estimate, not the billed amount. For Medicare A&B that
-  // estimate is \$300/month; for everything else it's \$2,500 as a
-  // conservative one-shot purchase. correctedLineEstPay routes E0784
-  // through the same history-or-conservative machinery used for
-  // legacy fallbacks, regardless of the raw charge — so all pump
-  // lines get the realistic projection without altering anything on
-  // the claim itself (rate schedule, billed charge, submitted est
-  // pay are all untouched; this lives only in the cash flow tile).
+  // Pumps always go through the conservative override regardless of
+  // the raw charge, since PAYER_RATE_SCHEDULE writes various billable
+  // amounts into the line (Medicare A&B \$600/month, commercials \$4-
+  // 6k purchase) that don't reflect realistic expected payments.
   const isPump = code === "E0784";
 
   if (!isLegacyFallbackLine(line) && !isPump) {
     return { amount: line.estPay ?? 0, corrected: false };
   }
+
   const units = Math.max(1, line.units ?? 1);
-
-  // Pumps use the FIXED conservative — never historical. Operator's
-  // mental model is "Medicare A&B = \$300, everything else = \$2,500"
-  // and we don't want one outlier paid amount drifting that. Supplies
-  // continue to prefer historical-average over conservative so they
-  // auto-tune toward real per-payor paid rates as data accumulates.
-  if (isPump) {
-    const c = conservativeFor(code, payor);
-    if (c != null) return { amount: c * units, corrected: true };
-    return { amount: line.estPay ?? 0, corrected: true };
-  }
-
-  const historical = history[historyKey(code, payor)];
-  if (historical != null && Number.isFinite(historical)) {
-    return { amount: historical * units, corrected: true };
-  }
   const conservative = conservativeFor(code, payor);
   if (conservative != null) {
     return { amount: conservative * units, corrected: true };
   }
-  // No history, no conservative entry — leave it alone but still flag
-  // so the operator sees the line is on a legacy estimate.
+  // No conservative entry for this HCPCS — leave the line's estPay
+  // alone but flag the row so the operator can see the projection is
+  // on an unverified value.
   return { amount: line.estPay ?? 0, corrected: true };
 }
 
 /**
  * Dollar contribution to cash flow for a primary claim. ERA-in-hand uses
  * the actual Primary Paid (truth, no correction). Otherwise we sum each
- * line's estPay, swapping legacy-fallback lines for the historical
- * average. Returns { amount, corrected } so the caller can flag the
- * entry as "estimated" in the drill-down panel.
+ * line's estPay, swapping legacy-fallback lines (and all pumps) for
+ * the fixed conservative-table estimate. Returns { amount, corrected }
+ * so the caller can flag the entry as "estimated" in the drill-down.
  *
  * Denial special-case: the at-risk amount is the GAP between the
  * (corrected) estPay and whatever already paid — i.e., what we could
@@ -489,7 +430,6 @@ function correctedLineEstPay(
  */
 export function expectedInflowAmount(
   claim: Claim,
-  history: HistoricalRates = {},
 ): { amount: number; corrected: boolean } {
   const isDenied = claim.primaryStatus === "Denied (Or Partly)";
 
@@ -498,13 +438,14 @@ export function expectedInflowAmount(
     return { amount: claim.primaryPaid, corrected: false };
   }
 
-  // Sum the per-line corrected estPay (legacy fallbacks swapped for
-  // historical averages where applicable). Payor is threaded through
-  // so the correction picks the right Medicare-vs-commercial bucket.
+  // Sum the per-line corrected estPay (legacy fallbacks and all
+  // pumps swapped for the fixed conservative estimate). Payor is
+  // threaded through so the correction picks the right Medicare-vs-
+  // commercial bucket for E0784.
   let estPayTotal = 0;
   let anyCorrected = false;
   for (const l of claim.lines || []) {
-    const r = correctedLineEstPay(l, history, claim.primaryPayor);
+    const r = correctedLineEstPay(l, claim.primaryPayor);
     estPayTotal += r.amount;
     if (r.corrected) anyCorrected = true;
   }
@@ -716,10 +657,6 @@ export function computeCashFlow(
   secondaryClaims: SecClaim[] = [],
   today: Date = new Date(),
 ): CashFlowStats {
-  // Build per-HCPCS paid-per-unit averages once, up front. Used to
-  // correct estPay for legacy-fallback lines (see expectedInflowAmount).
-  const history = buildHistoricalAverages(claims);
-
   const buckets: Record<
     Exclude<CashFlowBucket, "settled" | "out">,
     BucketStat
@@ -751,7 +688,7 @@ export function computeCashFlow(
   for (const c of claims) {
     const bucket = classifyForCashFlow(c, today);
     if (bucket === "settled" || bucket === "out") continue;
-    const { amount, corrected } = expectedInflowAmount(c, history);
+    const { amount, corrected } = expectedInflowAmount(c);
     const entry = entryFromPrimary(c, amount, corrected);
     addToStat(buckets[bucket], entry);
     // Per Brandon: futurePump dollars roll INTO Total Open — they're
