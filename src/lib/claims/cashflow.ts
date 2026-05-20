@@ -329,16 +329,16 @@ const CONSERVATIVE_PER_UNIT_ESTIMATE: Record<
   A4239: { default: 150 }, // CGM sensors per unit
 };
 
-/** Map a primary-payor label to "medicare" or "other". We match any
- *  payor with the word Medicare anywhere in the name so Medicare
- *  Advantage plans like "United Medicare", "Aetna Medicare", "Anthem
- *  BCBS Medicare" — which all reimburse on the Medicare fee schedule
- *  for DME — get bucketed alongside traditional Medicare A&B. A
- *  /^Medicare/ prefix-only check would silently miss every MA plan,
- *  and we'd project pumps at the inflated commercial \$2,500 rate
- *  (or worse, whatever the rate schedule wrote). */
+/** Map a primary-payor label to "medicare" or "other". Strictly
+ *  Medicare A&B (traditional Medicare) — that's the only payer that
+ *  reimburses E0784 as a 13-month rental at ~\$300/month. Medicare
+ *  Advantage plans (United Medicare, Aetna Medicare, Anthem BCBS
+ *  Medicare, Humana MA, etc.) pay pumps as a flat commercial-style
+ *  purchase, so they belong in the "other" class with the \$2,500
+ *  conservative. Per Brandon's clarification — don't broaden this
+ *  match without confirming, MA pricing is materially different. */
 function payorClass(payor: string | null | undefined): PayorClass {
-  return /\bMedicare\b/i.test((payor || "").trim()) ? "medicare" : "other";
+  return /^Medicare\s+A&?B$/i.test((payor || "").trim()) ? "medicare" : "other";
 }
 
 function conservativeFor(hcpcs: string, payor: string | null | undefined): number | undefined {
@@ -738,13 +738,11 @@ export function computeCashFlow(
     const { amount, corrected } = expectedInflowAmount(c, history);
     const entry = entryFromPrimary(c, amount, corrected);
     addToStat(buckets[bucket], entry);
-    // futurePump claims aren't part of Total Open / Primary Total —
-    // they're scheduled future inflow, not open A/R right now. Total
-    // Open should still feel like "open A/R" so it stays comparable
-    // to the rest of the dashboards.
-    if (bucket !== "futurePump") {
-      addToStat(primaryTotal, entry);
-    }
+    // Per Brandon: futurePump dollars roll INTO Total Open — they're
+    // genuine projected inflow, just scheduled rather than in-flight.
+    // primaryTotal therefore also includes them so the Primary slice
+    // on the Total Open tile breaks down consistently.
+    addToStat(primaryTotal, entry);
     if (claimHasPump(c)) {
       if (bucket === "soonEra" || bucket === "soonMedicaid") {
         addToStat(soonPumps, entry);
@@ -786,9 +784,12 @@ export function computeCashFlow(
   // drill-down rows. Both groups are operator-blocked: a denial needs
   // resolution; a late claim needs a status check or replacement.
   const highRisk = mergeStats(buckets.highRiskDenials, buckets.highRiskLate);
-  // Total Open intentionally excludes futurePump — that money is
-  // scheduled rental cycles, not currently outstanding A/R.
-  const totalOpen = mergeStats(soon, expected, highRisk);
+  // Total Open includes the Future Medicare Pumps tile dollars too —
+  // those are real projected inflow, just scheduled for future months.
+  // totalOpenPumps stays commercial-only (matches what the Pump
+  // claims breakdown row counts elsewhere); Medicare pump rentals
+  // already have their own dedicated Future Medicare Pumps tile.
+  const totalOpen = mergeStats(soon, expected, highRisk, buckets.futurePump);
   const totalOpenPumps = mergeStats(soonPumps, expectedPumps, highRiskPumps);
 
   return {
