@@ -62,6 +62,30 @@ export function medicaidPaymentDate(sentDate: Date): Date {
   return eft;
 }
 
+/** Parse a YYYY-MM-DD string as a *local* date (not UTC). Monday's
+ *  date columns hand back date-only strings; new Date(s) on those
+ *  defaults to UTC midnight and rolls back a day in any negative-
+ *  offset timezone. Use this so date math operates on the same day
+ *  Monday is showing. */
+function parseLocalDate(s: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s.trim());
+  if (m) {
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
+  return new Date(s);
+}
+
+/** Render a Date as YYYY-MM-DD in local time (no UTC conversion). The
+ *  output is consumed by fmtDate, which already parses YYYY-MM-DD as a
+ *  local date — so the day rendered downstream matches the day the
+ *  projection computed. */
+function formatLocalYmd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export type CashFlowBucket =
   | "soonEra"
   | "soonMedicaid"
@@ -136,9 +160,12 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
   // not yet expected inflow.
   if (claim.primaryStatus === "Future Claim") return "out";
 
-  // No ERA yet — pure Medicaid uses the eMedNY cycle math.
+  // No ERA yet — pure Medicaid uses the eMedNY cycle math. Parse the
+  // sent date as local (not UTC) so the day-of-week we compute matches
+  // the day Monday is showing — otherwise the projection lands a day
+  // off after the UTC midnight shift.
   if (isPureMedicaid(claim.primaryPayor) && claim.claimSentDate) {
-    const sent = new Date(claim.claimSentDate);
+    const sent = parseLocalDate(claim.claimSentDate);
     if (Number.isFinite(sent.getTime())) {
       const projectedPay = medicaidPaymentDate(sent);
       const daysAway = Math.ceil(
@@ -259,19 +286,19 @@ const LEGACY_PER_UNIT_AMOUNT = 500;
 /**
  * Conservative per-unit fallback estimates — used only when we have
  * NO paid-history data for this HCPCS in the loaded claims set yet.
- * These err deliberately low so cash flow under-promises rather than
- * over-promises. Pumps and the monitor are per-claim flat (treated as
- * a single unit). Bump these as Brandon shares real contracted rates.
+ * Values set by Brandon based on observed Medicare and commercial
+ * payer rates; pumps + monitor are per-claim flat (units=1), the
+ * rest are per-unit. Bump these as more real rate data accumulates.
  */
 const CONSERVATIVE_PER_UNIT_ESTIMATE: Record<string, number> = {
-  E0784: 500, // pump rental — Medicare allowed is well above this; ~$2-3k actual
-  E2103: 200, // monitor flat
-  A4224: 30,
-  A4225: 30,
-  A4230: 30,
-  A4231: 30,
-  A4232: 20,
-  A4239: 30, // CGM sensors
+  E0784: 300, // Medicare pump monthly rental
+  E2103: 150, // monitor flat
+  A4224: 15,
+  A4225: 3,
+  A4230: 6,
+  A4231: 6,
+  A4232: 3,
+  A4239: 150, // CGM sensors per unit
 };
 
 /** True when a line's charge looks exactly like the backend's legacy
@@ -479,19 +506,31 @@ function addToStat(stat: BucketStat, entry: CashFlowEntry): void {
 // counts as a "pump claim" for Cash Flow breakdown purposes.
 const PUMP_HCPCS = "E0784";
 
+/** True only for *commercial* pump claims (E0784 line, primary payor
+ *  is NOT Medicare A&B). Medicare bills E0784 as a 13-month rental at
+ *  roughly $300/month — those are routine recurring transactions, not
+ *  big-dollar one-shots, and they're already surfaced separately on
+ *  the Future Pump tile. The "Pump claims" breakdown on
+ *  Soon/Expected/High Risk/Total Open exists to flag commercial pumps
+ *  (one-time ~$4-6k transactions) that disproportionately move the
+ *  dollar totals; rolling Medicare rentals into the same row would
+ *  drown that signal in monthly noise. */
 function claimHasPump(c: Claim): boolean {
+  if (/^Medicare A&B/i.test(c.primaryPayor || "")) return false;
   return (c.lines || []).some((l) => (l.hcpcs || "").trim() === PUMP_HCPCS);
 }
 
 /** Pay date for the drill-down drawer. ERA-in-hand → use that ERA's
  *  pay date. Pure-Medicaid awaiting ERA → use the projected eMedNY
- *  cycle pay date. Otherwise null (drawer shows a dash). */
+ *  cycle pay date. Otherwise null (drawer shows a dash). Uses local-
+ *  time parse + format so the day matches Monday's cell instead of
+ *  shifting one day backward via UTC conversion. */
 function projectedPrimaryPayDate(c: Claim): string | null {
   if (c.primaryPaidDate) return c.primaryPaidDate;
   if (isPureMedicaid(c.primaryPayor) && c.claimSentDate) {
-    const sent = new Date(c.claimSentDate);
+    const sent = parseLocalDate(c.claimSentDate);
     if (!Number.isNaN(sent.getTime())) {
-      return medicaidPaymentDate(sent).toISOString().slice(0, 10);
+      return formatLocalYmd(medicaidPaymentDate(sent));
     }
   }
   return null;

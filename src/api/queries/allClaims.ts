@@ -233,7 +233,18 @@ function arr(item: { column_values: MondayColumnValue[] }, id: string): string[]
 
 function isoOrNull(value: string): string | null {
   if (!value) return null;
-  const d = new Date(value);
+  // Monday's date columns hand back bare YYYY-MM-DD strings. Preserve
+  // them as-is — calling new Date() on them parses as UTC midnight and
+  // .toISOString() then bakes that timezone shift into the stored value,
+  // which makes every downstream renderer (and the cashflow Medicaid
+  // projection) round the date back by one day in any negative-offset
+  // timezone. fmtDate already handles YYYY-MM-DD correctly; just keep
+  // the wire format intact.
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  const d = new Date(trimmed);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 

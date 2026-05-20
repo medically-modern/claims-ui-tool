@@ -216,11 +216,18 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             subtitle="No primary ERA, sent 21+ days ago"
             activeKey={active?.key}
             breakdown={[
+              // All-claims drill-down so the operator can see the full
+              // set of at-risk claims, not just the pump-only slice.
+              {
+                label: "All claims",
+                stat: stats.highRisk,
+                description: "Every primary submitted 21+ days ago with no ERA yet.",
+              },
               {
                 label: "Pump claims",
                 stat: stats.highRiskPumps,
                 emphasis: true,
-                description: "Pump claims (HCPCS E0784) at risk — sent 21+ days ago, no ERA.",
+                description: "Commercial pump claims at risk (Medicare rentals are tracked separately on the Future Pump tile).",
               },
             ]}
             tooltipText="Non-Medicaid primary claims submitted 21+ days ago that still have no ERA. Past normal payer turnaround — something may be wrong (denial, payer issue, lost claim)."
