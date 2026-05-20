@@ -70,6 +70,7 @@ export type CashFlowBucket =
   | "expectedSecondaryConfirm"
   | "expectedSecondaryInsurance"
   | "expectedSecondaryPatient"
+  | "futurePump"
   | "highRisk"
   | "settled"
   | "out";
@@ -80,9 +81,13 @@ const SOON_HORIZON_DAYS = 7;
 const EXPECTED_AGE_LIMIT_DAYS = 21;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+// Pre-submission / terminal primary statuses that aren't part of cash
+// flow projection. Note: "Future Claim" is handled separately below —
+// Medicare pump rentals sit in Future Claim until they're billed and
+// have their own tile. Non-Medicare-pump Future Claims still fall
+// through to "out".
 const PRE_OR_TERMINAL: ReadonlySet<string> = new Set([
   "Submit Claim",
-  "Future Claim",
   "Not Started Yet",
   "Bad Debt",
   "Request Rejected",
@@ -114,6 +119,22 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
 
   if (PRE_OR_TERMINAL.has(claim.primaryStatus)) return "out";
   if (claim.primaryStatus === "Paid") return "out";
+
+  // Medicare pump rentals: a 13-month schedule, one claim per month.
+  // The scheduled-but-not-yet-billed claims sit on Monday as "Future
+  // Claim" with primaryPayor "Medicare A&B" and an E0784 line. They're
+  // not part of the open cycle yet, but they ARE projected inflow —
+  // surfaced on the dedicated Future Pump tile.
+  if (
+    claim.primaryStatus === "Future Claim" &&
+    /^Medicare A&B/i.test(claim.primaryPayor || "") &&
+    (claim.lines || []).some((l) => (l.hcpcs || "").trim() === "E0784")
+  ) {
+    return "futurePump";
+  }
+  // Future Claim that isn't a Medicare pump → genuinely pre-submission;
+  // not yet expected inflow.
+  if (claim.primaryStatus === "Future Claim") return "out";
 
   // No ERA yet — pure Medicaid uses the eMedNY cycle math.
   if (isPureMedicaid(claim.primaryPayor) && claim.claimSentDate) {
@@ -199,13 +220,169 @@ export function classifyForCashFlowSecondary(
   return "expectedSecondaryInsurance";
 }
 
+// ---------------------------------------------------------------------------
+// Legacy fallback detection + historical-average correction.
+//
+// The backend stamps a flat legacy charge on supplies/pump lines when
+// no payer rate schedule entry exists yet (see
+// LEGACY_PROCEDURE_CODE_CHARGE_MAP in claim_assumptions.py):
+//
+//   E0784, A4224, A4225, A4230, A4231, A4232, E2103 → $1000 flat
+//   A4239                                           → $500 per unit
+//
+// Those are intentionally high so the operator notices, but they wildly
+// over-state cash flow projections. For the Cash Flow view we replace
+// each "obviously legacy" line's estPay with a HCPCS-level historical
+// average paid-per-unit, computed from the currently-loaded paid lines.
+// Conservative hardcoded estimates are used as last-resort when we
+// have no paid history yet.
+//
+// The actual Monday data is untouched — corrections live only inside
+// this module's projection math. Each CashFlowEntry carries an
+// `estimated` flag so the drill-down panel can visually mark which
+// rows got rewritten.
+// ---------------------------------------------------------------------------
+
+const LEGACY_FLAT_CHARGE_HCPCS = new Set([
+  "E0784",
+  "A4224",
+  "A4225",
+  "A4230",
+  "A4231",
+  "A4232",
+  "E2103",
+]);
+const LEGACY_FLAT_CHARGE_AMOUNT = 1000;
+const LEGACY_PER_UNIT_HCPCS = new Set(["A4239"]);
+const LEGACY_PER_UNIT_AMOUNT = 500;
+
+/**
+ * Conservative per-unit fallback estimates — used only when we have
+ * NO paid-history data for this HCPCS in the loaded claims set yet.
+ * These err deliberately low so cash flow under-promises rather than
+ * over-promises. Pumps and the monitor are per-claim flat (treated as
+ * a single unit). Bump these as Brandon shares real contracted rates.
+ */
+const CONSERVATIVE_PER_UNIT_ESTIMATE: Record<string, number> = {
+  E0784: 500, // pump rental — Medicare allowed is well above this; ~$2-3k actual
+  E2103: 200, // monitor flat
+  A4224: 30,
+  A4225: 30,
+  A4230: 30,
+  A4231: 30,
+  A4232: 20,
+  A4239: 30, // CGM sensors
+};
+
+/** True when a line's charge looks exactly like the backend's legacy
+ *  fallback (flat $1000 for the flat HCPCS set, or $500 × units for
+ *  A4239). False-positive risk is low — real contracted charges
+ *  rarely land precisely on these magic numbers. */
+function isLegacyFallbackLine(line: {
+  hcpcs?: string;
+  charge?: number;
+  estPay?: number;
+  units?: number;
+}): boolean {
+  const code = (line.hcpcs || "").trim();
+  if (!code) return false;
+  const charge = line.charge ?? 0;
+  const units = Math.max(1, line.units ?? 1);
+  if (LEGACY_FLAT_CHARGE_HCPCS.has(code) && charge === LEGACY_FLAT_CHARGE_AMOUNT) {
+    return true;
+  }
+  if (LEGACY_PER_UNIT_HCPCS.has(code) && charge === LEGACY_PER_UNIT_AMOUNT * units) {
+    return true;
+  }
+  return false;
+}
+
+/** Per-HCPCS average paid-per-unit, computed from all paid lines in
+ *  the loaded primary claims. Used to replace legacy-fallback estPay
+ *  with a more realistic projection. */
+export type HistoricalRates = Record<string, number>;
+
+export function buildHistoricalAverages(claims: Claim[]): HistoricalRates {
+  const sums: Record<string, { sum: number; count: number }> = {};
+  for (const c of claims) {
+    for (const l of c.lines || []) {
+      const code = (l.hcpcs || "").trim();
+      if (!code) continue;
+      const units = Math.max(1, l.units ?? 1);
+      const paid = l.primaryPaid ?? 0;
+      if (paid <= 0) continue;
+      const perUnit = paid / units;
+      const bucket = sums[code] ?? { sum: 0, count: 0 };
+      bucket.sum += perUnit;
+      bucket.count += 1;
+      sums[code] = bucket;
+    }
+  }
+  const avg: HistoricalRates = {};
+  for (const [code, { sum, count }] of Object.entries(sums)) {
+    if (count > 0) avg[code] = sum / count;
+  }
+  return avg;
+}
+
+/**
+ * Corrected estPay for one line. Returns { amount, corrected } —
+ * `corrected` is true when we substituted a value because the line
+ * looked like a legacy fallback. Caller uses that to flag the row.
+ */
+function correctedLineEstPay(
+  line: {
+    hcpcs?: string;
+    charge?: number;
+    estPay?: number;
+    units?: number;
+  },
+  history: HistoricalRates,
+): { amount: number; corrected: boolean } {
+  if (!isLegacyFallbackLine(line)) {
+    return { amount: line.estPay ?? 0, corrected: false };
+  }
+  const code = (line.hcpcs || "").trim();
+  const units = Math.max(1, line.units ?? 1);
+  const historical = history[code];
+  if (historical != null && Number.isFinite(historical)) {
+    return { amount: historical * units, corrected: true };
+  }
+  const conservative = CONSERVATIVE_PER_UNIT_ESTIMATE[code];
+  if (conservative != null) {
+    return { amount: conservative * units, corrected: true };
+  }
+  // No history, no conservative entry — leave it alone but still flag
+  // so the operator sees the line is on a legacy estimate.
+  return { amount: line.estPay ?? 0, corrected: true };
+}
+
 /**
  * Dollar contribution to cash flow for a primary claim. ERA-in-hand uses
- * the actual Primary Paid; otherwise project from est pay.
+ * the actual Primary Paid (truth, no correction). Otherwise we sum each
+ * line's estPay, swapping legacy-fallback lines for the historical
+ * average. Returns { amount, corrected } so the caller can flag the
+ * entry as "estimated" in the drill-down panel.
  */
-export function expectedInflowAmount(claim: Claim): number {
-  if (claim.primaryPaidDate) return claim.primaryPaid;
-  return claim.estPay;
+export function expectedInflowAmount(
+  claim: Claim,
+  history: HistoricalRates = {},
+): { amount: number; corrected: boolean } {
+  if (claim.primaryPaidDate) {
+    return { amount: claim.primaryPaid, corrected: false };
+  }
+  let total = 0;
+  let anyCorrected = false;
+  for (const l of claim.lines || []) {
+    const r = correctedLineEstPay(l, history);
+    total += r.amount;
+    if (r.corrected) anyCorrected = true;
+  }
+  // Fallback for legacy rows with no subitems — use the parent rollup.
+  if ((claim.lines || []).length === 0) {
+    return { amount: claim.estPay, corrected: false };
+  }
+  return { amount: total, corrected: anyCorrected };
 }
 
 /**
@@ -237,6 +414,11 @@ export interface CashFlowEntry {
   payDate: string | null;
   amount: number;
   kind: "primary" | "secondary";
+  /** True when the row's amount came from a corrected legacy estPay —
+   *  see correctedLineEstPay above. The drill-down panel renders these
+   *  in amber with an "(est.)" suffix so the operator can tell which
+   *  numbers are historical-average projections vs. real estPay. */
+  estimated?: boolean;
 }
 
 export interface BucketStat {
@@ -263,6 +445,12 @@ export interface CashFlowStats {
   expectedSecondaryConfirm: BucketStat;
   expectedSecondaryInsurance: BucketStat;
   expectedSecondaryPatient: BucketStat;
+
+  // Medicare pump 13-month rental schedule — scheduled-but-not-yet-
+  // billed claims on Monday with status "Future Claim". Sits between
+  // Expected and High Risk because the money is far enough out that
+  // it isn't comparable to in-flight claims.
+  futurePump: BucketStat;
 
   // High risk (primary only)
   highRisk: BucketStat;
@@ -295,10 +483,6 @@ function claimHasPump(c: Claim): boolean {
   return (c.lines || []).some((l) => (l.hcpcs || "").trim() === PUMP_HCPCS);
 }
 
-function secClaimHasPump(c: SecClaim): boolean {
-  return (c.lines || []).some((l) => (l.hcpcs || "").trim() === PUMP_HCPCS);
-}
-
 /** Pay date for the drill-down drawer. ERA-in-hand → use that ERA's
  *  pay date. Pure-Medicaid awaiting ERA → use the projected eMedNY
  *  cycle pay date. Otherwise null (drawer shows a dash). */
@@ -313,7 +497,11 @@ function projectedPrimaryPayDate(c: Claim): string | null {
   return null;
 }
 
-function entryFromPrimary(c: Claim, amount: number): CashFlowEntry {
+function entryFromPrimary(
+  c: Claim,
+  amount: number,
+  estimated: boolean,
+): CashFlowEntry {
   return {
     id: c.id,
     mondayItemId: c.mondayItemId,
@@ -322,6 +510,7 @@ function entryFromPrimary(c: Claim, amount: number): CashFlowEntry {
     payDate: projectedPrimaryPayDate(c),
     amount,
     kind: "primary",
+    estimated,
   };
 }
 
@@ -358,6 +547,10 @@ export function computeCashFlow(
   secondaryClaims: SecClaim[] = [],
   today: Date = new Date(),
 ): CashFlowStats {
+  // Build per-HCPCS paid-per-unit averages once, up front. Used to
+  // correct estPay for legacy-fallback lines (see expectedInflowAmount).
+  const history = buildHistoricalAverages(claims);
+
   const buckets: Record<
     Exclude<CashFlowBucket, "settled" | "out">,
     BucketStat
@@ -369,11 +562,13 @@ export function computeCashFlow(
     expectedSecondaryConfirm: emptyStat(),
     expectedSecondaryInsurance: emptyStat(),
     expectedSecondaryPatient: emptyStat(),
+    futurePump: emptyStat(),
     highRisk: emptyStat(),
   };
 
-  // Pump-claim counters per tile. Built in parallel with the main
-  // buckets so the breakdown reflects exactly the same claim set.
+  // Pump-claim counters per tile. Primaries only — secondaries don't
+  // contribute, because a secondary pump claim is just the patient-
+  // responsibility leftover from the primary and would double-count.
   const soonPumps = emptyStat();
   const expectedPumps = emptyStat();
   const highRiskPumps = emptyStat();
@@ -386,10 +581,16 @@ export function computeCashFlow(
   for (const c of claims) {
     const bucket = classifyForCashFlow(c, today);
     if (bucket === "settled" || bucket === "out") continue;
-    const amount = expectedInflowAmount(c);
-    const entry = entryFromPrimary(c, amount);
+    const { amount, corrected } = expectedInflowAmount(c, history);
+    const entry = entryFromPrimary(c, amount, corrected);
     addToStat(buckets[bucket], entry);
-    addToStat(primaryTotal, entry);
+    // futurePump claims aren't part of Total Open / Primary Total —
+    // they're scheduled future inflow, not open A/R right now. Total
+    // Open should still feel like "open A/R" so it stays comparable
+    // to the rest of the dashboards.
+    if (bucket !== "futurePump") {
+      addToStat(primaryTotal, entry);
+    }
     if (claimHasPump(c)) {
       if (bucket === "soonEra" || bucket === "soonMedicaid") {
         addToStat(soonPumps, entry);
@@ -401,6 +602,9 @@ export function computeCashFlow(
       } else if (bucket === "highRisk") {
         addToStat(highRiskPumps, entry);
       }
+      // futurePump entries are already a pump-only tile, so we don't
+      // also aggregate them into expectedPumps — they have their own
+      // dedicated tile.
     }
   }
 
@@ -411,17 +615,7 @@ export function computeCashFlow(
     const entry = entryFromSecondary(c, amount);
     addToStat(buckets[bucket], entry);
     addToStat(secondaryTotal, entry);
-    if (secClaimHasPump(c)) {
-      if (bucket === "soonEra") {
-        addToStat(soonPumps, entry);
-      } else if (
-        bucket === "expectedSecondaryConfirm" ||
-        bucket === "expectedSecondaryInsurance" ||
-        bucket === "expectedSecondaryPatient"
-      ) {
-        addToStat(expectedPumps, entry);
-      }
-    }
+    // Note: no pump aggregation for secondaries. See comment above.
   }
 
   // Parent tiles compose from their sub-buckets so the drill-down
@@ -434,6 +628,8 @@ export function computeCashFlow(
     buckets.expectedSecondaryInsurance,
     buckets.expectedSecondaryPatient,
   );
+  // Total Open intentionally excludes futurePump — that money is
+  // scheduled rental cycles, not currently outstanding A/R.
   const totalOpen = mergeStats(soon, expected, buckets.highRisk);
   const totalOpenPumps = mergeStats(soonPumps, expectedPumps, highRiskPumps);
 
@@ -450,6 +646,7 @@ export function computeCashFlow(
     expectedSecondaryConfirm: buckets.expectedSecondaryConfirm,
     expectedSecondaryInsurance: buckets.expectedSecondaryInsurance,
     expectedSecondaryPatient: buckets.expectedSecondaryPatient,
+    futurePump: buckets.futurePump,
     highRisk: buckets.highRisk,
     totalOpenPumps,
     soonPumps,

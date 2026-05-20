@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { TrendingUp, Calendar, Clock, AlertTriangle, Info, X } from "lucide-react";
+import { TrendingUp, Calendar, Clock, AlertTriangle, Info, X, Activity } from "lucide-react";
 import { computeCashFlow, type BucketStat, type CashFlowEntry } from "@/lib/claims/cashflow";
 import { fmtDate, fmtMoney } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
@@ -87,7 +87,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
           <Tile
             tone="info"
             icon={<TrendingUp className="h-5 w-5" />}
@@ -190,6 +190,24 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             onToggle={(label, stat, desc) => toggleBucket("Expected", label, stat, desc)}
           />
           <Tile
+            tone="violet"
+            icon={<Activity className="h-5 w-5" />}
+            label="Future pump"
+            amount={stats.futurePump.total}
+            count={stats.futurePump.count}
+            subtitle="Medicare 13-month rental schedule"
+            activeKey={active?.key}
+            breakdown={[
+              {
+                label: "Scheduled claims",
+                stat: stats.futurePump,
+                description: "Medicare A&B pump rentals with status 'Future Claim' — billed one per month over the 13-month rental.",
+              },
+            ]}
+            tooltipText="Medicare A&B pump rentals scheduled for future months but not yet billed. These claims sit in 'Future Claim' on the Claims Board until the next monthly cycle. Separated out so the open-A/R tiles aren't dominated by far-future rental cycles."
+            onToggle={(label, stat, desc) => toggleBucket("Future pump", label, stat, desc)}
+          />
+          <Tile
             tone="danger"
             icon={<AlertTriangle className="h-5 w-5" />}
             label="High risk"
@@ -250,6 +268,8 @@ function DetailPanel({
     navigate(`/claims/${entry.id}`);
   }
 
+  const estimatedCount = sorted.filter((e) => e.estimated).length;
+
   return (
     <Card className="mt-3 p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
@@ -268,6 +288,16 @@ function DetailPanel({
               </>
             )}
           </div>
+          {estimatedCount > 0 && (
+            // Surface that some rows had their estPay rewritten from
+            // historical averages because the original was a legacy
+            // fallback (E0784=$1000, A4230=$1000, A4239=$500/unit, etc).
+            // Operator sees the count and can click the amber rows for
+            // detail. Avoids hiding the fact behind a tooltip.
+            <div className="mt-1 inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
+              {estimatedCount} {estimatedCount === 1 ? "row" : "rows"} estimated from historical averages
+            </div>
+          )}
         </div>
         <button
           type="button"
@@ -299,7 +329,13 @@ function DetailPanel({
                 <tr
                   key={`${e.kind}-${e.id}`}
                   onClick={() => go(e)}
-                  className="cursor-pointer border-b last:border-0 hover:bg-muted/50"
+                  className={cn(
+                    "cursor-pointer border-b last:border-0",
+                    // Amber tint when the amount is a historical-average
+                    // substitute (line had a legacy $1000 / $500-per-unit
+                    // fallback). Same color used in the heading badge.
+                    e.estimated ? "bg-amber-50/60 hover:bg-amber-100/60" : "hover:bg-muted/50",
+                  )}
                 >
                   <td className="py-2 pr-3">
                     <div className="font-medium text-foreground">{e.name}</div>
@@ -315,8 +351,16 @@ function DetailPanel({
                   <td className="py-2 pr-3 tabular-nums text-muted-foreground">
                     {fmtDate(e.payDate)}
                   </td>
-                  <td className="py-2 text-right tabular-nums font-medium text-foreground">
+                  <td className={cn(
+                    "py-2 text-right tabular-nums font-medium",
+                    e.estimated ? "text-amber-900" : "text-foreground",
+                  )}>
                     {fmtMoney(e.amount)}
+                    {e.estimated && (
+                      <span className="ml-1 text-[10px] uppercase tracking-wide text-amber-700">
+                        est.
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -332,13 +376,14 @@ function DetailPanel({
 // Tile
 // =============================================================================
 
-type Tone = "info" | "success" | "neutral" | "danger";
+type Tone = "info" | "success" | "neutral" | "danger" | "violet";
 
 const TONE_CLASSES: Record<Tone, { icon: string; ring: string }> = {
   info:    { icon: "bg-blue-100 text-blue-700",      ring: "" },
   success: { icon: "bg-emerald-100 text-emerald-700", ring: "" },
   neutral: { icon: "bg-amber-100 text-amber-800",    ring: "" },
   danger:  { icon: "bg-rose-100 text-rose-700",      ring: "" },
+  violet:  { icon: "bg-violet-100 text-violet-700",  ring: "" },
 };
 
 interface BreakdownRow {
