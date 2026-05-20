@@ -447,13 +447,18 @@ export interface CashFlowEntry {
   id: string;
   mondayItemId: string;
   name: string;
+  /** Primary payor label off the claim — same for both primary and
+   *  secondary entries (the secondary's parent primary). Shown as a
+   *  column in the drill-down so the operator can identify the
+   *  insurance carrier at a glance without clicking into ClaimDetail. */
+  payor: string;
   dos: string | null;
   payDate: string | null;
   amount: number;
   kind: "primary" | "secondary";
   /** True when the row's amount came from a corrected legacy estPay —
    *  see correctedLineEstPay above. The drill-down panel renders these
-   *  in amber with an "(est.)" suffix so the operator can tell which
+   *  in amber with an "est." prefix so the operator can tell which
    *  numbers are historical-average projections vs. real estPay. */
   estimated?: boolean;
 }
@@ -558,6 +563,7 @@ function entryFromPrimary(
     id: c.id,
     mondayItemId: c.mondayItemId,
     name: c.patientName,
+    payor: c.primaryPayor || "—",
     dos: c.dos || null,
     payDate: projectedPrimaryPayDate(c),
     amount,
@@ -571,6 +577,7 @@ function entryFromSecondary(c: SecClaim, amount: number): CashFlowEntry {
     id: c.id,
     mondayItemId: c.mondayItemId ?? c.id,
     name: c.patientName,
+    payor: c.primaryPayor || "—",
     dos: c.dos || null,
     // Secondaries: prefer the ERA pay date; otherwise leave blank since
     // there's no equivalent eMedNY-style projection for crossovers.

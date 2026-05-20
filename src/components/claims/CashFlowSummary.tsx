@@ -334,6 +334,7 @@ function DetailPanel({
             <thead className="text-[11px] uppercase tracking-wide text-muted-foreground">
               <tr className="border-b">
                 <th className="py-1.5 pr-3 text-left font-medium">Name</th>
+                <th className="py-1.5 pr-3 text-left font-medium">Primary payor</th>
                 <th className="py-1.5 pr-3 text-left font-medium">DOS</th>
                 <th className="py-1.5 pr-3 text-left font-medium">Pay date</th>
                 <th className="py-1.5 text-right font-medium">Amount</th>
@@ -360,6 +361,9 @@ function DetailPanel({
                       </div>
                     )}
                   </td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {e.payor}
+                  </td>
                   <td className="py-2 pr-3 tabular-nums text-muted-foreground">
                     {fmtDate(e.dos)}
                   </td>
@@ -370,16 +374,29 @@ function DetailPanel({
                     "py-2 text-right tabular-nums font-medium",
                     e.estimated ? "text-amber-900" : "text-foreground",
                   )}>
-                    {fmtMoney(e.amount)}
+                    {/* "est." prefix on the LEFT keeps the numbers
+                        right-aligned across every row — the badge no
+                        longer pushes the value rightward. */}
                     {e.estimated && (
-                      <span className="ml-1 text-[10px] uppercase tracking-wide text-amber-700">
+                      <span className="mr-1 text-[10px] uppercase tracking-wide text-amber-700">
                         est.
                       </span>
                     )}
+                    {fmtMoney(e.amount)}
                   </td>
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr className="border-t-2">
+                <td className="py-2 pr-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" colSpan={4}>
+                  Total ({sorted.length.toLocaleString()} claim{sorted.length === 1 ? "" : "s"})
+                </td>
+                <td className="py-2 text-right tabular-nums font-bold text-foreground">
+                  {fmtMoney(active.stat.total)}
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}
