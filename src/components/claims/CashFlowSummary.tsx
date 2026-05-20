@@ -155,27 +155,32 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             activeKey={active?.key}
             breakdown={[
               {
-                label: "Primary (non-medicaid)",
+                section: "Primary",
+                label: "Non-medicaid",
                 stat: stats.expectedPrimaryNonMedicaid,
                 description: "Commercial primaries within their normal 21-day turnaround, no ERA yet.",
               },
               {
-                label: "Primary (medicaid)",
+                section: "Primary",
+                label: "Medicaid",
                 stat: stats.expectedPrimaryMedicaid,
                 description: "Pure-Medicaid claims more than 7 days from their eMedNY pay date.",
               },
               {
-                label: "Secondary (Confirm Payor)",
+                section: "Secondary",
+                label: "Confirm Payor",
                 stat: stats.expectedSecondaryConfirm,
                 description: "Awaiting operator to pick a secondary destination (Insurance vs Patient).",
               },
               {
-                label: "Secondary (Insurance)",
+                section: "Secondary",
+                label: "Insurance",
                 stat: stats.expectedSecondaryInsurance,
                 description: "In flight to a secondary payer — Submit Claim queued, Forwarded crossovers, or 837 already sent.",
               },
               {
-                label: "Secondary (Patient)",
+                section: "Secondary",
+                label: "Patient",
                 stat: stats.expectedSecondaryPatient,
                 description: "Patient-balance secondaries awaiting collection.",
               },
@@ -183,7 +188,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
                 label: "Pump claims",
                 stat: stats.expectedPumps,
                 emphasis: true,
-                description: "Pump claims (HCPCS E0784) in the Expected bucket.",
+                description: "Commercial pump claims in the Expected bucket.",
               },
             ]}
             tooltipText="Non-Medicaid primaries awaiting ERA within their normal turnaround window, pure-Medicaid more than a week from their eMedNY settle date, and secondaries (Forwarded/Insurance/Patient) still awaiting payment."
@@ -213,15 +218,18 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             label="High risk"
             amount={stats.highRisk.total}
             count={stats.highRisk.count}
-            subtitle="No primary ERA, sent 21+ days ago"
+            subtitle="Denials + Late ERAs"
             activeKey={active?.key}
             breakdown={[
-              // All-claims drill-down so the operator can see the full
-              // set of at-risk claims, not just the pump-only slice.
               {
-                label: "All claims",
-                stat: stats.highRisk,
-                description: "Every primary submitted 21+ days ago with no ERA yet.",
+                label: "Denials",
+                stat: stats.highRiskDenials,
+                description: "Claims with primary status Denied (Or Partly). Inflow is at risk until the operator works a corrected claim or appeal.",
+              },
+              {
+                label: "Late",
+                stat: stats.highRiskLate,
+                description: "Claims submitted 21+ days ago that still have no ERA. Past normal payer turnaround.",
               },
               {
                 label: "Pump claims",
@@ -230,7 +238,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
                 description: "Commercial pump claims at risk (Medicare rentals are tracked separately on the Future Pump tile).",
               },
             ]}
-            tooltipText="Non-Medicaid primary claims submitted 21+ days ago that still have no ERA. Past normal payer turnaround — something may be wrong (denial, payer issue, lost claim)."
+            tooltipText="Anything that's blocking expected inflow: denials (payer rejected, needs rework) plus claims submitted 21+ days ago with no ERA (Late). Both groups need operator action before the money lands."
             onToggle={(label, stat, desc) => toggleBucket("High risk", label, stat, desc)}
           />
         </div>
@@ -401,6 +409,11 @@ interface BreakdownRow {
   emphasis?: boolean;
   /** Short hint shown next to the active row's title in the detail panel. */
   description?: string;
+  /** Optional section heading to render above this row. The Tile groups
+   *  consecutive rows with the same section under one heading. Used by
+   *  the Expected tile to split Primary vs Secondary sub-rows visually
+   *  while keeping the row labels themselves short. */
+  section?: string;
 }
 
 function Tile({
@@ -463,40 +476,70 @@ function Tile({
         )}
         {breakdown && breakdown.length > 0 && (
           <div className="mt-2 space-y-0.5 border-t pt-2 text-xs text-muted-foreground">
-            {breakdown.map((row) => {
+            {breakdown.map((row, idx) => {
               // We render every breakdown row — even empty ones — so the
               // operator gets visual confirmation that the bucket is
               // empty rather than thinking the data didn't load. Empty
               // rows are non-interactive (no hover, no click).
               const isEmpty = row.stat.count === 0;
-              const rowKey: BucketKey = `${label}::${row.label}`;
+              // Include section in the key so the same row label can
+              // appear under different sections without colliding.
+              const rowKey: BucketKey = `${label}::${row.section ?? ""}::${row.label}`;
               const isActive = activeKey === rowKey;
+
+              // Emit a section heading when this row introduces a new
+              // section (different from the previous row's section).
+              const prev = idx > 0 ? breakdown[idx - 1] : undefined;
+              const showSectionHeader =
+                !!row.section && row.section !== prev?.section;
+
+              // Drill-down title gets the section prefix so the user
+              // knows the context (e.g. "Expected — Primary · medicaid"
+              // not just "Expected — medicaid").
+              const drillLabel = row.section
+                ? `${row.section} · ${row.label}`
+                : row.label;
+
               return (
-                <button
-                  key={row.label}
-                  type="button"
-                  disabled={isEmpty}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggle(row.label, row.stat, row.description);
-                  }}
-                  className={cn(
-                    "flex w-full items-baseline justify-between gap-2 rounded px-1 py-0.5 text-left transition-colors",
-                    row.emphasis && "mt-1 border-t border-dashed pt-1",
-                    isEmpty
-                      ? "cursor-default opacity-60"
-                      : "hover:bg-muted/60 cursor-pointer",
-                    isActive && "bg-muted/70 ring-1 ring-inset ring-border",
+                <div key={rowKey}>
+                  {showSectionHeader && (
+                    <div className={cn(
+                      "px-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/80",
+                      // First section needs less top padding since the
+                      // border-t above already provides separation.
+                      idx === 0 && "pt-0",
+                    )}>
+                      {row.section}
+                    </div>
                   )}
-                >
-                  <span className={cn(row.emphasis && "font-medium text-foreground")}>
-                    {row.label}
-                  </span>
-                  <span className="tabular-nums">
-                    <span className="font-medium text-foreground">{money(row.stat.total)}</span>
-                    <span className="ml-1 text-muted-foreground">({row.stat.count})</span>
-                  </span>
-                </button>
+                  <button
+                    type="button"
+                    disabled={isEmpty}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggle(drillLabel, row.stat, row.description);
+                    }}
+                    className={cn(
+                      "flex w-full items-baseline justify-between gap-2 rounded px-1 py-0.5 text-left transition-colors",
+                      row.emphasis && "mt-1 border-t border-dashed pt-1",
+                      // Indent rows belonging to a section so the
+                      // hierarchy reads at a glance.
+                      row.section && !row.emphasis && "pl-3",
+                      isEmpty
+                        ? "cursor-default opacity-60"
+                        : "hover:bg-muted/60 cursor-pointer",
+                      isActive && "bg-muted/70 ring-1 ring-inset ring-border",
+                    )}
+                  >
+                    <span className={cn(row.emphasis && "font-medium text-foreground")}>
+                      {row.label}
+                    </span>
+                    <span className="tabular-nums whitespace-nowrap">
+                      <span className="font-medium text-foreground">{money(row.stat.total)}</span>
+                      <span className="ml-1 text-muted-foreground">({row.stat.count})</span>
+                    </span>
+                  </button>
+                </div>
               );
             })}
           </div>

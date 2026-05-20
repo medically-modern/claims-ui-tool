@@ -95,7 +95,8 @@ export type CashFlowBucket =
   | "expectedSecondaryInsurance"
   | "expectedSecondaryPatient"
   | "futurePump"
-  | "highRisk"
+  | "highRiskDenials"
+  | "highRiskLate"
   | "settled"
   | "out";
 
@@ -144,6 +145,15 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
   if (PRE_OR_TERMINAL.has(claim.primaryStatus)) return "out";
   if (claim.primaryStatus === "Paid") return "out";
 
+  // Denied claims short-circuit to High Risk regardless of payer or
+  // age. A denial means the payer has rejected the claim — projected
+  // inflow is at risk until the operator works it (corrected claim,
+  // appeal, etc). Bucketed alongside Late so High Risk surfaces
+  // everything that needs operator attention before the money lands.
+  if (claim.primaryStatus === "Denied (Or Partly)") {
+    return "highRiskDenials";
+  }
+
   // Medicare pump rentals: a 13-month schedule, one claim per month.
   // The scheduled-but-not-yet-billed claims sit on Monday as "Future
   // Claim" with primaryPayor "Medicare A&B" and an E0784 line. They're
@@ -185,11 +195,11 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
       const ageDays = Math.floor((todayMs - sent.getTime()) / MS_PER_DAY);
       return ageDays < EXPECTED_AGE_LIMIT_DAYS
         ? "expectedPrimaryNonMedicaid"
-        : "highRisk";
+        : "highRiskLate";
     }
   }
 
-  return "highRisk";
+  return "highRiskLate";
 }
 
 /** Bucket a secondary-board SecClaim. */
@@ -479,8 +489,11 @@ export interface CashFlowStats {
   // it isn't comparable to in-flight claims.
   futurePump: BucketStat;
 
-  // High risk (primary only)
+  // High risk (primary only) — denials + late ERAs combined for the
+  // tile total, plus the two sub-stats for drill-down rows.
   highRisk: BucketStat;
+  highRiskDenials: BucketStat;
+  highRiskLate: BucketStat;
 
   // Per-tile pump-claim breakdown. A claim counts as a pump claim when
   // any service line has HCPCS E0784. Pumps run $4k-$6k per claim so
@@ -602,7 +615,8 @@ export function computeCashFlow(
     expectedSecondaryInsurance: emptyStat(),
     expectedSecondaryPatient: emptyStat(),
     futurePump: emptyStat(),
-    highRisk: emptyStat(),
+    highRiskDenials: emptyStat(),
+    highRiskLate: emptyStat(),
   };
 
   // Pump-claim counters per tile. Primaries only — secondaries don't
@@ -638,7 +652,7 @@ export function computeCashFlow(
         bucket === "expectedPrimaryMedicaid"
       ) {
         addToStat(expectedPumps, entry);
-      } else if (bucket === "highRisk") {
+      } else if (bucket === "highRiskDenials" || bucket === "highRiskLate") {
         addToStat(highRiskPumps, entry);
       }
       // futurePump entries are already a pump-only tile, so we don't
@@ -667,9 +681,13 @@ export function computeCashFlow(
     buckets.expectedSecondaryInsurance,
     buckets.expectedSecondaryPatient,
   );
+  // High Risk = denials + late, surfaced as one tile total with two
+  // drill-down rows. Both groups are operator-blocked: a denial needs
+  // resolution; a late claim needs a status check or replacement.
+  const highRisk = mergeStats(buckets.highRiskDenials, buckets.highRiskLate);
   // Total Open intentionally excludes futurePump — that money is
   // scheduled rental cycles, not currently outstanding A/R.
-  const totalOpen = mergeStats(soon, expected, buckets.highRisk);
+  const totalOpen = mergeStats(soon, expected, highRisk);
   const totalOpenPumps = mergeStats(soonPumps, expectedPumps, highRiskPumps);
 
   return {
@@ -686,7 +704,9 @@ export function computeCashFlow(
     expectedSecondaryInsurance: buckets.expectedSecondaryInsurance,
     expectedSecondaryPatient: buckets.expectedSecondaryPatient,
     futurePump: buckets.futurePump,
-    highRisk: buckets.highRisk,
+    highRisk,
+    highRiskDenials: buckets.highRiskDenials,
+    highRiskLate: buckets.highRiskLate,
     totalOpenPumps,
     soonPumps,
     expectedPumps,
