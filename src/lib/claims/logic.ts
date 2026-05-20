@@ -181,6 +181,20 @@ export function fmtMoney(n: number | null | undefined): string {
 
 export function fmtDate(s: string | null | undefined): string {
   if (!s) return "—";
+  // Monday date columns hand back date-only strings like "2026-04-15".
+  // new Date("2026-04-15") parses that as UTC midnight, so
+  // toLocaleDateString in any negative-offset timezone (e.g. America/
+  // New_York at UTC-4/5) rolls the date back one day — DOS shown as
+  // 04/14 when Monday stores 04/15. Detect the YYYY-MM-DD shape and
+  // construct as a local date instead so the day matches Monday's cell.
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
+  if (ymd) {
+    const [, y, m, day] = ymd;
+    const local = new Date(Number(y), Number(m) - 1, Number(day));
+    return local.toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+  }
+  // Full ISO datetimes still go through the default parser — they
+  // carry a timezone so there's no ambiguity to fix.
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
