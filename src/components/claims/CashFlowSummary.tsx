@@ -336,6 +336,7 @@ function DetailPanel({
                 <th className="py-1.5 pr-3 text-left font-medium">Name</th>
                 <th className="py-1.5 pr-3 text-left font-medium">Primary payor</th>
                 <th className="py-1.5 pr-3 text-left font-medium">DOS</th>
+                <th className="py-1.5 pr-3 text-left font-medium">Claim sent</th>
                 <th className="py-1.5 pr-3 text-left font-medium">Pay date</th>
                 <th className="py-1.5 text-right font-medium">Amount</th>
               </tr>
@@ -368,6 +369,9 @@ function DetailPanel({
                     {fmtDate(e.dos)}
                   </td>
                   <td className="py-2 pr-3 tabular-nums text-muted-foreground">
+                    {fmtDate(e.claimSentDate)}
+                  </td>
+                  <td className="py-2 pr-3 tabular-nums text-muted-foreground">
                     {fmtDate(e.payDate)}
                   </td>
                   <td className={cn(
@@ -389,7 +393,7 @@ function DetailPanel({
             </tbody>
             <tfoot>
               <tr className="border-t-2">
-                <td className="py-2 pr-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" colSpan={4}>
+                <td className="py-2 pr-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" colSpan={5}>
                   Total ({sorted.length.toLocaleString()} claim{sorted.length === 1 ? "" : "s"})
                 </td>
                 <td className="py-2 text-right tabular-nums font-bold text-foreground">

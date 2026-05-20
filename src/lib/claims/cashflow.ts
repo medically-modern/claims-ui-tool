@@ -122,6 +122,17 @@ const PRE_OR_TERMINAL: ReadonlySet<string> = new Set([
 export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
   const todayMs = today.getTime();
 
+  // Denials short-circuit BEFORE the paid-date check. Most denials
+  // carry a primaryPaidDate (the ERA arrived and stamped $0 or a
+  // partial); if we let the paid-date branch run first, those rows
+  // would all bucket as "settled" and disappear from cash flow. A
+  // denial is at risk regardless of whether an ERA has stamped it —
+  // the dollar amount is the leftover (estPay - primaryPaid), handled
+  // in expectedInflowAmount, not the headline projection.
+  if (claim.primaryStatus === "Denied (Or Partly)") {
+    return "highRiskDenials";
+  }
+
   // Check paid date FIRST. The Primary status field doesn't tell us
   // whether money has actually hit the bank — the paid date does.
   if (claim.primaryPaidDate) {
@@ -144,15 +155,6 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
 
   if (PRE_OR_TERMINAL.has(claim.primaryStatus)) return "out";
   if (claim.primaryStatus === "Paid") return "out";
-
-  // Denied claims short-circuit to High Risk regardless of payer or
-  // age. A denial means the payer has rejected the claim — projected
-  // inflow is at risk until the operator works it (corrected claim,
-  // appeal, etc). Bucketed alongside Late so High Risk surfaces
-  // everything that needs operator attention before the money lands.
-  if (claim.primaryStatus === "Denied (Or Partly)") {
-    return "highRiskDenials";
-  }
 
   // Medicare pump rentals: a 13-month schedule, one claim per month.
   // The scheduled-but-not-yet-billed claims sit on Monday as "Future
@@ -400,26 +402,46 @@ function correctedLineEstPay(
  * line's estPay, swapping legacy-fallback lines for the historical
  * average. Returns { amount, corrected } so the caller can flag the
  * entry as "estimated" in the drill-down panel.
+ *
+ * Denial special-case: the at-risk amount is the GAP between the
+ * (corrected) estPay and whatever already paid — i.e., what we could
+ * still recover by working the denial. A fully-denied claim contributes
+ * its full estPay; a partial denial contributes only the unpaid
+ * remainder so dollars that already landed aren't double-counted.
  */
 export function expectedInflowAmount(
   claim: Claim,
   history: HistoricalRates = {},
 ): { amount: number; corrected: boolean } {
-  if (claim.primaryPaidDate) {
+  const isDenied = claim.primaryStatus === "Denied (Or Partly)";
+
+  // ERA in hand AND not a denial → trust what the payer actually sent.
+  if (claim.primaryPaidDate && !isDenied) {
     return { amount: claim.primaryPaid, corrected: false };
   }
-  let total = 0;
+
+  // Sum the per-line corrected estPay (legacy fallbacks swapped for
+  // historical averages where applicable).
+  let estPayTotal = 0;
   let anyCorrected = false;
   for (const l of claim.lines || []) {
     const r = correctedLineEstPay(l, history);
-    total += r.amount;
+    estPayTotal += r.amount;
     if (r.corrected) anyCorrected = true;
   }
   // Fallback for legacy rows with no subitems — use the parent rollup.
   if ((claim.lines || []).length === 0) {
-    return { amount: claim.estPay, corrected: false };
+    estPayTotal = claim.estPay;
   }
-  return { amount: total, corrected: anyCorrected };
+
+  // Denials: at-risk = estPay - whatever's already paid (clamp to 0
+  // so over-paid denials don't show negative). Non-denial pre-ERA: the
+  // full estPay is the projection.
+  const amount = isDenied
+    ? Math.max(0, estPayTotal - (claim.primaryPaid || 0))
+    : estPayTotal;
+
+  return { amount, corrected: anyCorrected };
 }
 
 /**
@@ -453,6 +475,11 @@ export interface CashFlowEntry {
    *  insurance carrier at a glance without clicking into ClaimDetail. */
   payor: string;
   dos: string | null;
+  /** When the claim was originally sent to the payer. For the High Risk
+   *  drill-downs especially this is the load-bearing piece of context —
+   *  the operator needs to see how long a denial / Late ERA has been
+   *  sitting before deciding which to work first. */
+  claimSentDate: string | null;
   payDate: string | null;
   amount: number;
   kind: "primary" | "secondary";
@@ -565,6 +592,9 @@ function entryFromPrimary(
     name: c.patientName,
     payor: c.primaryPayor || "—",
     dos: c.dos || null,
+    // Prefer Claim Resent Date when set — that's the effective last-
+    // submission instant for aging (mirrors logic.ts effectiveSentDate).
+    claimSentDate: c.claimResentDate || c.claimSentDate || null,
     payDate: projectedPrimaryPayDate(c),
     amount,
     kind: "primary",
@@ -579,8 +609,9 @@ function entryFromSecondary(c: SecClaim, amount: number): CashFlowEntry {
     name: c.patientName,
     payor: c.primaryPayor || "—",
     dos: c.dos || null,
-    // Secondaries: prefer the ERA pay date; otherwise leave blank since
-    // there's no equivalent eMedNY-style projection for crossovers.
+    // The secondary's own send date if we have it; otherwise the
+    // primary's send date as a fallback so the column isn't empty.
+    claimSentDate: c.secondarySentDate || c.primarySentDate || null,
     payDate: c.secondaryPayDate || null,
     amount,
     kind: "secondary",
