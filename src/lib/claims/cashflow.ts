@@ -201,9 +201,29 @@ export function expectedInflowAmountSecondary(claim: SecClaim): number {
   return claim.remaining;
 }
 
+/**
+ * One claim's contribution to a Cash Flow bucket, in just the form the
+ * drill-down drawer needs to render: who, when service happened, when
+ * money is expected, and how much. `kind` lets the drawer route clicks
+ * (primaries open ClaimDetail; secondaries currently link to their
+ * parent primary since the Secondary Board doesn't have its own detail
+ * page). `payDate` is null when we don't yet have an ERA-stamped pay
+ * date — the column shows a dash in that case.
+ */
+export interface CashFlowEntry {
+  id: string;
+  mondayItemId: string;
+  name: string;
+  dos: string | null;
+  payDate: string | null;
+  amount: number;
+  kind: "primary" | "secondary";
+}
+
 export interface BucketStat {
   count: number;
   total: number;
+  entries: CashFlowEntry[];
 }
 
 export interface CashFlowStats {
@@ -238,12 +258,13 @@ export interface CashFlowStats {
 }
 
 function emptyStat(): BucketStat {
-  return { count: 0, total: 0 };
+  return { count: 0, total: 0, entries: [] };
 }
 
-function addToStat(stat: BucketStat, amount: number): void {
+function addToStat(stat: BucketStat, entry: CashFlowEntry): void {
   stat.count += 1;
-  stat.total += amount;
+  stat.total += entry.amount;
+  stat.entries.push(entry);
 }
 
 // CMS HCPCS for the insulin pump. A claim with this code on any line
@@ -256,6 +277,60 @@ function claimHasPump(c: Claim): boolean {
 
 function secClaimHasPump(c: SecClaim): boolean {
   return (c.lines || []).some((l) => (l.hcpcs || "").trim() === PUMP_HCPCS);
+}
+
+/** Pay date for the drill-down drawer. ERA-in-hand → use that ERA's
+ *  pay date. Pure-Medicaid awaiting ERA → use the projected eMedNY
+ *  cycle pay date. Otherwise null (drawer shows a dash). */
+function projectedPrimaryPayDate(c: Claim): string | null {
+  if (c.primaryPaidDate) return c.primaryPaidDate;
+  if (isPureMedicaid(c.primaryPayor) && c.claimSentDate) {
+    const sent = new Date(c.claimSentDate);
+    if (!Number.isNaN(sent.getTime())) {
+      return medicaidPaymentDate(sent).toISOString().slice(0, 10);
+    }
+  }
+  return null;
+}
+
+function entryFromPrimary(c: Claim, amount: number): CashFlowEntry {
+  return {
+    id: c.id,
+    mondayItemId: c.mondayItemId,
+    name: c.patientName,
+    dos: c.dos || null,
+    payDate: projectedPrimaryPayDate(c),
+    amount,
+    kind: "primary",
+  };
+}
+
+function entryFromSecondary(c: SecClaim, amount: number): CashFlowEntry {
+  return {
+    id: c.id,
+    mondayItemId: c.mondayItemId ?? c.id,
+    name: c.patientName,
+    dos: c.dos || null,
+    // Secondaries: prefer the ERA pay date; otherwise leave blank since
+    // there's no equivalent eMedNY-style projection for crossovers.
+    payDate: c.secondaryPayDate || null,
+    amount,
+    kind: "secondary",
+  };
+}
+
+/** Merge multiple BucketStats into one. Entries are concatenated; the
+ *  drawer sorts them at render time. Used to build the parent tiles
+ *  (Soon, Expected, Total Open) out of their constituent sub-buckets,
+ *  and to expose Primary / Secondary slices of Total Open. */
+function mergeStats(...stats: BucketStat[]): BucketStat {
+  const merged = emptyStat();
+  for (const s of stats) {
+    merged.count += s.count;
+    merged.total += s.total;
+    merged.entries.push(...s.entries);
+  }
+  return merged;
 }
 
 export function computeCashFlow(
@@ -276,31 +351,34 @@ export function computeCashFlow(
     highRisk: emptyStat(),
   };
 
-  const primaryTotal = emptyStat();
-  const secondaryTotal = emptyStat();
-
-  // Pump-claim counters per tile. Incremented in parallel with the
-  // main buckets so the breakdown reflects exactly the same claim set.
+  // Pump-claim counters per tile. Built in parallel with the main
+  // buckets so the breakdown reflects exactly the same claim set.
   const soonPumps = emptyStat();
   const expectedPumps = emptyStat();
   const highRiskPumps = emptyStat();
+
+  // Per-kind slices of Total Open. The Total Open tile's "Primary" and
+  // "Secondary" sub-rows drill in via these.
+  const primaryTotal = emptyStat();
+  const secondaryTotal = emptyStat();
 
   for (const c of claims) {
     const bucket = classifyForCashFlow(c, today);
     if (bucket === "settled" || bucket === "out") continue;
     const amount = expectedInflowAmount(c);
-    addToStat(buckets[bucket], amount);
-    addToStat(primaryTotal, amount);
+    const entry = entryFromPrimary(c, amount);
+    addToStat(buckets[bucket], entry);
+    addToStat(primaryTotal, entry);
     if (claimHasPump(c)) {
       if (bucket === "soonEra" || bucket === "soonMedicaid") {
-        addToStat(soonPumps, amount);
+        addToStat(soonPumps, entry);
       } else if (
         bucket === "expectedPrimaryNonMedicaid" ||
         bucket === "expectedPrimaryMedicaid"
       ) {
-        addToStat(expectedPumps, amount);
+        addToStat(expectedPumps, entry);
       } else if (bucket === "highRisk") {
-        addToStat(highRiskPumps, amount);
+        addToStat(highRiskPumps, entry);
       }
     }
   }
@@ -309,46 +387,32 @@ export function computeCashFlow(
     const bucket = classifyForCashFlowSecondary(c, today);
     if (bucket === "settled" || bucket === "out") continue;
     const amount = expectedInflowAmountSecondary(c);
-    addToStat(buckets[bucket], amount);
-    addToStat(secondaryTotal, amount);
+    const entry = entryFromSecondary(c, amount);
+    addToStat(buckets[bucket], entry);
+    addToStat(secondaryTotal, entry);
     if (secClaimHasPump(c)) {
       if (bucket === "soonEra") {
-        addToStat(soonPumps, amount);
+        addToStat(soonPumps, entry);
       } else if (
         bucket === "expectedSecondaryInsurance" ||
         bucket === "expectedSecondaryPatient"
       ) {
-        addToStat(expectedPumps, amount);
+        addToStat(expectedPumps, entry);
       }
     }
   }
 
-  const soon: BucketStat = {
-    count: buckets.soonEra.count + buckets.soonMedicaid.count,
-    total: buckets.soonEra.total + buckets.soonMedicaid.total,
-  };
-  const expected: BucketStat = {
-    count:
-      buckets.expectedPrimaryNonMedicaid.count +
-      buckets.expectedPrimaryMedicaid.count +
-      buckets.expectedSecondaryInsurance.count +
-      buckets.expectedSecondaryPatient.count,
-    total:
-      buckets.expectedPrimaryNonMedicaid.total +
-      buckets.expectedPrimaryMedicaid.total +
-      buckets.expectedSecondaryInsurance.total +
-      buckets.expectedSecondaryPatient.total,
-  };
-  const totalOpen: BucketStat = {
-    count: soon.count + expected.count + buckets.highRisk.count,
-    total: soon.total + expected.total + buckets.highRisk.total,
-  };
-
-  // totalOpenPumps = soon+expected+highRisk pumps; sum the three per-tile stats.
-  const totalOpenPumps: BucketStat = {
-    count: soonPumps.count + expectedPumps.count + highRiskPumps.count,
-    total: soonPumps.total + expectedPumps.total + highRiskPumps.total,
-  };
+  // Parent tiles compose from their sub-buckets so the drill-down
+  // drawer can show the same combined entry list shown on the tile.
+  const soon = mergeStats(buckets.soonEra, buckets.soonMedicaid);
+  const expected = mergeStats(
+    buckets.expectedPrimaryNonMedicaid,
+    buckets.expectedPrimaryMedicaid,
+    buckets.expectedSecondaryInsurance,
+    buckets.expectedSecondaryPatient,
+  );
+  const totalOpen = mergeStats(soon, expected, buckets.highRisk);
+  const totalOpenPumps = mergeStats(soonPumps, expectedPumps, highRiskPumps);
 
   return {
     totalOpen,
