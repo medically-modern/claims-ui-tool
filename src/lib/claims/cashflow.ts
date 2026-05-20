@@ -321,7 +321,7 @@ const CONSERVATIVE_PER_UNIT_ESTIMATE: Record<
 > = {
   E0784: { medicare: 300, default: 2500 }, // Medicare rental vs commercial purchase
   E2103: { default: 150 }, // monitor flat
-  A4224: { default: 6 },
+  A4224: { default: 15 },
   A4225: { default: 3 },
   A4230: { default: 6 },
   A4231: { default: 6 },
@@ -329,8 +329,16 @@ const CONSERVATIVE_PER_UNIT_ESTIMATE: Record<
   A4239: { default: 150 }, // CGM sensors per unit
 };
 
+/** Map a primary-payor label to "medicare" or "other". We match any
+ *  payor with the word Medicare anywhere in the name so Medicare
+ *  Advantage plans like "United Medicare", "Aetna Medicare", "Anthem
+ *  BCBS Medicare" — which all reimburse on the Medicare fee schedule
+ *  for DME — get bucketed alongside traditional Medicare A&B. A
+ *  /^Medicare/ prefix-only check would silently miss every MA plan,
+ *  and we'd project pumps at the inflated commercial \$2,500 rate
+ *  (or worse, whatever the rate schedule wrote). */
 function payorClass(payor: string | null | undefined): PayorClass {
-  return /^Medicare/i.test((payor || "").trim()) ? "medicare" : "other";
+  return /\bMedicare\b/i.test((payor || "").trim()) ? "medicare" : "other";
 }
 
 function conservativeFor(hcpcs: string, payor: string | null | undefined): number | undefined {
