@@ -403,7 +403,9 @@ export function buildHistoricalAverages(claims: Claim[]): HistoricalRates {
 /**
  * Corrected estPay for one line. Returns { amount, corrected } —
  * `corrected` is true when we substituted a value because the line
- * looked like a legacy fallback. Caller uses that to flag the row.
+ * looked like a legacy fallback OR because it's a Medicare pump
+ * rental (which has a fixed monthly rate independent of what the
+ * rate schedule wrote into the charge column).
  *
  * Both the historical-average lookup and the conservative fallback
  * are scoped by payor class (Medicare vs commercial) so a Medicare
@@ -419,10 +421,21 @@ function correctedLineEstPay(
   history: HistoricalRates,
   payor: string | null | undefined,
 ): { amount: number; corrected: boolean } {
-  if (!isLegacyFallbackLine(line)) {
+  const code = (line.hcpcs || "").trim();
+
+  // Medicare pump rental short-circuit. PAYER_RATE_SCHEDULE writes
+  // Medicare A&B E0784 charge = \$600 which then flows into the
+  // line's estPay, but the actual reimbursable monthly rental amount
+  // is closer to \$300 (see CONSERVATIVE_PER_UNIT_ESTIMATE). Without
+  // this override the legacy detection would skip the line (charge
+  // doesn't match the \$1000 flat) and cash flow would project at
+  // the inflated \$600. Force the correction whenever the payor is
+  // Medicare and the line is E0784, regardless of what's in charge.
+  const isMedicarePump = code === "E0784" && payorClass(payor) === "medicare";
+
+  if (!isLegacyFallbackLine(line) && !isMedicarePump) {
     return { amount: line.estPay ?? 0, corrected: false };
   }
-  const code = (line.hcpcs || "").trim();
   const units = Math.max(1, line.units ?? 1);
   const historical = history[historyKey(code, payor)];
   if (historical != null && Number.isFinite(historical)) {
