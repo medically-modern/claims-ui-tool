@@ -6,7 +6,10 @@
 //   - "soonMedicaid" → pure Medicaid no ERA, settles within 7 days
 //   - "expectedPrimaryNonMedicaid" → non-Medicaid primary no-ERA <21 days
 //   - "expectedPrimaryMedicaid"    → pure Medicaid no-ERA >7 days away
-//   - "expectedSecondaryInsurance" → secondary (Forwarded/Insurance) awaiting ERA
+//   - "expectedSecondaryConfirm"   → secondary awaiting operator to pick a
+//     destination (Confirm Payor tab; status = Awaiting Payor Confirmation)
+//   - "expectedSecondaryInsurance" → secondary in flight to a payer
+//     (Submit Claim / Forwarded / Submitted) awaiting ERA
 //   - "expectedSecondaryPatient"   → secondary type=Patient, awaiting payment
 //   - "highRisk"     → non-Medicaid primary no ERA, 21+ days old
 //   - "settled"      → already paid (paid date in the past)
@@ -64,6 +67,7 @@ export type CashFlowBucket =
   | "soonMedicaid"
   | "expectedPrimaryNonMedicaid"
   | "expectedPrimaryMedicaid"
+  | "expectedSecondaryConfirm"
   | "expectedSecondaryInsurance"
   | "expectedSecondaryPatient"
   | "highRisk"
@@ -165,6 +169,16 @@ export function classifyForCashFlowSecondary(
     }
   }
 
+  // Confirm Payor — operator hasn't yet picked Insurance vs Patient on
+  // a freshly-spawned secondary. This is the same predicate the
+  // Secondary Board uses to put a row in its "Confirm Payor" tab
+  // (see bucketFor() in SecondaryBoard.tsx). These claims can't move
+  // forward until the operator acts, so the cash flow tile surfaces
+  // them as their own line.
+  if (claim.status === "Awaiting Payor Confirmation") {
+    return "expectedSecondaryConfirm";
+  }
+
   // No pay date yet. Patient-type goes to its own Expected sub-bucket.
   // Either the operator hasn't sent the statement yet, or it's out for
   // patient payment.
@@ -175,8 +189,13 @@ export function classifyForCashFlowSecondary(
     return "expectedSecondaryPatient";
   }
 
-  // Insurance/Forwarded — awaiting crossover ERA or 837 response. Both
-  // bucket as Secondary (Insurance) Expected.
+  // Insurance/Forwarded — in flight to a secondary payer. Covers three
+  // status values: "Primary Paid - Submit Secondary" (operator has
+  // confirmed payor but hasn't fired the 837), "Primary Paid -
+  // Forwarded" (Medicare auto-crossover, awaiting payer ERA), and
+  // "Secondary Submitted" (837 sent, awaiting ERA). Rolled together
+  // because from a cash-flow standpoint they all represent dollars
+  // expected from an insurance payer.
   return "expectedSecondaryInsurance";
 }
 
@@ -237,10 +256,11 @@ export interface CashFlowStats {
   soonEra: BucketStat;
   soonMedicaid: BucketStat;
 
-  // Expected (split four ways)
+  // Expected (split five ways)
   expected: BucketStat;
   expectedPrimaryNonMedicaid: BucketStat;
   expectedPrimaryMedicaid: BucketStat;
+  expectedSecondaryConfirm: BucketStat;
   expectedSecondaryInsurance: BucketStat;
   expectedSecondaryPatient: BucketStat;
 
@@ -346,6 +366,7 @@ export function computeCashFlow(
     soonMedicaid: emptyStat(),
     expectedPrimaryNonMedicaid: emptyStat(),
     expectedPrimaryMedicaid: emptyStat(),
+    expectedSecondaryConfirm: emptyStat(),
     expectedSecondaryInsurance: emptyStat(),
     expectedSecondaryPatient: emptyStat(),
     highRisk: emptyStat(),
@@ -394,6 +415,7 @@ export function computeCashFlow(
       if (bucket === "soonEra") {
         addToStat(soonPumps, entry);
       } else if (
+        bucket === "expectedSecondaryConfirm" ||
         bucket === "expectedSecondaryInsurance" ||
         bucket === "expectedSecondaryPatient"
       ) {
@@ -408,6 +430,7 @@ export function computeCashFlow(
   const expected = mergeStats(
     buckets.expectedPrimaryNonMedicaid,
     buckets.expectedPrimaryMedicaid,
+    buckets.expectedSecondaryConfirm,
     buckets.expectedSecondaryInsurance,
     buckets.expectedSecondaryPatient,
   );
@@ -424,6 +447,7 @@ export function computeCashFlow(
     expected,
     expectedPrimaryNonMedicaid: buckets.expectedPrimaryNonMedicaid,
     expectedPrimaryMedicaid: buckets.expectedPrimaryMedicaid,
+    expectedSecondaryConfirm: buckets.expectedSecondaryConfirm,
     expectedSecondaryInsurance: buckets.expectedSecondaryInsurance,
     expectedSecondaryPatient: buckets.expectedSecondaryPatient,
     highRisk: buckets.highRisk,

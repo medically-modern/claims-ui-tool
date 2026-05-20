@@ -165,9 +165,14 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
                 description: "Pure-Medicaid claims more than 7 days from their eMedNY pay date.",
               },
               {
+                label: "Secondary (Confirm Payor)",
+                stat: stats.expectedSecondaryConfirm,
+                description: "Awaiting operator to pick a secondary destination (Insurance vs Patient).",
+              },
+              {
                 label: "Secondary (Insurance)",
                 stat: stats.expectedSecondaryInsurance,
-                description: "Forwarded / insurance-routed secondaries awaiting ERA or payment.",
+                description: "In flight to a secondary payer — Submit Claim queued, Forwarded crossovers, or 837 already sent.",
               },
               {
                 label: "Secondary (Patient)",
