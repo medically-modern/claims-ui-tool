@@ -309,12 +309,20 @@ function mapSubitem(sub: MondaySubitem, hasSecondaryEra: boolean): SecLine {
   // is on the hook for. Same shape the mock data uses.
   const remaining = pr || coinsurance + deductible + copay;
 
+  // hasLineEra distinguishes "this column is genuinely blank on Monday"
+  // (Medicare-supplement CLP-only ERAs that never report per-line paid
+  // amounts) from "the column read \$0" (line truly paid zero). We need
+  // the distinction because the UI's Denied state is gated on
+  // linePaid === 0; without it every CLP-only line would be flagged as
+  // Denied. The check is on the raw text — num() coalesces blank to 0.
+  const lineEraRaw = txt(sub, SUB_COL.SECONDARY_PAID_LINE);
+  const hasLineEra = hasSecondaryEra && lineEraRaw !== "";
   const secondaryPaid = num(sub, SUB_COL.SECONDARY_PAID_LINE);
   const oaAmount = num(sub, SUB_COL.PARSED_OA);
   // Patient responsibility AFTER the secondary settles — only meaningful
   // when an ERA has actually arrived. We approximate as PR-coinsurance/
   // deductible/copay minus the secondary's contribution; bound at 0.
-  const patientResp = hasSecondaryEra
+  const patientResp = hasLineEra
     ? Math.max(remaining - secondaryPaid, 0)
     : undefined;
 
@@ -329,10 +337,10 @@ function mapSubitem(sub: MondaySubitem, hasSecondaryEra: boolean): SecLine {
     remaining,
     coinsuranceCopay: coinsurance + copay,
     deductible,
-    secondaryPaid: hasSecondaryEra ? secondaryPaid : undefined,
-    secondaryAdj: hasSecondaryEra ? Math.max(remaining - secondaryPaid - (patientResp ?? 0), 0) : undefined,
+    secondaryPaid: hasLineEra ? secondaryPaid : undefined,
+    secondaryAdj: hasLineEra ? Math.max(remaining - secondaryPaid - (patientResp ?? 0), 0) : undefined,
     patientResp,
-    status: hasSecondaryEra
+    status: hasLineEra
       ? secondaryPaid > 0
         ? "Paid"
         : "Denied/Partial"

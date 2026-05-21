@@ -2069,21 +2069,34 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
                   // the secondary on this line (PR breakdown + deductible).
                   const linePR =
                     (l.deductible ?? 0) + (l.coinsuranceCopay ?? 0);
+                  // hasLineEra: line-level Secondary Paid data actually
+                  // came through. undefined means the ERA was CLP-only
+                  // (typical Medicare-supplement crossover) — we DON'T
+                  // know what the secondary applied to this line, so
+                  // showing "$0 / Denied" would be misleading.
+                  const hasLineEra = l.secondaryPaid !== undefined;
                   const linePaid = l.secondaryPaid ?? 0;
                   const lineDiff = linePR - linePaid;
-                  // No ERA yet → "Pending" (don't claim it was denied just
-                  // because we haven't heard back). Once the ERA arrives the
-                  // line classifies as Paid / Partial / Denied.
-                  const lineState: "Pending" | "Paid" | "Partial" | "Denied" =
+                  // No ERA yet → "Pending". CLP-only secondary ERA (no
+                  // line-level breakdown) → "—". Otherwise classify as
+                  // Paid / Partial / Denied.
+                  const lineState:
+                    | "Pending"
+                    | "Paid"
+                    | "Partial"
+                    | "Denied"
+                    | "—" =
                     !eraReceived
                       ? "Pending"
-                      : linePR <= 0.5
-                        ? "Paid"
-                        : linePaid <= 0.5
-                          ? "Denied"
-                          : Math.abs(lineDiff) <= 0.5
-                            ? "Paid"
-                            : "Partial";
+                      : !hasLineEra
+                        ? "—"
+                        : linePR <= 0.5
+                          ? "Paid"
+                          : linePaid <= 0.5
+                            ? "Denied"
+                            : Math.abs(lineDiff) <= 0.5
+                              ? "Paid"
+                              : "Partial";
                   return (
                     <TableRow key={l.id} className="hover:bg-muted/30">
                       <TableCell className="font-medium">{l.product}</TableCell>
@@ -2091,12 +2104,12 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
                         {$(linePR)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {eraReceived ? $(linePaid) : "—"}
+                        {eraReceived && hasLineEra ? $(linePaid) : "—"}
                       </TableCell>
                       <TableCell
                         className={cn(
                           "text-right tabular-nums",
-                          !eraReceived
+                          !eraReceived || !hasLineEra
                             ? "text-muted-foreground"
                             : Math.abs(lineDiff) <= 0.5
                               ? "text-muted-foreground"
@@ -2105,13 +2118,15 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
                                 : "text-info-soft-foreground",
                         )}
                       >
-                        {eraReceived ? $(lineDiff) : "—"}
+                        {eraReceived && hasLineEra ? $(lineDiff) : "—"}
                       </TableCell>
                       <TableCell>
                         <span
                           className={cn(
                             "inline-flex h-7 w-full items-center justify-center rounded-md px-2 text-xs font-medium",
                             lineState === "Pending" &&
+                              "bg-muted text-muted-foreground",
+                            lineState === "—" &&
                               "bg-muted text-muted-foreground",
                             lineState === "Paid" &&
                               "bg-success-soft text-success-soft-foreground",
