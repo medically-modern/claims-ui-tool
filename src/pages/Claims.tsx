@@ -387,6 +387,55 @@ function diff(c: Claim) {
   return c.estPay - c.primaryPaid - c.prAmount;
 }
 
+// Columns that don't have a meaningful sort order (mixed content,
+// action buttons, free-text reasoning). Header stays a static label.
+const NON_SORTABLE_COLUMNS: ReadonlySet<ColumnKey> = new Set([
+  "products",
+  "issue",
+  "nextAction",
+  "action",
+]);
+
+// Extract a comparable value per column. Strings sort case-insensitively
+// (the comparator below lowercases on the way in), numbers sort numerically,
+// dates sort by parsed timestamp. Anything blank or null sinks to the
+// bottom regardless of direction so empty cells don't clutter either end.
+function sortValueFor(col: ColumnKey, c: Claim): number | string | null {
+  switch (col) {
+    case "patient":         return c.patientName || "";
+    case "dos":             return c.dos || null;
+    case "payer":           return c.primaryPayor || "";
+    case "sent":            return c.claimSentDate || c.claimResentDate || null;
+    case "age":             return claimAge(c) ?? null;
+    case "primary":         return c.primaryStatus || "";
+    case "s277":            return c.status277 || "";
+    case "claimStatus":     return c.claimStatusCategory || "";
+    case "claimStatusLate": return c.claimStatusCategory || "";
+    case "estPay":          return c.estPay ?? 0;
+    case "paid":            return c.primaryPaid ?? 0;
+    case "pr":              return c.prAmount ?? 0;
+    case "difference":      return diff(c);
+    default:                return null;
+  }
+}
+
+function compareRows(a: Claim, b: Claim, col: ColumnKey, dir: "asc" | "desc"): number {
+  const va = sortValueFor(col, a);
+  const vb = sortValueFor(col, b);
+  // Nulls (missing values) always sink to the bottom — independent of dir
+  // so flipping asc/desc never makes the blank cells jump to the top.
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  let cmp = 0;
+  if (typeof va === "number" && typeof vb === "number") {
+    cmp = va - vb;
+  } else {
+    cmp = String(va).toLowerCase().localeCompare(String(vb).toLowerCase());
+  }
+  return dir === "asc" ? cmp : -cmp;
+}
+
 
 const Claims = () => {
   const [board, setBoard] = useState<BoardKey>("primary");
@@ -395,6 +444,15 @@ const Claims = () => {
   const [search, setSearch] = useState("");
   const [payerFilter, setPayerFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  // Column-header sort. null col = source order (default). Three-state
+  // cycle: asc -> desc -> null on repeated clicks of the same header.
+  // Cleared on category change so each bucket starts back at source order.
+  const [sort, setSort] = useState<{ col: ColumnKey | null; dir: "asc" | "desc" }>(
+    { col: null, dir: "asc" },
+  );
+  useEffect(() => {
+    setSort({ col: null, dir: "asc" });
+  }, [category]);
   const [expandedThread, setExpandedThread] = useState<string | null>(null);
   const { claims: threadClaims } = useThreadClaims();
   // Direct cache access — needed for the poll-while-processing loop
@@ -758,7 +816,7 @@ const Claims = () => {
   );
 
   const rows = useMemo(() => {
-    return MOCK_CLAIMS.filter(CATEGORY_FILTERS[category])
+    const filtered = MOCK_CLAIMS.filter(CATEGORY_FILTERS[category])
       .filter((c) => {
         if (payerFilter !== "all" && c.primaryPayor !== payerFilter) return false;
         if (statusFilter !== "all" && c.primaryStatus !== statusFilter) return false;
@@ -773,7 +831,16 @@ const Claims = () => {
         }
         return true;
       });
-  }, [MOCK_CLAIMS, category, search, payerFilter, statusFilter]);
+    // Column-header sort. Only sorts when a column is actively selected
+    // (sort.col !== null); the filtered list otherwise preserves source
+    // order from useAllClaims — keeps the default landing experience
+    // stable across renders.
+    if (sort.col) {
+      const col = sort.col;
+      return [...filtered].sort((a, b) => compareRows(a, b, col, sort.dir));
+    }
+    return filtered;
+  }, [MOCK_CLAIMS, category, search, payerFilter, statusFilter, sort]);
 
   const columns = CATEGORY_COLUMNS[category];
 
@@ -963,11 +1030,52 @@ const Claims = () => {
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          {columns.map((col) => (
-                            <TableHead key={col} className={COLUMN_LABELS[col].align === "right" ? "text-right" : ""}>
-                              {COLUMN_LABELS[col].label}
-                            </TableHead>
-                          ))}
+                          {columns.map((col) => {
+                            const sortable = !NON_SORTABLE_COLUMNS.has(col);
+                            const isActive = sortable && sort.col === col;
+                            const onClick = sortable
+                              ? () => {
+                                  setSort((s) => {
+                                    // 3-state cycle on the same column:
+                                    // asc -> desc -> off (back to source order).
+                                    if (s.col !== col) return { col, dir: "asc" };
+                                    if (s.dir === "asc") return { col, dir: "desc" };
+                                    return { col: null, dir: "asc" };
+                                  });
+                                }
+                              : undefined;
+                            return (
+                              <TableHead
+                                key={col}
+                                onClick={onClick}
+                                className={cn(
+                                  COLUMN_LABELS[col].align === "right" && "text-right",
+                                  sortable && "cursor-pointer select-none hover:text-foreground",
+                                )}
+                                aria-sort={
+                                  isActive
+                                    ? sort.dir === "asc"
+                                      ? "ascending"
+                                      : "descending"
+                                    : undefined
+                                }
+                              >
+                                <span
+                                  className={cn(
+                                    "inline-flex items-center gap-1",
+                                    COLUMN_LABELS[col].align === "right" && "justify-end w-full",
+                                  )}
+                                >
+                                  {COLUMN_LABELS[col].label}
+                                  {isActive && (
+                                    <span className="text-[10px] leading-none">
+                                      {sort.dir === "asc" ? "▲" : "▼"}
+                                    </span>
+                                  )}
+                                </span>
+                              </TableHead>
+                            );
+                          })}
                         </TableRow>
                       </TableHeader>
                       <TableBody className="[&_tr>td]:align-top">
