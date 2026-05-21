@@ -866,15 +866,18 @@ const ClaimDetail = () => {
                   </div>
                 </div>
                 <div>
-                  {/* Identifier the operator Ctrl+Fs for in Chase/TD.
-                      It's the BPR's payer_identifier_10, surfaced as the
-                      "ORIG ID" in an ACH addenda. Mono-font so it's
-                      easy to scan + select. */}
+                  {/* Identifier the operator Ctrl+Fs for in Chase / TD.
+                      We surface the X12 TRN trace number (NOT BPR.ORIG ID)
+                      because the trace always appears in the bank's ACH
+                      addenda as `TRN*1*<trace>*<...>` — including
+                      processor-mediated ACHs (PayPlus / Echo / Zelis)
+                      where the bank's `ORIG ID:` is the processor, not
+                      the payer. Mono font so it's easy to scan + copy. */}
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Identifier (ORIG ID)
+                    Trace # (TRN)
                   </div>
                   <div className="mt-1 font-mono text-sm">
-                    {claim.bankPayerOriginatorId || "—"}
+                    {claim.bankTraceNumber || "—"}
                   </div>
                 </div>
                 <div>

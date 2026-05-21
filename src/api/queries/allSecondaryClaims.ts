@@ -73,6 +73,15 @@ const COL = {
   BANK_PAYMENT_METHOD: "color_mm3jpg86",
   BANK_PAYER_ORIG_ID: "text_mm3jz59k",
   BANK_EFT_DATE: "date_mm3jq5zk",
+  // Remittance Trace Number (TRN segment of the 835). Reused from the
+  // existing raw_remittance_trace column on the duplicated board —
+  // same id as primary because the column was inherited at board
+  // duplication time. Surfaced as "Trace # (TRN)" in the Bank Info
+  // strip because that's the universal identifier visible in the
+  // bank's ACH addenda for PayPlus/ECHO-mediated payments (the BPR
+  // payer originator id is the underlying payer, not the processor
+  // that actually shows up in Chase).
+  RAW_REMITTANCE_TRACE: "text_mm1gz8ss",
   // Workflow
   SUBMISSION_TYPE: "color_mm3awg8g",
   SECONDARY_STATUS: "color_mm3a5yak",
@@ -464,6 +473,7 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
     bankPaymentMethod: txt(item, COL.BANK_PAYMENT_METHOD) || null,
     bankPayerOriginatorId: txt(item, COL.BANK_PAYER_ORIG_ID) || null,
     bankEftDate: isoDateOrEmpty(txt(item, COL.BANK_EFT_DATE)) || null,
+    bankTraceNumber: txt(item, COL.RAW_REMITTANCE_TRACE) || null,
     secondaryAdj: hasSecondaryEra
       ? Math.max(remaining - secondaryPaidAmount, 0)
       : undefined,

@@ -147,6 +147,12 @@ export interface Claim {
   bankPaymentMethod?: string | null;
   bankPayerOriginatorId?: string | null;
   bankEftDate?: string | null;
+  /** Raw Remittance Trace Number (TRN segment of the 835). Always
+   *  appears in the bank's ACH addenda as `TRN*1*<trace>*<...>` —
+   *  the universal identifier for finding this deposit in Chase /
+   *  TD. Reused from the existing raw_remittance_trace column
+   *  (text_mm1gz8ss); not new on Monday. */
+  bankTraceNumber?: string | null;
   estPay: number;
   primaryPaid: number;
   prAmount: number;

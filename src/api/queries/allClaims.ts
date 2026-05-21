@@ -86,6 +86,15 @@ const COL = {
   BANK_PAYMENT_METHOD: "color_mm3jh0x2",
   BANK_PAYER_ORIG_ID: "text_mm3jpw1b",
   BANK_EFT_DATE: "date_mm3je93r",
+  // Raw remittance trace (TRN segment) — already populated by the ERA
+  // writeback. Surfaced in the Bank Info strip as the Trace # field
+  // because the X12 TRN trace appears in every Chase / TD ACH addenda
+  // as `TRN*1*<trace>*<...>` regardless of who initiated the transfer.
+  // The BPR.payer_identifier_10 we also store as BANK_PAYER_ORIG_ID
+  // only matches direct-payer ACHs; processor-mediated ones (PayPlus,
+  // Echo Health, Zelis) carry the processor's ORIG ID instead, making
+  // the trace the universal search key.
+  RAW_REMITTANCE_TRACE: "text_mm1gz8ss",
 } as const;
 
 // ---------- subitem column id reference ----------
@@ -465,6 +474,7 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     bankPaymentMethod: txt(item, COL.BANK_PAYMENT_METHOD) || null,
     bankPayerOriginatorId: txt(item, COL.BANK_PAYER_ORIG_ID) || null,
     bankEftDate: isoOrNull(txt(item, COL.BANK_EFT_DATE)),
+    bankTraceNumber: txt(item, COL.RAW_REMITTANCE_TRACE) || null,
     estPay,
     primaryPaid,
     prAmount,

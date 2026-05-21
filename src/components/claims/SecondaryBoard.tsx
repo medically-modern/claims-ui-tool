@@ -126,12 +126,19 @@ export interface SecClaim {
   expectedCrossoverEra?: string;
   forwardedFlag?: boolean;
   /** Bank deposit reconciliation — populated when a secondary 835 lands.
-   *  Same 4 fields as the primary Claim type. Drives the Bank Info strip
-   *  in the ERA Review detail view. */
+   *  Same fields as the primary Claim type. Drives the Bank Info strip
+   *  in the ERA Review detail view. bankTraceNumber is the X12 TRN
+   *  segment trace number, which is the universal identifier that
+   *  appears in the bank's ACH addenda (e.g. `TRN*1*<trace>*<orig>`).
+   *  PayPlus/ECHO Health-mediated payments mask the BPR payer
+   *  originator id behind the processor's ORIG ID in Chase, so we
+   *  surface the trace number instead — that's the value the operator
+   *  can actually Ctrl+F in the bank statement. */
   bankDepositTotal?: number | null;
   bankPaymentMethod?: string | null;
   bankPayerOriginatorId?: string | null;
   bankEftDate?: string | null;
+  bankTraceNumber?: string | null;
   // Secondary ERA fields (era bucket)
   secondarySentDate?: string;
   secondaryEraDate?: string;
@@ -810,11 +817,13 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
             <p className="text-base font-medium">Nothing in this bucket.</p>
             <p className="text-sm text-muted-foreground">All caught up.</p>
           </Card>
-        ) : bucket === "era" || bucket === "outstanding" ? (
-          // ERA Review + Outstanding both render as a primary-style table.
-          // ERA Review (showActions=true): Status dropdown + Submit button.
-          // Outstanding (showActions=false): identical column layout, but
-          // read-only — operator just needs to see what's in flight.
+        ) : bucket === "era" || bucket === "outstanding" || bucket === "paid" ? (
+          // ERA Review + Outstanding + Paid all render as a primary-style
+          // table. ERA Review (showActions=true): Status dropdown + Submit
+          // button. Outstanding + Paid (showActions=false): identical
+          // column layout but read-only — operator just needs to see what's
+          // in flight or already closed. Paid still shows the full ERA
+          // Review detail body (incl. Bank Info strip) on row expand.
           // Insurance and Patient buckets still use SecondaryRow's card
           // layout because their workflows need inline form controls.
           <SecondaryClaimsTable
@@ -2075,10 +2084,15 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
       {/* Bank Info strip — appears when the secondary 835 populated the
           BPR / TRN columns on Monday. Gives the operator the four pieces
           of info needed to Ctrl+F the deposit in Chase / TD without
-          jumping back to Stedi. Mirrors the primary ClaimDetail strip. */}
+          jumping back to Stedi. Mirrors the primary ClaimDetail strip.
+          Surfaces the X12 TRN trace number rather than the BPR payer
+          originator id — for PayPlus/ECHO-mediated payments the BPR
+          originator is the underlying payer (e.g. AARP) while Chase
+          shows the processor's ORIG ID; the TRN trace is the universal
+          identifier that always appears in the bank's ACH addenda. */}
       {(c.bankDepositTotal != null ||
         c.bankPaymentMethod ||
-        c.bankPayerOriginatorId ||
+        c.bankTraceNumber ||
         c.bankEftDate) && (
         <Card>
           <CardContent className="p-4">
@@ -2111,10 +2125,10 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
               </div>
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Identifier (ORIG ID)
+                  Trace # (TRN)
                 </div>
                 <div className="mt-1 font-mono text-sm">
-                  {c.bankPayerOriginatorId || "—"}
+                  {c.bankTraceNumber || "—"}
                 </div>
               </div>
               <div>
