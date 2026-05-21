@@ -78,6 +78,14 @@ const COL = {
   CLAIM_STATUS_PAID_AMOUNT: "numeric_mm2qt479",
   RAW_ERA_DATE: "text_mm2047g9",
   RAW_ERA_CLAIM_STATUS: "text_mm20k1zv",
+  // Bank deposit reconciliation — populated when an 835 ERA arrives.
+  // See services/era_parser_service.py for where the values come from
+  // in the BPR + TRN segments. Surfaced as the Bank Info strip on
+  // ClaimDetail.
+  BANK_DEPOSIT_TOTAL: "numeric_mm3jm85z",
+  BANK_PAYMENT_METHOD: "color_mm3jh0x2",
+  BANK_PAYER_ORIG_ID: "text_mm3jpw1b",
+  BANK_EFT_DATE: "date_mm3je93r",
 } as const;
 
 // ---------- subitem column id reference ----------
@@ -452,6 +460,11 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     claimStatusPaidAmount: num(item, COL.CLAIM_STATUS_PAID_AMOUNT) || null,
     claimId: txt(item, COL.CLAIM_ID),
     payerClaimNumber: txt(item, COL.PAYER_CLAIM_NUMBER) || null,
+    // Bank deposit reconciliation strip — see ClaimDetail Bank Info card.
+    bankDepositTotal: num(item, COL.BANK_DEPOSIT_TOTAL) || null,
+    bankPaymentMethod: txt(item, COL.BANK_PAYMENT_METHOD) || null,
+    bankPayerOriginatorId: txt(item, COL.BANK_PAYER_ORIG_ID) || null,
+    bankEftDate: isoOrNull(txt(item, COL.BANK_EFT_DATE)),
     estPay,
     primaryPaid,
     prAmount,

@@ -827,6 +827,69 @@ const ClaimDetail = () => {
           />
         </section>
 
+        {/* Bank Info strip — only renders when an 835 has populated the
+            BPR / TRN columns. Lets the operator Ctrl+F the ORIG ID or
+            EFT trace in Chase/TD to confirm the deposit landed without
+            jumping back to Stedi. All four fields share the same value
+            across every claim that came in the same 835. */}
+        {(claim.bankDepositTotal != null ||
+          claim.bankPaymentMethod ||
+          claim.bankPayerOriginatorId ||
+          claim.bankEftDate) && (
+          <Card>
+            <CardContent className="p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Bank Info
+                </div>
+                <span className="text-[10px] text-muted-foreground/80">
+                  use these to search your bank for the deposit
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Payment Amount
+                  </div>
+                  <div className="mt-1 text-sm font-medium tabular-nums">
+                    {claim.bankDepositTotal != null
+                      ? fmtMoney(claim.bankDepositTotal)
+                      : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    EFT Date
+                  </div>
+                  <div className="mt-1 text-sm font-medium">
+                    {claim.bankEftDate ? fmtDate(claim.bankEftDate) : "—"}
+                  </div>
+                </div>
+                <div>
+                  {/* Identifier the operator Ctrl+Fs for in Chase/TD.
+                      It's the BPR's payer_identifier_10, surfaced as the
+                      "ORIG ID" in an ACH addenda. Mono-font so it's
+                      easy to scan + select. */}
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Identifier (ORIG ID)
+                  </div>
+                  <div className="mt-1 font-mono text-sm">
+                    {claim.bankPayerOriginatorId || "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Payment Method
+                  </div>
+                  <div className="mt-1 text-sm font-medium">
+                    {claim.bankPaymentMethod || "—"}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Claim-level meta strip — sits directly above the Service Lines
             table so the operator can see who the claim was sent to when
             they're reading a denial (especially useful for Wrong Payer

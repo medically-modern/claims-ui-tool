@@ -134,6 +134,19 @@ export interface Claim {
   claimStatusPaidAmount?: number | null;
   claimId: string;
   payerClaimNumber?: string | null;
+  /** Bank deposit reconciliation — populated when an 835 ERA arrives.
+   *  All four come from the 835's BPR + TRN headers, written to dedicated
+   *  Monday columns by populate_era_data_on_claims_item:
+   *    bankDepositTotal        — numeric_mm3jm85z (whole-ERA total)
+   *    bankPaymentMethod       — color_mm3jh0x2  (ACH / CHK / FWT / NON)
+   *    bankPayerOriginatorId   — text_mm3jpw1b   (ORIG ID in bank entry)
+   *    bankEftDate             — date_mm3je93r   (EED on ACH addenda)
+   *  Surfaced as the Bank Info strip on ClaimDetail so operators can
+   *  Ctrl-F the deposit in Chase / TD without going back to Stedi. */
+  bankDepositTotal?: number | null;
+  bankPaymentMethod?: string | null;
+  bankPayerOriginatorId?: string | null;
+  bankEftDate?: string | null;
   estPay: number;
   primaryPaid: number;
   prAmount: number;
