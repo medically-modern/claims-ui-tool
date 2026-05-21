@@ -125,6 +125,13 @@ export interface SecClaim {
   claimLevelDeductible?: number;
   expectedCrossoverEra?: string;
   forwardedFlag?: boolean;
+  /** Bank deposit reconciliation — populated when a secondary 835 lands.
+   *  Same 4 fields as the primary Claim type. Drives the Bank Info strip
+   *  in the ERA Review detail view. */
+  bankDepositTotal?: number | null;
+  bankPaymentMethod?: string | null;
+  bankPayerOriginatorId?: string | null;
+  bankEftDate?: string | null;
   // Secondary ERA fields (era bucket)
   secondarySentDate?: string;
   secondaryEraDate?: string;
@@ -2064,6 +2071,64 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
           tone="success"
         />
       </div>
+
+      {/* Bank Info strip — appears when the secondary 835 populated the
+          BPR / TRN columns on Monday. Gives the operator the four pieces
+          of info needed to Ctrl+F the deposit in Chase / TD without
+          jumping back to Stedi. Mirrors the primary ClaimDetail strip. */}
+      {(c.bankDepositTotal != null ||
+        c.bankPaymentMethod ||
+        c.bankPayerOriginatorId ||
+        c.bankEftDate) && (
+        <Card>
+          <CardContent className="p-4">
+            <div className="mb-2 flex items-center gap-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Bank Info
+              </div>
+              <span className="text-[10px] text-muted-foreground/80">
+                use these to search your bank for the deposit
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Payment Amount
+                </div>
+                <div className="mt-1 text-sm font-medium tabular-nums">
+                  {c.bankDepositTotal != null
+                    ? $(c.bankDepositTotal)
+                    : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  EFT Date
+                </div>
+                <div className="mt-1 text-sm font-medium">
+                  {c.bankEftDate ? fmt(c.bankEftDate) : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Identifier (ORIG ID)
+                </div>
+                <div className="mt-1 font-mono text-sm">
+                  {c.bankPayerOriginatorId || "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Payment Method
+                </div>
+                <div className="mt-1 text-sm font-medium">
+                  {c.bankPaymentMethod || "—"}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Service Lines — mirrors primary detail's Service Lines table style,
           trimmed to the columns relevant for a secondary ERA review:

@@ -66,6 +66,13 @@ const COL = {
   // is the true payer name (e.g. "AARP SUPPLEMENTAL HEALTH PLANS FROM
   // UNITEDHEALTHCARE") for display.
   SECONDARY_PAYER_RAW_NAME: "text_mm3a2yax",
+  // Bank deposit reconciliation — secondary board column IDs differ
+  // from the primary board (the columns were created independently on
+  // each board, and Monday assigns new IDs per board).
+  BANK_DEPOSIT_TOTAL: "numeric_mm3js9d0",
+  BANK_PAYMENT_METHOD: "color_mm3jpg86",
+  BANK_PAYER_ORIG_ID: "text_mm3jz59k",
+  BANK_EFT_DATE: "date_mm3jq5zk",
   // Workflow
   SUBMISSION_TYPE: "color_mm3awg8g",
   SECONDARY_STATUS: "color_mm3a5yak",
@@ -450,6 +457,13 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
       ? txt(item, COL.SECONDARY_ICN) || undefined
       : undefined,
     secondaryPaid: hasSecondaryEra ? secondaryPaidAmount : undefined,
+    // Bank deposit reconciliation — present whenever the ERA writeback
+    // populated these columns. Drives the Bank Info strip in the ERA
+    // Review detail view.
+    bankDepositTotal: num(item, COL.BANK_DEPOSIT_TOTAL) || null,
+    bankPaymentMethod: txt(item, COL.BANK_PAYMENT_METHOD) || null,
+    bankPayerOriginatorId: txt(item, COL.BANK_PAYER_ORIG_ID) || null,
+    bankEftDate: isoDateOrEmpty(txt(item, COL.BANK_EFT_DATE)) || null,
     secondaryAdj: hasSecondaryEra
       ? Math.max(remaining - secondaryPaidAmount, 0)
       : undefined,
