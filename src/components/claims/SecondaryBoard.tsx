@@ -992,7 +992,15 @@ function SecondaryClaimsTable({
 
   function effectiveStatus(c: SecClaim): RowUserStatus {
     if (rowStatus[c.id]) return rowStatus[c.id]!;
-    return c.status === "Secondary Paid" ? "Paid" : "Outstanding";
+    if (c.status === "Secondary Paid") return "Paid";
+    // Pre-select "Paid" when the secondary fully covered the PR
+    // (difference ≈ $0). Terry Bates / Karen Weinstock pattern —
+    // crossover ERAs come in matching PR exactly and the operator
+    // just needs to confirm; defaulting to Paid saves a click and
+    // surfaces these rows as the ones ready to close out.
+    const paid = c.secondaryPaid ?? 0;
+    if (paid > 0 && paid >= c.remaining - 0.5) return "Paid";
+    return "Outstanding";
   }
 
   /**
