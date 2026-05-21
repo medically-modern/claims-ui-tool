@@ -51,7 +51,7 @@ export type SecondaryStatus =
   | "Bad Debt";
 
 type SubmitBucket = "confirm" | "insurance" | "patient";
-type ReviewBucket = "outstanding" | "era";
+type ReviewBucket = "outstanding" | "era" | "paid";
 type AnyBucket = SubmitBucket | ReviewBucket;
 
 export type PrReason = "Deductible" | "Coinsurance" | "Copay" | "Non-covered service" | "Bad debt (write off)";
@@ -484,7 +484,16 @@ function bucketOf(c: SecClaim): AnyBucket | null {
   if (c.status === "Primary Paid - Submit Secondary") return "insurance";
   if (c.status === "Sent to Patient") return "patient";
   if (c.status === "Primary Paid - Forwarded" || c.status === "Secondary Submitted") return "outstanding";
-  if (c.status === "Secondary ERA Received") return "era";
+  if (c.status === "Secondary ERA Received") {
+    // Split fully-paid ERAs (secondary covered the PR within $0.50)
+    // into their own bucket so the operator's ERA Review queue is
+    // only the rows that actually need a decision — partial pays,
+    // denials, discrepancies. Same tolerance the line-status logic
+    // uses elsewhere.
+    const paid = c.secondaryPaid ?? 0;
+    if (paid > 0 && paid >= c.remaining - 0.5) return "paid";
+    return "era";
+  }
   return null;
 }
 
@@ -494,11 +503,12 @@ const BUCKET_META: Record<AnyBucket, { label: string; icon: React.ReactNode; ton
   patient:     { label: "Patient",          icon: <UserRound className="h-4 w-4" />, tone: "text-primary" },
   outstanding: { label: "Outstanding",      icon: <Clock className="h-4 w-4" />,     tone: "text-info-soft-foreground" },
   era:         { label: "ERA Review",       icon: <FileSearch className="h-4 w-4" />, tone: "text-info-soft-foreground" },
+  paid:        { label: "Paid",             icon: <CheckCircle2 className="h-4 w-4" />, tone: "text-success-soft-foreground" },
 };
 
 const MODE_BUCKETS: Record<SecondaryMode, AnyBucket[]> = {
   submit: ["confirm", "insurance", "patient"],
-  review: ["outstanding", "era"],
+  review: ["outstanding", "era", "paid"],
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -540,7 +550,7 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const counts = useMemo(() => {
-    const out: Record<AnyBucket, number> = { confirm: 0, insurance: 0, patient: 0, outstanding: 0, era: 0 };
+    const out: Record<AnyBucket, number> = { confirm: 0, insurance: 0, patient: 0, outstanding: 0, era: 0, paid: 0 };
     for (const c of claims) {
       const b = bucketOf(c);
       if (b) out[b] += 1;
