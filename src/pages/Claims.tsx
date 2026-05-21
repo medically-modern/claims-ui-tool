@@ -320,7 +320,14 @@ function inPaid(c: Claim) {
   return false;
 }
 function inAllOpen(c: Claim) {
-  return c.primaryStatus !== "Paid" && c.primaryStatus !== "Bad Debt";
+  // Union of the four named bucket predicates so the All Open count
+  // equals ERA Review + Late + Denials + Outstanding exactly. The
+  // previous version was "anything that isn't Paid or Bad Debt" which
+  // also caught hasChildren parents (replaced by Corrected/New child)
+  // and the Medicaid Outstanding group (paid-but-not-EFT'd) — both
+  // intentionally hidden from the four action tiles, both showing up
+  // as a confusing 77-claim delta on the Primary Board summary.
+  return inEraReview(c) || inLateEra(c) || inDenied(c) || inOutstanding(c);
 }
 
 const CATEGORY_FILTERS: Record<CategoryKey, (c: Claim) => boolean> = {
