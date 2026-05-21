@@ -69,13 +69,22 @@ interface RowState {
   charge: number;
 }
 
-function defaultsFor(claim: Claim): RowState[] {
+function defaultsFor(
+  claim: Claim,
+  denialAction: "Corrected claim" | "New claim",
+): RowState[] {
   return claim.lines.map((l) => {
     const s = lineStatus(l);
-    // Default check: anything that didn't pay clean — Denied, Partial,
-    // PR, Needs Review — comes along. Fully paid lines stay unchecked
-    // so we don't accidentally re-bill them. Operator can override.
-    const checked = s !== "Paid";
+    // Corrected claim goes out as a CLM05-3=7 replacement that wipes
+    // the original on the payer's side, so every line MUST be on the
+    // resubmission — leaving the Paid line off would lose the dollars
+    // we already collected. Default ALL lines checked.
+    //
+    // New claim is a fresh submission; re-billing a Paid line creates
+    // a duplicate, so Paid lines default off and the operator opts in
+    // explicitly.
+    const checked =
+      denialAction === "Corrected claim" ? true : s !== "Paid";
     return {
       id: l.id,
       hcpcs: l.hcpcs,
@@ -96,20 +105,40 @@ function defaultsFor(claim: Claim): RowState[] {
 export function LineResubmitDialog({
   open, onOpenChange, claim, initialDenialAction, busy, onConfirm,
 }: Props) {
-  const [rows, setRows] = useState<RowState[]>(() => defaultsFor(claim));
-  const [denialAction, setDenialAction] = useState<"Corrected claim" | "New claim">(
-    initialDenialAction === "New claim" ? "New claim" : "Corrected claim",
+  const initialAction: "Corrected claim" | "New claim" =
+    initialDenialAction === "New claim" ? "New claim" : "Corrected claim";
+  const [rows, setRows] = useState<RowState[]>(() =>
+    defaultsFor(claim, initialAction),
   );
+  const [denialAction, setDenialAction] =
+    useState<"Corrected claim" | "New claim">(initialAction);
 
   // Reset when reopened against a different claim or after a confirm.
   useEffect(() => {
     if (open) {
-      setRows(defaultsFor(claim));
-      setDenialAction(
-        initialDenialAction === "New claim" ? "New claim" : "Corrected claim",
-      );
+      const a: "Corrected claim" | "New claim" =
+        initialDenialAction === "New claim" ? "New claim" : "Corrected claim";
+      setRows(defaultsFor(claim, a));
+      setDenialAction(a);
     }
   }, [open, claim, initialDenialAction]);
+
+  // Re-apply check defaults when the operator toggles Corrected/New
+  // mid-flow. Corrected -> all lines on; New -> Paid lines off.
+  // Any per-line units/charge overrides the operator already typed
+  // are preserved by reading them out of the current rows state.
+  function setActionAndRetoggle(next: "Corrected claim" | "New claim") {
+    setDenialAction(next);
+    setRows((prev) => {
+      const fresh = defaultsFor(claim, next);
+      return fresh.map((r) => {
+        const existing = prev.find((p) => p.id === r.id);
+        return existing
+          ? { ...r, units: existing.units, charge: existing.charge }
+          : r;
+      });
+    });
+  }
 
   const selected = rows.filter((r) => r.checked);
   const includesPaidLine = selected.some((r) => r.status === "Paid");
@@ -172,7 +201,7 @@ export function LineResubmitDialog({
                 type="button"
                 size="sm"
                 variant={denialAction === "Corrected claim" ? "default" : "outline"}
-                onClick={() => setDenialAction("Corrected claim")}
+                onClick={() => setActionAndRetoggle("Corrected claim")}
               >
                 Corrected claim
               </Button>
@@ -180,7 +209,7 @@ export function LineResubmitDialog({
                 type="button"
                 size="sm"
                 variant={denialAction === "New claim" ? "default" : "outline"}
-                onClick={() => setDenialAction("New claim")}
+                onClick={() => setActionAndRetoggle("New claim")}
               >
                 New claim
               </Button>
