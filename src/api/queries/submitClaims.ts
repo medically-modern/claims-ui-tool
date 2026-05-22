@@ -26,6 +26,11 @@ const COL = {
   PARENT_CLAIM_ID: "text_mm3559h4",
   CLAIM_ID: "text_mm1zpzrs",
   PAYER_CLAIM_NUMBER: "text_mm2nfytt",
+  // PR Payor ID — Stedi trading partner ID stamped into the outbound
+  // 837 (e.g. "ZTXQE" for Emblem, "MCDNY" for Medicaid). Editable in
+  // the Resubmit row UI because spawned children sometimes need a
+  // different trading partner than the parent.
+  PAYOR_ID: "text_mm1gcz3y",
   // POS — status column with labels Home (CMS 12) / Office (CMS 11).
   // Read here so the Submit Claim board's inline editor can render the
   // current value and let the operator switch before submitting.
@@ -273,6 +278,7 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
     diagnosis: textOf(item, COL.DIAGNOSIS) || undefined,
     dos: textOf(item, COL.DOS),
     icn: textOf(item, COL.PAYER_CLAIM_NUMBER) || undefined,
+    payor_id: textOf(item, COL.PAYOR_ID) || undefined,
     parent_claim_id: parentClaimId || undefined,
     items: (item.subitems ?? []).map(mapSubitem),
     createdAt: new Date(item.created_at).getTime() || Date.now(),

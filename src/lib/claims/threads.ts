@@ -49,6 +49,12 @@ export interface ThreadClaim {
   type: ThreadClaimType;
   status: ThreadClaimStatus;
   patient: { name: string; dob: string; member_id: string };
+  /** PR Payor ID — Stedi trading partner ID stamped into the 837.
+   *  Read from Monday column text_mm1gcz3y. Editable on the Resubmit
+   *  bucket of PrimarySubmitBoard so the operator can correct it
+   *  before submission. Null/empty means the backend will auto-resolve
+   *  from PAYER_ID_MAP via the Primary Payor label. */
+  payor_id?: string;
   payer: string;
   diagnosis?: string;
   dos: string; // ISO yyyy-mm-dd

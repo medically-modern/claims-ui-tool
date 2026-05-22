@@ -140,6 +140,12 @@ export function setClaimSubitemNumber(
 export const CLAIM_PARENT_COL = {
   primary_payor:   "color_mkxmhypt",
   member_id:       "text_mktat89m",
+  // PR Payor ID — Stedi trading partner ID we send the 837 to (e.g.
+  // "ZTXQE" for Emblem, "MCDNY" for Medicaid). Editable from the
+  // PrimarySubmitBoard Resubmit row because spawned children sometimes
+  // need it adjusted before submission (different payer than the
+  // parent, manual override for a Stedi-routed test, etc.).
+  payor_id:        "text_mm1gcz3y",
   dos:             "date_mkwr7spz",
   diagnosis:       "color_mky2gpz5",
   place_of_service:"color_mm3fk3qv",

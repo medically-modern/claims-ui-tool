@@ -634,6 +634,50 @@ function ClaimCard({
           />
         </Field>
 
+        {/* PR Payor ID — Stedi trading partner ID we send the 837 to.
+            Editable inline because spawned children sometimes need a
+            different trading partner than the parent (e.g. corrected
+            claim is now going to Medicaid instead of Cigna), and the
+            backend currently has no UX to fix this between spawn and
+            submit. Same debounced autosave pattern as Member ID. */}
+        <Field label="PR Payor ID" className={cellCls}>
+          <Input
+            value={c.payor_id ?? ""}
+            placeholder="e.g. ZTXQE"
+            disabled={isLocked}
+            onChange={(e) => {
+              const next = e.target.value;
+              const prev = c.payor_id;
+              onUpdate({ payor_id: next });
+              if (!c.monday_item_id) return;
+              scheduleWrite(`payor-${c.id}`, () => {
+                writeWithRevert(
+                  setClaimParentText(
+                    c.monday_item_id!, CLAIM_PARENT_COL.payor_id, next,
+                  ),
+                  () => onUpdate({ payor_id: prev }),
+                  "PR Payor ID",
+                );
+              });
+            }}
+            onBlur={(e) => {
+              const next = e.target.value;
+              if (!c.monday_item_id) return;
+              const prev = c.payor_id;
+              flushWrite(`payor-${c.id}`, () => {
+                writeWithRevert(
+                  setClaimParentText(
+                    c.monday_item_id!, CLAIM_PARENT_COL.payor_id, next,
+                  ),
+                  () => onUpdate({ payor_id: prev }),
+                  "PR Payor ID",
+                );
+              });
+            }}
+            className="h-7 w-full text-xs md:text-xs"
+          />
+        </Field>
+
         <Field label="DOS" className={cellCls}>
           <Popover>
             <PopoverTrigger asChild>
