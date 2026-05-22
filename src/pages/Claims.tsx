@@ -1121,7 +1121,12 @@ const Claims = () => {
                                 switch (col) {
                                   case "patient": {
                                     const tc = findThreadClaimForMockClaim(
-                                      { patientName: c.patientName, primaryPayor: c.primaryPayor, dos: c.dos },
+                                      {
+                                        patientName: c.patientName,
+                                        primaryPayor: c.primaryPayor,
+                                        dos: c.dos,
+                                        mondayItemId: c.mondayItemId,
+                                      },
                                       threadClaims,
                                     );
                                     let chip: React.ReactNode = null;
@@ -1303,15 +1308,25 @@ const Claims = () => {
                                                 </TooltipContent>
                                               </Tooltip>
                                             );
+                                            // Was a toast-only stub. Now fires the same backend
+                                            // sendToDenialForRow handler the Outstanding row uses
+                                            // (POST /claims/send-to-denial → flips Primary Status
+                                            // to Denied (Or Partly) + syncs Subscription board).
+                                            // Spinner state from sendDenialBusy[c.id] disables
+                                            // the button while the write is in flight; refetch
+                                            // happens on success so the row drops out of Late
+                                            // ERA + appears in Denials within ~1-2s.
                                             const denialBtn = (
                                               <Tooltip key="denial">
                                                 <TooltipTrigger asChild>
                                                   <button
                                                     type="button"
                                                     aria-label="Move to Denial"
-                                                    onClick={() => toast({ title: "Moved to Denial", description: c.patientName })}
+                                                    disabled={!!sendDenialBusy[c.id]}
+                                                    onClick={() => void sendToDenialForRow(c)}
                                                     className={cn(
                                                       "grid h-9 w-9 place-items-center rounded-md transition-colors shadow-sm",
+                                                      sendDenialBusy[c.id] && "opacity-60 cursor-wait",
                                                       meta.recommend === "denial"
                                                         ? "bg-danger-soft text-danger-soft-foreground hover:bg-danger hover:text-danger-foreground"
                                                         : "bg-muted text-muted-foreground hover:bg-danger-soft hover:text-danger-soft-foreground",
@@ -1596,7 +1611,12 @@ const Claims = () => {
                             </TableRow>
                             {expandedThread === c.id && (() => {
                               const tc = findThreadClaimForMockClaim(
-                                { patientName: c.patientName, primaryPayor: c.primaryPayor, dos: c.dos },
+                                {
+                                  patientName: c.patientName,
+                                  primaryPayor: c.primaryPayor,
+                                  dos: c.dos,
+                                  mondayItemId: c.mondayItemId,
+                                },
                                 threadClaims,
                               );
                               if (!tc) return null;

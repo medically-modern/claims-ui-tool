@@ -168,12 +168,39 @@ export function productLabelForHcpc(hcpc: string): string {
   return HCPC_TO_PRODUCT[hcpc] ?? hcpc;
 }
 
-// Map a legacy MOCK_CLAIMS row to a thread claim, if one exists
-// (heuristic: same patient name + same payer + same DOS).
+// Map a Claim row (from useAllClaims) to its ThreadClaim equivalent.
+//
+// Match priority:
+//   1. Monday item id when both sides have one — this is unique by
+//      construction, the only correct match for real data.
+//   2. Patient name + payer + DOS — legacy fallback for mock claims
+//      that don't carry a Monday item id (purely local data).
+//
+// Why this matters: a patient can have MULTIPLE distinct claims on the
+// same DOS (separate products billed to the same payer that day, or
+// the same products billed to different payers, etc.). Karen Oliver's
+// 2026-05-22 case was the canonical example — pump claim with no
+// parent_claim_id was getting threaded into the unrelated infusion-set
+// claim's history just because the (name, payer, DOS) tuple matched.
+// Matching by mondayItemId removes that collision.
 export function findThreadClaimForMockClaim(
-  mock: { patientName: string; primaryPayor: string; dos: string },
+  mock: {
+    patientName: string;
+    primaryPayor: string;
+    dos: string;
+    mondayItemId?: string;
+  },
   threadClaims: ThreadClaim[],
 ): ThreadClaim | null {
+  // Priority 1: Monday item id. Unique, unambiguous, the right answer
+  // for any claim sourced from Monday.
+  if (mock.mondayItemId) {
+    const byId = threadClaims.find((t) => t.monday_item_id === mock.mondayItemId);
+    if (byId) return byId;
+  }
+  // Priority 2: name + payer + DOS. Kept for mock/dev data without a
+  // Monday id. Real-data callers that pass mondayItemId never hit this
+  // path so the Karen Oliver collision is gone.
   const dos = mock.dos?.slice(0, 10);
   return (
     threadClaims.find(
