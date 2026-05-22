@@ -658,6 +658,16 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
       });
       return;
     }
+    // Round-trip is 3–8s (fetch parent → build payload → Stedi POST →
+    // writeback to Monday). Pop an immediate "Submitting…" toast so
+    // the operator has feedback while the button spinner spins. Since
+    // TOAST_LIMIT=1 in use-toast, the success/error toast below
+    // replaces it the moment Stedi responds — no manual dismiss needed.
+    toast({
+      title: `Submitting secondary: ${c.patientName}`,
+      description: `Sending 837 to ${name}…`,
+      duration: 30_000,
+    });
     try {
       const result = await apiSubmitSecondary(c.mondayItemId);
       // Backend already wrote Claim ID/PCN/Sent Date/Status to Monday on
@@ -668,6 +678,8 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
           `837 sent to ${name}` +
           (result.claim_id ? ` · Claim ID ${result.claim_id}` : "") +
           (result.inline_277_status ? ` · 277: ${result.inline_277_status}` : ""),
+        // Operators want to read the claim ID — 5s default is too short.
+        duration: 12_000,
       });
       void refetchSecondary();
     } catch (e) {
@@ -681,6 +693,8 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
             ? `Submit blocked: ${c.patientName}`
             : `Couldn't submit: ${c.patientName}`,
         description: (e as Error).message,
+        // Error details are long — give the operator time to read.
+        duration: 15_000,
       });
     }
   }
@@ -1539,9 +1553,17 @@ function SubmitSecondaryBody({
 }: {
   c: SecClaim;
   onUpdate: (p: Partial<SecClaim>) => void;
-  onSubmit: (manual?: boolean) => void;
+  // Accepts Promise<void> so we can await the round-trip and show a
+  // spinner. Older call sites that pass a non-async fn still work — we
+  // just resolve immediately in that case.
+  onSubmit: (manual?: boolean) => Promise<void> | void;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Pending = backend round-trip in flight. Disables the button +
+  // swaps the icon for a spinner so the operator knows the click
+  // registered (without this, the 3–8s Stedi round-trip looks like a
+  // dead click).
+  const [submitting, setSubmitting] = useState(false);
   const isOther = c.secondaryPayer === OTHER_PAYER;
   const otherName = c.secondaryPayerOther?.trim() ?? "";
   const otherInvalid = isOther && otherName.length === 0;
@@ -1586,8 +1608,28 @@ function SubmitSecondaryBody({
       </TooltipProvider>
     </div>
   ) : (
-    <Button onClick={() => onSubmit(false)} className="self-end bg-emerald-700 text-white hover:bg-emerald-800">
-      <Send className="mr-1 h-3.5 w-3.5" /> Submit Secondary
+    <Button
+      onClick={async () => {
+        if (submitting) return;
+        setSubmitting(true);
+        try {
+          await onSubmit(false);
+        } finally {
+          setSubmitting(false);
+        }
+      }}
+      disabled={submitting}
+      className="self-end bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-80"
+    >
+      {submitting ? (
+        <>
+          <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Submitting…
+        </>
+      ) : (
+        <>
+          <Send className="mr-1 h-3.5 w-3.5" /> Submit Secondary
+        </>
+      )}
     </Button>
   );
 
