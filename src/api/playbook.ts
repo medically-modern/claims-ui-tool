@@ -72,19 +72,35 @@ export interface PlaybookCombosResponse {
   rows: PlaybookRow[];
 }
 
+/**
+ * One verify-combo request can move any combination of the four
+ * playbook cells independently:
+ *
+ *   bucket          -> column E "Denial Analysis"
+ *   verified        -> column F "Verified: Denial Analysis"  ("Yes"/"")
+ *   action          -> column G "Action"
+ *   verifiedAction  -> column H "Verified: Action"            ("Yes"/"")
+ *
+ * Pass undefined to leave a cell alone. Pass "" for bucket/action to
+ * blank the text; pass false for verified flags to clear the "Yes".
+ * At least one must be set.
+ */
 export interface VerifyComboRequest {
   carc: string;
-  /** RARC can be empty when the combo is CARC-only. */
   rarc?: string;
-  verifiedAnalysis: string;
-  verifiedAction?: string;
+  bucket?: string;
+  verified?: boolean;
+  action?: string;
+  verifiedAction?: boolean;
 }
 
 export interface VerifyComboResult {
   carc: string;
   rarc: string;
-  verified_analysis: string;
-  verified_action: string;
+  bucket: string;
+  verified: boolean | null;
+  action: string;
+  verified_action: boolean | null;
   /** 1-indexed Sheet row that was updated. 0 when a new row was
    *  appended. */
   row_index: number;
@@ -175,20 +191,25 @@ export function fetchPlaybookCombos(): Promise<PlaybookCombosResponse> {
   });
 }
 
-/** Write Verified: Denial Analysis (and optionally Verified: Action)
- *  for a (CARC, RARC) combo. Creates the row if it doesn't exist. */
+/** Move one or more of the four playbook cells for a (CARC, RARC)
+ *  combo. Each field is independent; only the cells you pass get
+ *  written, so picking a bucket doesn't auto-flip Verified=Yes (and
+ *  vice versa). Creates the row if it doesn't exist. */
 export function verifyPlaybookCombo(
   req: VerifyComboRequest,
 ): Promise<VerifyComboResult> {
+  const body: Record<string, unknown> = {
+    carc: req.carc,
+    rarc: req.rarc ?? "",
+  };
+  if (req.bucket !== undefined) body.bucket = req.bucket;
+  if (req.verified !== undefined) body.verified = req.verified;
+  if (req.action !== undefined) body.action = req.action;
+  if (req.verifiedAction !== undefined) body.verified_action = req.verifiedAction;
   return call<VerifyComboResult>("/admin/playbook/verify-combo", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      carc: req.carc,
-      rarc: req.rarc ?? "",
-      verified_analysis: req.verifiedAnalysis,
-      verified_action: req.verifiedAction,
-    }),
+    body: JSON.stringify(body),
   });
 }
 

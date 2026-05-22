@@ -200,22 +200,24 @@ export function DenialAnalysisTable() {
   }
 
   /**
-   * Persist a row's Denial Analysis + Verified state to the Sheet.
+   * Persist exactly one type of change to the Sheet — bucket only OR
+   * verified flag only. The two columns are independent:
    *
-   *   newAnalysis = ""   →  Verified column cleared (verified_analysis="")
-   *   newAnalysis = "X"  →  Sheet row gets Verified: Denial Analysis = X
+   *   { bucket: "Wrong Modifiers" }  -> writes column E only
+   *   { verified: true }             -> writes "Yes" to column F only
+   *   { verified: false }            -> writes ""    to column F only
    *
-   * The backend's force_refresh runs inline as part of the same call
-   * so the next ERA hitting this combo (or this table on next reload)
-   * sees the new state without waiting for the hourly cron.
+   * Picking a bucket does NOT auto-flip Verified=Yes (operator chose to
+   * decouple these on 2026-05-22 — verification is a deliberate signoff
+   * step, separate from picking which bucket the combo belongs to).
    *
-   * On failure we toast the error and revert the local override so
-   * the UI doesn't show a value that didn't actually persist.
+   * On failure we toast the error and revert the local override so the
+   * UI matches the sheet truth instead of a value we couldn't persist.
    */
   async function persistRow(
     rowIndex: number,
     row: UniqueCombo,
-    newAnalysis: string,
+    change: { bucket?: string; verified?: boolean },
   ) {
     if (!isPlaybookApiConfigured()) {
       toast.error(
@@ -231,39 +233,42 @@ export function DenialAnalysisTable() {
     }
     setSavingRow(rowIndex);
     try {
-      await verifyPlaybookCombo({
-        carc,
-        rarc,
-        verifiedAnalysis: newAnalysis,
-      });
+      await verifyPlaybookCombo({ carc, rarc, ...change });
       // Bust the live-playbook cache so this table + ClaimDetail
-      // pickers + remark chips all re-fetch and see the new bucket.
+      // pickers + remark chips all re-fetch and see the new state.
       void queryClient.invalidateQueries({ queryKey: PLAYBOOK_COMBOS_QUERY_KEY });
-      if (newAnalysis) {
-        toast.success(`Saved: ${newAnalysis}`, {
-          description: `${carc || "—"} / ${rarc || "—"}`,
-        });
-      } else {
-        toast.success("Cleared verification.", {
-          description: `${carc || "—"} / ${rarc || "—"}`,
-        });
+      if (change.bucket !== undefined) {
+        toast.success(
+          change.bucket ? `Bucket saved: ${change.bucket}` : "Bucket cleared.",
+          { description: `${carc || "—"} / ${rarc || "—"}` },
+        );
+      } else if (change.verified !== undefined) {
+        toast.success(
+          change.verified ? "Marked verified." : "Cleared verification.",
+          { description: `${carc || "—"} / ${rarc || "—"}` },
+        );
       }
     } catch (e) {
       toast.error("Couldn't save to the Playbook sheet.", {
         description: (e as Error).message,
       });
-      // Revert the local override on failure so the UI matches the
-      // sheet truth instead of showing a value we couldn't persist.
-      setAnalysisByRow((p) => {
-        const next = { ...p };
-        delete next[rowIndex];
-        return next;
-      });
-      setVerifiedByRow((p) => {
-        const next = { ...p };
-        delete next[rowIndex];
-        return next;
-      });
+      // Revert just the field that was being edited so the UI matches
+      // the sheet truth and the OTHER field's pending edit (if any)
+      // isn't blown away.
+      if (change.bucket !== undefined) {
+        setAnalysisByRow((p) => {
+          const next = { ...p };
+          delete next[rowIndex];
+          return next;
+        });
+      }
+      if (change.verified !== undefined) {
+        setVerifiedByRow((p) => {
+          const next = { ...p };
+          delete next[rowIndex];
+          return next;
+        });
+      }
     } finally {
       setSavingRow(null);
     }
@@ -645,13 +650,13 @@ export function DenialAnalysisTable() {
                     <TableRow key={i} className="align-top">
                       {COLUMNS.map((c) => {
                         if (c.key === "Denial Analysis") {
-                          // Auto-save on change. Picking a new bucket
-                          // here means "I want this combo verified as
-                          // X" — equivalent to clicking Verify in the
-                          // ClaimDetail inline picker. Local state is
-                          // updated optimistically; persistRow handles
-                          // toast + cache invalidate + revert on error.
-                          // Verified column auto-flips to Yes alongside.
+                          // Auto-save on change — but ONLY writes the
+                          // bucket (column E). Verified column is
+                          // unaffected; operator decides separately
+                          // whether to sign off via the Verified
+                          // dropdown. Same column-write semantics in
+                          // the backend (independent bucket / verified
+                          // fields on /admin/playbook/verify-combo).
                           return (
                             <TableCell key={c.key as string} className="text-sm">
                               <Select
@@ -659,8 +664,7 @@ export function DenialAnalysisTable() {
                                 disabled={savingRow === i}
                                 onValueChange={(v) => {
                                   setAnalysisByRow((p) => ({ ...p, [i]: v }));
-                                  setVerifiedByRow((p) => ({ ...p, [i]: "Yes" }));
-                                  void persistRow(i, r, v);
+                                  void persistRow(i, r, { bucket: v });
                                 }}
                               >
                                 <SelectTrigger className="h-8 text-xs">
@@ -681,10 +685,13 @@ export function DenialAnalysisTable() {
                           );
                         }
                         if (c.key === "Verified: Denial Analysis") {
-                          // Yes → confirm the current Denial Analysis
-                          // bucket as verified on the Sheet.
-                          // No → clear the Verified column (sets
-                          // verified_analysis = "" on the row).
+                          // Toggles only the Verified flag (column F).
+                          // Yes → writes "Yes" to F (operator signoff).
+                          // No  → writes ""    to F (clears signoff).
+                          // The bucket in column E is independent —
+                          // operator can verify a row whose bucket they
+                          // already filled in (or accept the auto-fill
+                          // from the classifier).
                           return (
                             <TableCell key={c.key as string} className="text-sm">
                               <Select
@@ -692,24 +699,7 @@ export function DenialAnalysisTable() {
                                 disabled={savingRow === i}
                                 onValueChange={(v) => {
                                   setVerifiedByRow((p) => ({ ...p, [i]: v }));
-                                  if (v === "Yes") {
-                                    if (!currentAnalysis) {
-                                      toast.error(
-                                        "Pick a Denial Analysis bucket first.",
-                                      );
-                                      // Revert — can't mark Yes without
-                                      // a bucket to verify against.
-                                      setVerifiedByRow((p) => {
-                                        const n = { ...p };
-                                        delete n[i];
-                                        return n;
-                                      });
-                                      return;
-                                    }
-                                    void persistRow(i, r, currentAnalysis);
-                                  } else {
-                                    void persistRow(i, r, "");
-                                  }
+                                  void persistRow(i, r, { verified: v === "Yes" });
                                 }}
                               >
                                 <SelectTrigger

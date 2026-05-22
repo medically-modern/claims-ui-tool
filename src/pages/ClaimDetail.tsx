@@ -340,14 +340,19 @@ const ClaimDetail = () => {
     }
     setPlaybookSavingId(line.id);
     try {
+      // From the ClaimDetail per-line picker, "Save" means: this combo
+      // belongs in bucket X AND I'm signing off on it for this claim.
+      // Pass both — different semantic from the workbook table where
+      // the operator manages bucket and verified flag independently.
       const result = await verifyPlaybookCombo({
         carc: line.carc.map(String).join(","),
         rarc: line.rarc.join(","),
-        verifiedAnalysis: bucket,
+        bucket,
+        verified: true,
       });
       setPlaybookOverride((m) => ({
         ...m,
-        [line.id]: { reason: result.verified_analysis, verified: true },
+        [line.id]: { reason: result.bucket || bucket, verified: true },
       }));
       setPlaybookEditing((m) => ({ ...m, [line.id]: false }));
       // Bust the live-playbook cache so every other open surface
