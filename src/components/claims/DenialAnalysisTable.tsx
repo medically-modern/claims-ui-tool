@@ -19,7 +19,16 @@ import {
   ChevronLeft, ChevronRight as ChevronRightIcon, RefreshCw,
 } from "lucide-react";
 import { UNIQUE_COMBOS, type UniqueCombo } from "@/lib/claims/uniqueCombos";
-import { usePlaybookCombos } from "@/hooks/usePlaybookCombos";
+import {
+  usePlaybookCombos,
+  PLAYBOOK_COMBOS_QUERY_KEY,
+} from "@/hooks/usePlaybookCombos";
+import {
+  verifyPlaybookCombo,
+  isPlaybookApiConfigured,
+} from "@/api/playbook";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 type ColKey = keyof UniqueCombo;
@@ -84,9 +93,86 @@ export function DenialAnalysisTable() {
   const [pageSize, setPageSize] = useState<PageSize>(15);
   const [page, setPage] = useState(0);
 
-  // Editable per-row state
+  // Editable per-row state.
+  // analysisByRow / verifiedByRow hold the operator's pending value
+  // for each row. After a successful save these get persisted to the
+  // backend Sheet via /admin/playbook/verify-combo, and the React
+  // Query cache for PLAYBOOK_COMBOS_QUERY_KEY is invalidated so the
+  // table re-fetches the live data on the next render.
   const [analysisByRow, setAnalysisByRow] = useState<Record<number, string>>({});
   const [verifiedByRow, setVerifiedByRow] = useState<Record<number, string>>({});
+  const [savingRow, setSavingRow] = useState<number | null>(null);
+  const queryClient = useQueryClient();
+
+  /**
+   * Persist a row's Denial Analysis + Verified state to the Sheet.
+   *
+   *   newAnalysis = ""   →  Verified column cleared (verified_analysis="")
+   *   newAnalysis = "X"  →  Sheet row gets Verified: Denial Analysis = X
+   *
+   * The backend's force_refresh runs inline as part of the same call
+   * so the next ERA hitting this combo (or this table on next reload)
+   * sees the new state without waiting for the hourly cron.
+   *
+   * On failure we toast the error and revert the local override so
+   * the UI doesn't show a value that didn't actually persist.
+   */
+  async function persistRow(
+    rowIndex: number,
+    row: UniqueCombo,
+    newAnalysis: string,
+  ) {
+    if (!isPlaybookApiConfigured()) {
+      toast.error(
+        "Playbook API not configured (VITE_API_BASE_URL or VITE_ADMIN_API_KEY missing).",
+      );
+      return;
+    }
+    const carc = String(row["CARC Code(s)"] ?? "").trim();
+    const rarc = String(row["RARC Code(s)"] ?? "").trim();
+    if (!carc && !rarc) {
+      toast.error("Can't save: row has no CARC or RARC.");
+      return;
+    }
+    setSavingRow(rowIndex);
+    try {
+      await verifyPlaybookCombo({
+        carc,
+        rarc,
+        verifiedAnalysis: newAnalysis,
+      });
+      // Bust the live-playbook cache so this table + ClaimDetail
+      // pickers + remark chips all re-fetch and see the new bucket.
+      void queryClient.invalidateQueries({ queryKey: PLAYBOOK_COMBOS_QUERY_KEY });
+      if (newAnalysis) {
+        toast.success(`Saved: ${newAnalysis}`, {
+          description: `${carc || "—"} / ${rarc || "—"}`,
+        });
+      } else {
+        toast.success("Cleared verification.", {
+          description: `${carc || "—"} / ${rarc || "—"}`,
+        });
+      }
+    } catch (e) {
+      toast.error("Couldn't save to the Playbook sheet.", {
+        description: (e as Error).message,
+      });
+      // Revert the local override on failure so the UI matches the
+      // sheet truth instead of showing a value we couldn't persist.
+      setAnalysisByRow((p) => {
+        const next = { ...p };
+        delete next[rowIndex];
+        return next;
+      });
+      setVerifiedByRow((p) => {
+        const next = { ...p };
+        delete next[rowIndex];
+        return next;
+      });
+    } finally {
+      setSavingRow(null);
+    }
+  }
 
   // Live playbook from /admin/playbook/combos. Falls back to the
   // bundled UNIQUE_COMBOS snapshot when the API isn't configured or
@@ -414,11 +500,23 @@ export function DenialAnalysisTable() {
                     <TableRow key={i} className="align-top">
                       {COLUMNS.map((c) => {
                         if (c.key === "Denial Analysis") {
+                          // Auto-save on change. Picking a new bucket
+                          // here means "I want this combo verified as
+                          // X" — equivalent to clicking Verify in the
+                          // ClaimDetail inline picker. Local state is
+                          // updated optimistically; persistRow handles
+                          // toast + cache invalidate + revert on error.
+                          // Verified column auto-flips to Yes alongside.
                           return (
                             <TableCell key={c.key as string} className="text-sm">
                               <Select
                                 value={currentAnalysis || undefined}
-                                onValueChange={(v) => setAnalysisByRow((p) => ({ ...p, [i]: v }))}
+                                disabled={savingRow === i}
+                                onValueChange={(v) => {
+                                  setAnalysisByRow((p) => ({ ...p, [i]: v }));
+                                  setVerifiedByRow((p) => ({ ...p, [i]: "Yes" }));
+                                  void persistRow(i, r, v);
+                                }}
                               >
                                 <SelectTrigger className="h-8 text-xs">
                                   <SelectValue placeholder="Select…" />
@@ -429,15 +527,45 @@ export function DenialAnalysisTable() {
                                   ))}
                                 </SelectContent>
                               </Select>
+                              {savingRow === i && (
+                                <div className="mt-1 text-[10px] text-muted-foreground">
+                                  Saving…
+                                </div>
+                              )}
                             </TableCell>
                           );
                         }
                         if (c.key === "Verified: Denial Analysis") {
+                          // Yes → confirm the current Denial Analysis
+                          // bucket as verified on the Sheet.
+                          // No → clear the Verified column (sets
+                          // verified_analysis = "" on the row).
                           return (
                             <TableCell key={c.key as string} className="text-sm">
                               <Select
                                 value={currentVerified}
-                                onValueChange={(v) => setVerifiedByRow((p) => ({ ...p, [i]: v }))}
+                                disabled={savingRow === i}
+                                onValueChange={(v) => {
+                                  setVerifiedByRow((p) => ({ ...p, [i]: v }));
+                                  if (v === "Yes") {
+                                    if (!currentAnalysis) {
+                                      toast.error(
+                                        "Pick a Denial Analysis bucket first.",
+                                      );
+                                      // Revert — can't mark Yes without
+                                      // a bucket to verify against.
+                                      setVerifiedByRow((p) => {
+                                        const n = { ...p };
+                                        delete n[i];
+                                        return n;
+                                      });
+                                      return;
+                                    }
+                                    void persistRow(i, r, currentAnalysis);
+                                  } else {
+                                    void persistRow(i, r, "");
+                                  }
+                                }}
                               >
                                 <SelectTrigger
                                   className={cn(
