@@ -38,6 +38,13 @@ const COL = {
   // the backend now also writes Request Rejected reasons here so the
   // operator has a single column for "why was this rejected".
   REJECTION_REASON: "text_mm1zsp2x",
+  // Send timestamps — drive the "stale Stedi-Accepted 48h+" pill on the
+  // Awaiting Acceptance tile. Backend sets Claim Sent Date on the
+  // original 837 send; sets Claim Resent Date on any resubmission
+  // (corrected / void / retry). max(sent, resent) is the effective
+  // "last on the wire" date for staleness math.
+  CLAIM_SENT_DATE: "date_mm14rk8d",
+  CLAIM_RESENT_DATE: "date_mm29scz",
 } as const;
 
 // Column IDs on the Subitems board. See MONDAY_BOARD_SCHEMA.md.
@@ -255,6 +262,8 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
     status277: mapStatus277(textOf(item, COL.S277_STATUS)),
     request_rejected: isRequestRejected || undefined,
     rejection_reason: textOf(item, COL.REJECTION_REASON) || undefined,
+    claimSentDate: textOf(item, COL.CLAIM_SENT_DATE) || undefined,
+    claimResentDate: textOf(item, COL.CLAIM_RESENT_DATE) || undefined,
     patient: {
       name: item.name,
       dob: textOf(item, COL.DOB),

@@ -83,6 +83,15 @@ export interface ThreadClaim {
    *  Move-to-Submit button so the operator can see why a row
    *  bounced without having to open the Monday Updates tab. */
   rejection_reason?: string;
+  /** Claim Sent Date (date_mm14rk8d) — when we sent the original 837.
+   *  ISO YYYY-MM-DD. Used together with claimResentDate to compute
+   *  staleness of Stedi-Accepted claims: max(sent, resent) is the
+   *  effective "last on the wire" timestamp. */
+  claimSentDate?: string;
+  /** Claim Resent Date (date_mm29scz) — when we last resubmitted
+   *  (corrected / void / retry). ISO YYYY-MM-DD. Trumps claimSentDate
+   *  for staleness when set; without it, claimSentDate is the proxy. */
+  claimResentDate?: string;
   items: ThreadItem[];
   notes?: string;
   createdAt: number;

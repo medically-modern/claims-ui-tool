@@ -176,6 +176,34 @@ export function PrimarySubmitBoard() {
     [awaitingAcceptance],
   );
 
+  // "Stedi Accepted" claims that haven't graduated to "Payer Accepted"
+  // (or rejected) within 48h are a second flavor of red flag: Stedi
+  // forwarded the 837 fine, but the payer is sitting on it (or never
+  // got it). Common causes: routing glitches, payer-side EDI backlog,
+  // or rare cases where Stedi's webhook fired Accepted but the payer
+  // never replied at all. Surfaced as an amber pill alongside the
+  // payer-rejected pill so the operator can chase the slow ones.
+  //
+  // We use max(claimSentDate, claimResentDate) as the proxy for "when
+  // did this submission go out". Stedi typically acks within minutes,
+  // so 48h-since-send ≈ 48h-since-Stedi-Accepted. Dates are parsed as
+  // YYYY-MM-DD strings (Monday's date columns) and read as UTC midnight,
+  // which means the threshold is slightly conservative (a claim sent
+  // late in the day will register stale a few hours earlier than its
+  // exact 48-hour anniversary — fine for an operator dashboard).
+  const staleStediAcceptedCount = useMemo(() => {
+    const now = Date.now();
+    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+    return awaitingAcceptance.filter((c) => {
+      if (c.status277 !== "Stedi Accepted") return false;
+      const sentIso = c.claimResentDate || c.claimSentDate;
+      if (!sentIso) return false;
+      const sentMs = Date.parse(sentIso);
+      if (!Number.isFinite(sentMs)) return false;
+      return now - sentMs >= FORTY_EIGHT_HOURS_MS;
+    }).length;
+  }, [awaitingAcceptance]);
+
   const visible = useMemo(() => {
     const pool =
       queue === "awaiting" ? awaitingAcceptance
@@ -319,16 +347,23 @@ export function PrimarySubmitBoard() {
                   {QUEUE_META[k].icon}
                   {QUEUE_META[k].label}
                 </div>
-                <div className="mt-1 flex items-center gap-2">
+                <div className="mt-1 flex flex-wrap items-center gap-2">
                   <span className="text-2xl font-semibold">{counts[k]}</span>
-                  {/* On the Awaiting Acceptance tile, surface the count of
-                      rows that came back Payer Rejected (277 category A3)
-                      so the operator sees the rework backlog without
-                      clicking in. Hidden when zero so the tile stays
-                      clean on healthy days. */}
+                  {/* On the Awaiting Acceptance tile, surface two roll-ups
+                      so the operator sees trouble without clicking in:
+                        - red:   payer rejected (277 category A3, rework)
+                        - amber: Stedi Accepted >= 48h with no payer reply
+                                 yet (payer-side stall — chase or refile).
+                      Both hidden when zero so the tile stays clean on
+                      healthy days. */}
                   {k === "awaiting" && payerRejectedCount > 0 && (
                     <StatusBadge tone="danger">
                       {payerRejectedCount} payer rejected
+                    </StatusBadge>
+                  )}
+                  {k === "awaiting" && staleStediAcceptedCount > 0 && (
+                    <StatusBadge tone="warning">
+                      {staleStediAcceptedCount} stale 48h+
                     </StatusBadge>
                   )}
                 </div>
