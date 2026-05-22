@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { AppHeader } from "@/components/claims/AppHeader";
 import {
+  BankPaymentMethodBadge,
   ClaimStatusBadge, LineStatusBadge, PrimaryStatusBadge, StatusBadge, Status277Badge,
 } from "@/components/claims/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -884,8 +885,14 @@ const ClaimDetail = () => {
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                     Payment Method
                   </div>
-                  <div className="mt-1 text-sm font-medium">
-                    {claim.bankPaymentMethod || "—"}
+                  {/* Raw BPR method code + an interpretive pill. ACH (and
+                      anything else we don't recognize) shows the code on
+                      its own; CHK/FWT/NON get a colored pill so the
+                      operator instantly sees what action — if any — the
+                      method implies. See BankPaymentMethodBadge. */}
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-sm font-medium">
+                    <span>{claim.bankPaymentMethod || "—"}</span>
+                    <BankPaymentMethodBadge method={claim.bankPaymentMethod} />
                   </div>
                 </div>
               </div>

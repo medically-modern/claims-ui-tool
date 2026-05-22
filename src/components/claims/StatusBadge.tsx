@@ -86,3 +86,31 @@ export function LineStatusBadge({ status }: { status: LineStatus }) {
   };
   return <StatusBadge tone={map[status]}>{status}</StatusBadge>;
 }
+
+/**
+ * Pill that surfaces what the BPR payment method code on the 835 means
+ * for the operator. Renders next to the raw method code in the Bank Info
+ * strip on both ClaimDetail and SecondaryBoard.
+ *   - ACH                → no pill (money already landed by EFT)
+ *   - CHK / FWT          → blue "Enroll in EFT" (paper check or wire — we
+ *                          should chase EFT enrollment with that payer)
+ *   - NON                → red "No Payment Received" (zero-pay remit —
+ *                          typically a full denial / takeback, no money)
+ *   - anything else      → no pill (unknown code, don't editorialize)
+ * Case-insensitive on the input. Returns null when no pill applies so
+ * callers can drop it inline without a wrapper.
+ */
+export function BankPaymentMethodBadge({
+  method,
+}: {
+  method?: string | null;
+}) {
+  const pm = method?.trim().toUpperCase();
+  if (pm === "CHK" || pm === "FWT") {
+    return <StatusBadge tone="info">Enroll in EFT</StatusBadge>;
+  }
+  if (pm === "NON") {
+    return <StatusBadge tone="danger">No Payment Received</StatusBadge>;
+  }
+  return null;
+}

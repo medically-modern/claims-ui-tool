@@ -15,7 +15,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { StatusBadge } from "@/components/claims/StatusBadge";
+import { BankPaymentMethodBadge, StatusBadge } from "@/components/claims/StatusBadge";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
@@ -2135,8 +2135,14 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Payment Method
                 </div>
-                <div className="mt-1 text-sm font-medium">
-                  {c.bankPaymentMethod || "—"}
+                {/* Raw BPR method code + an interpretive pill (see
+                    BankPaymentMethodBadge). CHK/FWT → "Enroll in EFT" so
+                    the operator knows to chase EFT enrollment with the
+                    payer; NON → "No Payment Received" since a NON BPR is
+                    a zero-pay remit (typically a full denial / takeback). */}
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm font-medium">
+                  <span>{c.bankPaymentMethod || "—"}</span>
+                  <BankPaymentMethodBadge method={c.bankPaymentMethod} />
                 </div>
               </div>
             </div>
