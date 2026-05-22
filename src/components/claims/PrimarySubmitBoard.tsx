@@ -22,6 +22,7 @@ import type { ThreadClaim, ThreadClaimType, ThreadItem } from "@/lib/claims/thre
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { ThreadPanel, ThreadContextStrip } from "./ThreadPanel";
+import { StatusBadge } from "./StatusBadge";
 import { setPlaceOfService } from "@/api/setPlaceOfService";
 import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 import {
@@ -163,6 +164,17 @@ export function PrimarySubmitBoard() {
     resubmit:  awaitingSubmit.filter((c) => !!c.parent_claim_id).length,
     awaiting:  awaitingAcceptance.length,
   }), [awaitingSubmit, awaitingAcceptance]);
+
+  // How many of the Awaiting Acceptance rows are actually Payer Rejected
+  // (277 came back with category A3 / "returned as unprocessable" — claim
+  // never reached adjudication). Surfaced as a small red pill on the
+  // Awaiting Acceptance tile so the operator sees rejects at a glance
+  // and doesn't have to click in to find them. Same source data the row
+  // badges use; just rolled up.
+  const payerRejectedCount = useMemo(
+    () => awaitingAcceptance.filter((c) => c.status277 === "Payer Rejected").length,
+    [awaitingAcceptance],
+  );
 
   const visible = useMemo(() => {
     const pool =
@@ -307,7 +319,19 @@ export function PrimarySubmitBoard() {
                   {QUEUE_META[k].icon}
                   {QUEUE_META[k].label}
                 </div>
-                <div className="mt-1 text-2xl font-semibold">{counts[k]}</div>
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="text-2xl font-semibold">{counts[k]}</span>
+                  {/* On the Awaiting Acceptance tile, surface the count of
+                      rows that came back Payer Rejected (277 category A3)
+                      so the operator sees the rework backlog without
+                      clicking in. Hidden when zero so the tile stays
+                      clean on healthy days. */}
+                  {k === "awaiting" && payerRejectedCount > 0 && (
+                    <StatusBadge tone="danger">
+                      {payerRejectedCount} payer rejected
+                    </StatusBadge>
+                  )}
+                </div>
               </button>
             );
             return QUEUE_META[k].description ? (
