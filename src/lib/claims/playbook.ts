@@ -1,44 +1,83 @@
-import { UNIQUE_COMBOS } from "@/lib/claims/uniqueCombos";
+import { UNIQUE_COMBOS, type UniqueCombo } from "@/lib/claims/uniqueCombos";
 
-// Build CARC -> full remark text, RARC -> full remark text from the playbook
-const carcRemarkMap = new Map<string, string>();
-const rarcRemarkMap = new Map<string, string>();
+/**
+ * A "playbook row" is the live equivalent of UniqueCombo — a row off
+ * the Denial Playbook Sheet's "Unique Combos" tab. Both the bundled
+ * UNIQUE_COMBOS snapshot and the live PlaybookRow shape (from
+ * /admin/playbook/combos in src/api/playbook.ts) satisfy this — they
+ * use identical column-name keys. Functions in this module accept
+ * either, so callers can pass the React-Query-cached live rows from
+ * usePlaybookCombos when available and fall back to the static
+ * snapshot when not (dev environments without API config).
+ */
+export type PlaybookRowLike = Pick<
+  UniqueCombo,
+  | "CARC Code(s)"
+  | "RARC Code(s)"
+  | "CARC Remarks"
+  | "RARC Remarks"
+  | "Denial Analysis"
+  | "Verified: Denial Analysis"
+>;
 
-for (const row of UNIQUE_COMBOS) {
-  const carcCodes = String(row["CARC Code(s)"] ?? "")
-    .split(/[,;]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const rarcCodes = String(row["RARC Code(s)"] ?? "")
-    .split(/[,;]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const carcRemarks = String(row["CARC Remarks"] ?? "")
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const rarcRemarks = String(row["RARC Remarks"] ?? "")
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean);
+// Build CARC -> full remark text, RARC -> full remark text. Memoized
+// per-source: the bundled snapshot is loaded once at module init; live
+// rows passed in get a cached map keyed by reference identity so
+// repeated calls on the same array don't rebuild.
+function buildRemarkMaps(rows: readonly PlaybookRowLike[]) {
+  const carcMap = new Map<string, string>();
+  const rarcMap = new Map<string, string>();
+  for (const row of rows) {
+    const carcCodes = String(row["CARC Code(s)"] ?? "")
+      .split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+    const rarcCodes = String(row["RARC Code(s)"] ?? "")
+      .split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+    const carcRemarks = String(row["CARC Remarks"] ?? "")
+      .split(";").map((s) => s.trim()).filter(Boolean);
+    const rarcRemarks = String(row["RARC Remarks"] ?? "")
+      .split(";").map((s) => s.trim()).filter(Boolean);
 
-  carcCodes.forEach((code) => {
-    const match = carcRemarks.find((r) => new RegExp(`(^|[^0-9])${code}\\b`).test(r));
-    if (match && !carcRemarkMap.has(code)) carcRemarkMap.set(code, match);
-  });
-  rarcCodes.forEach((code) => {
-    const match = rarcRemarks.find((r) => new RegExp(`^${code}\\b`).test(r));
-    if (match && !rarcRemarkMap.has(code)) rarcRemarkMap.set(code, match);
-  });
+    carcCodes.forEach((code) => {
+      const match = carcRemarks.find((r) => new RegExp(`(^|[^0-9])${code}\\b`).test(r));
+      if (match && !carcMap.has(code)) carcMap.set(code, match);
+    });
+    rarcCodes.forEach((code) => {
+      const match = rarcRemarks.find((r) => new RegExp(`^${code}\\b`).test(r));
+      if (match && !rarcMap.has(code)) rarcMap.set(code, match);
+    });
+  }
+  return { carcMap, rarcMap };
 }
 
-export function carcPlaybookText(code: string | number): string | null {
+const _staticRemarkMaps = buildRemarkMaps(UNIQUE_COMBOS);
+const _liveRemarkCache = new WeakMap<
+  readonly PlaybookRowLike[],
+  { carcMap: Map<string, string>; rarcMap: Map<string, string> }
+>();
+
+function remarkMapsFor(rows?: readonly PlaybookRowLike[]) {
+  if (!rows) return _staticRemarkMaps;
+  let entry = _liveRemarkCache.get(rows);
+  if (!entry) {
+    entry = buildRemarkMaps(rows);
+    _liveRemarkCache.set(rows, entry);
+  }
+  return entry;
+}
+
+export function carcPlaybookText(
+  code: string | number,
+  rows?: readonly PlaybookRowLike[],
+): string | null {
   const key = String(code).replace(/^CO-?/i, "").replace(/^PR-?/i, "").trim();
-  return carcRemarkMap.get(key) ?? null;
+  return remarkMapsFor(rows).carcMap.get(key) ?? null;
 }
 
-export function rarcPlaybookText(code: string): string | null {
-  return rarcRemarkMap.get(code.trim()) ?? null;
+export function rarcPlaybookText(
+  code: string,
+  rows?: readonly PlaybookRowLike[],
+): string | null {
+  return remarkMapsFor(rows).rarcMap.get(code.trim()) ?? null;
 }
 
 /**
@@ -90,6 +129,7 @@ export interface DenialAnalysisLookup {
 export function lookupDenialAnalysis(
   carc: (string | number)[],
   rarc: string[],
+  rows?: readonly PlaybookRowLike[],
 ): DenialAnalysisLookup {
   if (carc.length === 0 && rarc.length === 0) {
     return { reason: null, state: "new" };
@@ -98,10 +138,15 @@ export function lookupDenialAnalysis(
   const carcKey = [...carc].map((c) => String(c).trim()).sort().join(",");
   const rarcKey = [...rarc].map((c) => c.trim()).sort().join(",");
 
+  // Live rows from usePlaybookCombos when available; bundled snapshot
+  // as a fallback for dev environments without API config and the
+  // very first paint before the React Query fetch resolves.
+  const source: readonly PlaybookRowLike[] = rows ?? UNIQUE_COMBOS;
+
   let bestExact: { reason: string; verified: boolean } | null = null;
   let bestPartial: { reason: string; verified: boolean } | null = null;
 
-  for (const row of UNIQUE_COMBOS) {
+  for (const row of source) {
     const rowCarc = String(row["CARC Code(s)"] ?? "")
       .split(/[,;]/).map((s) => s.trim()).filter(Boolean).sort().join(",");
     const rowRarc = String(row["RARC Code(s)"] ?? "")

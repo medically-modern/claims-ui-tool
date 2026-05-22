@@ -19,6 +19,7 @@ import {
   ChevronLeft, ChevronRight as ChevronRightIcon, RefreshCw,
 } from "lucide-react";
 import { UNIQUE_COMBOS, type UniqueCombo } from "@/lib/claims/uniqueCombos";
+import { usePlaybookCombos } from "@/hooks/usePlaybookCombos";
 import { cn } from "@/lib/utils";
 
 type ColKey = keyof UniqueCombo;
@@ -87,14 +88,27 @@ export function DenialAnalysisTable() {
   const [analysisByRow, setAnalysisByRow] = useState<Record<number, string>>({});
   const [verifiedByRow, setVerifiedByRow] = useState<Record<number, string>>({});
 
+  // Live playbook from /admin/playbook/combos. Falls back to the
+  // bundled UNIQUE_COMBOS snapshot when the API isn't configured or
+  // before the first fetch lands. Every UNIQUE_COMBOS reference in
+  // this component now reads from combosSource so verifying a combo
+  // in ClaimDetail flows through to this table on the next query
+  // revalidation (the verify-save call in ClaimDetail invalidates
+  // PLAYBOOK_COMBOS_QUERY_KEY explicitly so it's immediate).
+  const { data: livePlaybook } = usePlaybookCombos();
+  const combosSource: UniqueCombo[] = useMemo(
+    () => ((livePlaybook?.rows as UniqueCombo[] | undefined) ?? UNIQUE_COMBOS),
+    [livePlaybook],
+  );
+
   const baseOptions = useMemo(() => {
     const set = new Set<string>();
-    UNIQUE_COMBOS.forEach((r) => {
+    combosSource.forEach((r) => {
       const v = String(r["Denial Analysis"] ?? "").trim();
       if (v) set.add(v);
     });
     return Array.from(set).sort();
-  }, []);
+  }, [combosSource]);
   const [customOptions, setCustomOptions] = useState<string[]>([]);
   const allOptions = useMemo(
     () => Array.from(new Set([...baseOptions, ...customOptions])).sort(),
@@ -110,14 +124,14 @@ export function DenialAnalysisTable() {
   );
 
   const stats = useMemo(() => {
-    const total = UNIQUE_COMBOS.length;
-    const verified = UNIQUE_COMBOS.filter(
+    const total = combosSource.length;
+    const verified = combosSource.filter(
       (r, i) =>
         (verifiedByRow[i] ?? String(r["Verified: Denial Analysis"] ?? "")).toLowerCase() === "yes",
     ).length;
-    const totalCount = UNIQUE_COMBOS.reduce((s, r) => s + (Number(r.Count) || 0), 0);
+    const totalCount = combosSource.reduce((s, r) => s + (Number(r.Count) || 0), 0);
     return { total, verified, unverified: total - verified, totalCount };
-  }, [verifiedByRow]);
+  }, [combosSource, verifiedByRow]);
 
   const rowEffective = (i: number, key: ColKey, raw: UniqueCombo[ColKey]) => {
     if (key === "Denial Analysis") return analysisByRow[i] ?? String(raw ?? "");
@@ -131,21 +145,21 @@ export function DenialAnalysisTable() {
   // Unique values for filter dropdowns
   const carcOptions = useMemo(() => {
     const set = new Set<string>();
-    UNIQUE_COMBOS.forEach((r) => {
+    combosSource.forEach((r) => {
       String(r["CARC Code(s)"] ?? "").split(/[,;]/).map((s) => s.trim()).filter(Boolean).forEach((v) => set.add(v));
     });
     return Array.from(set).sort();
-  }, []);
+  }, [combosSource]);
   const rarcOptions = useMemo(() => {
     const set = new Set<string>();
-    UNIQUE_COMBOS.forEach((r) => {
+    combosSource.forEach((r) => {
       String(r["RARC Code(s)"] ?? "").split(/[,;]/).map((s) => s.trim()).filter(Boolean).forEach((v) => set.add(v));
     });
     return Array.from(set).sort();
-  }, []);
+  }, [combosSource]);
 
   const filteredRows = useMemo(() => {
-    return UNIQUE_COMBOS.map((r, i) => ({ r, i })).filter(({ r, i }) => {
+    return combosSource.map((r, i) => ({ r, i })).filter(({ r, i }) => {
       const ver =
         (verifiedByRow[i] ?? String(r["Verified: Denial Analysis"] ?? "")).toLowerCase() === "yes";
       if (verifiedFilter === "yes" && !ver) return false;
@@ -346,7 +360,7 @@ export function DenialAnalysisTable() {
           )}
 
           <div className="ml-auto text-xs text-muted-foreground">
-            {sortedRows.length} of {UNIQUE_COMBOS.length} rows
+            {sortedRows.length} of {combosSource.length} rows
           </div>
         </CardContent>
       </Card>

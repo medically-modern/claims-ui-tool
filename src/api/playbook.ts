@@ -31,13 +31,45 @@ export interface PlaybookCombo {
   suggested_action: string;
 }
 
+/** Raw row off the "Unique Combos" sheet tab. Keys match the Sheet
+ *  column headers verbatim so this is interchangeable with the legacy
+ *  bundled UNIQUE_COMBOS snapshot — DenialAnalysisTable iterates over
+ *  these without any field-name remapping. */
+export interface PlaybookRow {
+  "CARC Code(s)": string;
+  "RARC Code(s)": string;
+  "CARC Remarks"?: string;
+  "RARC Remarks"?: string;
+  "Denial Analysis"?: string;
+  "Verified: Denial Analysis"?: string;
+  "Action"?: string;
+  "Verified: Action"?: string;
+  "Count"?: number | string;
+  "# Distinct Payers"?: number | string;
+  "# Distinct HCPCs"?: number | string;
+  "Payers (all)"?: string;
+  "HCPCs (all)"?: string;
+  "Example Patient"?: string;
+  "Example Payer"?: string;
+  "Example HCPC"?: string;
+  "Example Check / Trace #"?: string;
+  "Example ERA File"?: string;
+  "Notes (classifier)"?: string;
+}
+
 export interface PlaybookCombosResponse {
   source_sheet_id: string;
   tab: string;
   fetched_at: string;
   verified_count: number;
   unverified_count: number;
+  /** Tidy form — small keys, one entry per combo. Used by the per-line
+   *  picker logic in ClaimDetail. */
   combos: PlaybookCombo[];
+  /** Raw rows in the Sheet's exact column shape. Used by
+   *  DenialAnalysisTable and lookupDenialAnalysis as a drop-in
+   *  replacement for the bundled UNIQUE_COMBOS snapshot. */
+  rows: PlaybookRow[];
 }
 
 export interface VerifyComboRequest {

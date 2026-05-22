@@ -52,6 +52,10 @@ import {
   isPlaybookApiConfigured,
 } from "@/api/playbook";
 import {
+  usePlaybookCombos,
+  PLAYBOOK_COMBOS_QUERY_KEY,
+} from "@/hooks/usePlaybookCombos";
+import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
   AlertDialogTitle,
@@ -219,6 +223,14 @@ const ClaimDetail = () => {
   const [playbookSavingId, setPlaybookSavingId] = useState<string | null>(null);
   const [playbookSyncBusy, setPlaybookSyncBusy] = useState(false);
 
+  // Live playbook fetched from the backend (Sheet read). Cached in
+  // React Query for 5 min and shared with DenialAnalysisTable. Falls
+  // back to the bundled UNIQUE_COMBOS snapshot when the API isn't
+  // configured or the first fetch hasn't resolved yet. Reuses the
+  // queryClient declared above (line ~113) — no new instance.
+  const { data: livePlaybook } = usePlaybookCombos();
+  const playbookRows = livePlaybook?.rows;
+
   function appendActivity(message: string) {
     return [
       ...(claim.activity ?? []),
@@ -339,6 +351,10 @@ const ClaimDetail = () => {
         [line.id]: { reason: result.verified_analysis, verified: true },
       }));
       setPlaybookEditing((m) => ({ ...m, [line.id]: false }));
+      // Bust the live-playbook cache so every other open surface
+      // (DenialAnalysisTable, other ClaimDetail tabs with the same
+      // CARC/RARC) re-fetches and sees the new verified bucket.
+      void queryClient.invalidateQueries({ queryKey: PLAYBOOK_COMBOS_QUERY_KEY });
       toast.success(
         result.was_appended
           ? `New combo verified (row appended to sheet).`
@@ -1217,7 +1233,7 @@ const ClaimDetail = () => {
             </CardHeader>
             <CardContent className="space-y-4">
               {linesWithIssues.map((l) => {
-                const interpreted = lookupDenialAnalysis(l.carc, l.rarc);
+                const interpreted = lookupDenialAnalysis(l.carc, l.rarc, playbookRows);
                 // Optimistic override: once the operator successfully
                 // verifies this line's combo via the picker, we treat
                 // it as Verified locally without waiting for a fetch
@@ -1735,12 +1751,12 @@ function LineRow({
                     <CodeChip
                       key={`c${c}`}
                       code={code}
-                      meaning={carcPlaybookText(c) ?? carcMeaning(c)}
+                      meaning={carcPlaybookText(c, playbookRows) ?? carcMeaning(c)}
                     />
                   );
                 })}
                 {line.rarc.map((r) => (
-                  <CodeChip key={`r${r}`} code={r} meaning={rarcPlaybookText(r)} />
+                  <CodeChip key={`r${r}`} code={r} meaning={rarcPlaybookText(r, playbookRows)} />
                 ))}
               </>
             )}
