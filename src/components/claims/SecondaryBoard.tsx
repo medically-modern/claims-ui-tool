@@ -29,6 +29,11 @@ import {
 import { confirmSecondaryPayor } from "@/api/confirmSecondaryPayor";
 import { setSecondaryText, SECONDARY_PARENT_COL } from "@/api/setSecondaryText";
 import {
+  submitSecondary as apiSubmitSecondary,
+  isSubmitSecondaryConfigured,
+  SubmitSecondaryError,
+} from "@/api/submitSecondary";
+import {
   ArrowUpDown, Search, Send, ChevronDown, ChevronRight,
   ExternalLink, FileText, CheckCircle2, Clock, FileSearch, UserRound, Info,
   Loader2,
@@ -612,28 +617,69 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
 
   async function submitSecondary(c: SecClaim, manual = false) {
     if (!c.mondayItemId) return;
-    // Insurance flow stage 2 — operator either submitted the 837 via
-    // Stedi or manually (paper/fax). Either way the row moves out of
-    // Submit Claim group into Insurance Outstanding so the visual
-    // board reflects "waiting on the secondary payer".
-    updateClaim(c.id, { status: "Secondary Submitted" });
     const name = displaySecondary(c);
-    try {
-      await setSecondaryStatusAndMove(
-        c.mondayItemId,
-        "Submitted",
-        "group_mm332zns",  // Insurance Outstanding
-      );
+
+    // Manual path: operator submitted outside Stedi (paper, fax, portal).
+    // We don't call the backend submit endpoint — just flip Monday status
+    // and move the row so the visual board reflects "tracked manually".
+    if (manual) {
+      updateClaim(c.id, { status: "Secondary Submitted" });
+      try {
+        await setSecondaryStatusAndMove(
+          c.mondayItemId,
+          "Submitted",
+          "group_mm332zns",  // Insurance Outstanding
+        );
+        toast({
+          title: `Secondary marked submitted manually: ${c.patientName}`,
+          description: `Tracked outside Stedi (paper / fax / portal) → ${name}.`,
+        });
+        void refetchSecondary();
+      } catch (e) {
+        toast({
+          title: "Couldn't update Monday",
+          description: (e as Error).message,
+        });
+      }
+      return;
+    }
+
+    // Auto path: actually send the 837 through Stedi. Backend handles
+    // payload build (COB-shaped), Stedi POST, and writeback of Claim ID
+    // + PCN + Claim Sent Date + Status=Submitted. We DON'T pre-flip the
+    // local row because if Stedi 400's we want the row to stay in
+    // Insurance / Submit Claim so the operator can fix and retry.
+    if (!isSubmitSecondaryConfigured()) {
       toast({
-        title: `Secondary ${manual ? "marked submitted manually" : "submitted"}: ${c.patientName}`,
-        description: manual
-          ? `Tracked outside Stedi (paper / fax / portal) → ${name}.`
-          : `837 sent to ${name}.`,
+        title: "Submit Secondary isn't configured",
+        description:
+          "Set VITE_API_BASE_URL and VITE_ADMIN_API_KEY at build time, or " +
+          "use the Mark Submitted Manually option if you submitted outside Stedi.",
+      });
+      return;
+    }
+    try {
+      const result = await apiSubmitSecondary(c.mondayItemId);
+      // Backend already wrote Claim ID/PCN/Sent Date/Status to Monday on
+      // success. Refetch picks those up — no need to mutate locally.
+      toast({
+        title: `Secondary submitted: ${c.patientName}`,
+        description:
+          `837 sent to ${name}` +
+          (result.claim_id ? ` · Claim ID ${result.claim_id}` : "") +
+          (result.inline_277_status ? ` · 277: ${result.inline_277_status}` : ""),
       });
       void refetchSecondary();
     } catch (e) {
+      const status = e instanceof SubmitSecondaryError ? e.status : undefined;
+      // 400s are operator-fixable (balance, missing IDs, etc.) — surface
+      // the backend's exact detail so they can read which field is off.
+      // 5xx is "the system didn't get a chance" — same surfacing.
       toast({
-        title: "Couldn't update Monday",
+        title:
+          status === 400
+            ? `Submit blocked: ${c.patientName}`
+            : `Couldn't submit: ${c.patientName}`,
         description: (e as Error).message,
       });
     }
