@@ -405,44 +405,84 @@ export function DenialAnalysisTable() {
         <h2 className="text-lg font-semibold">Denial Analysis Playbook</h2>
         {/* Playbook-level controls. These live HERE on the workbook
             page (not the per-patient denial workflow) because they
-            operate against the whole playbook, not a single claim:
-              - ERA Drive folder: where the cron archives every raw
-                835 JSON. Spot-check that ERAs are landing.
-              - Denial Playbook sheet: the "Unique Combos" tab is the
-                live source-of-truth.
-              - Sync Playbook: forces the hourly cron to run now
-                (instead of waiting up to 59 more minutes). Fire-and-
-                poll — toast surfaces the final summary when it lands. */}
+            operate against the whole playbook, not a single claim.
+            Each wraps a HoverCard so the operator can hover to see
+            what the control does without having to remember. */}
         <div className="flex flex-wrap items-center gap-3 text-xs">
-          <a
-            href={DRIVE_ERA_FOLDER_URL}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
-          >
-            ERA Drive folder
-            <ExternalLink className="h-3 w-3" />
-          </a>
-          <a
-            href={DENIAL_PLAYBOOK_SHEET_URL}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
-          >
-            Denial Playbook sheet
-            <ExternalLink className="h-3 w-3" />
-          </a>
+          <HoverCard openDelay={150} closeDelay={100}>
+            <HoverCardTrigger asChild>
+              <a
+                href={DRIVE_ERA_FOLDER_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+              >
+                ERA Drive folder
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </HoverCardTrigger>
+            <HoverCardContent align="end" className="w-80 text-sm">
+              <p className="font-semibold">ERA Drive folder</p>
+              <p className="mt-1 text-muted-foreground">
+                Every 835 ERA we receive from Stedi gets archived
+                here as raw JSON. The hourly cron parses these files
+                to extract unique (CARC, RARC) denial combos and
+                append them to the source Google Sheet.
+              </p>
+            </HoverCardContent>
+          </HoverCard>
+
+          <HoverCard openDelay={150} closeDelay={100}>
+            <HoverCardTrigger asChild>
+              <a
+                href={DENIAL_PLAYBOOK_SHEET_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+              >
+                Source Google Sheet
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </HoverCardTrigger>
+            <HoverCardContent align="end" className="w-80 text-sm">
+              <p className="font-semibold">Source Google Sheet</p>
+              <p className="mt-1 text-muted-foreground">
+                The actual <em>"Unique Combos"</em> tab in Google
+                Sheets — same data you see in the table on this
+                page, just shown directly through Sheets. Useful for
+                bulk-editing, leaving comments, or trusting your
+                eyes on a row. Edits round-trip: anything changed
+                here shows up in this UI after the next refresh.
+              </p>
+            </HoverCardContent>
+          </HoverCard>
+
           {isPlaybookApiConfigured() && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-8 text-xs"
-              disabled={playbookSyncBusy}
-              onClick={() => void triggerPlaybookSync()}
-            >
-              {playbookSyncBusy ? "Syncing…" : "Sync Playbook"}
-            </Button>
+            <HoverCard openDelay={150} closeDelay={100}>
+              <HoverCardTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs"
+                  disabled={playbookSyncBusy}
+                  onClick={() => void triggerPlaybookSync()}
+                >
+                  {playbookSyncBusy ? "Syncing…" : "Sync Playbook"}
+                </Button>
+              </HoverCardTrigger>
+              <HoverCardContent align="end" className="w-80 text-sm">
+                <p className="font-semibold">Sync Playbook</p>
+                <p className="mt-1 text-muted-foreground">
+                  Automatically syncs every hour — press it to sync
+                  immediately. Pulls any new 835s from Stedi,
+                  archives the JSONs to the Drive folder, and
+                  appends any unseen (CARC, RARC) combos to the
+                  source sheet. Verified columns on existing rows
+                  are preserved.
+                </p>
+              </HoverCardContent>
+            </HoverCard>
           )}
         </div>
       </div>
