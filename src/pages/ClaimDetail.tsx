@@ -35,14 +35,17 @@ import type {
 } from "@/lib/claims/types";
 import {
   AlertCircle, CalendarIcon, CheckCircle2, ChevronDown,
-  Clock, FileWarning, Ban, AlertTriangle,
+  Clock, FileWarning, Ban, AlertTriangle, ExternalLink, Send,
 } from "lucide-react";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { carcPlaybookText, rarcPlaybookText, lookupDenialAnalysis } from "@/lib/claims/playbook";
-import { Send } from "lucide-react";
+import {
+  DRIVE_ERA_FOLDER_URL,
+  DENIAL_PLAYBOOK_SHEET_URL,
+} from "@/lib/claims/playbookConfig";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
@@ -1046,11 +1049,57 @@ const ClaimDetail = () => {
         {claim.primaryStatus === "Denied (Or Partly)" && linesWithIssues.length > 0 && (
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Denial Analysis</CardTitle>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle className="text-base">Denial Analysis</CardTitle>
+                {/* Quick links to the two source-of-truth surfaces that
+                    drive this section:
+                      - ERA Drive folder: where the hourly cron archives
+                        every raw 835 JSON, so you can spot-check that
+                        a denial's ERA actually landed in our system.
+                      - Denial Playbook Sheet: the "Unique Combos" tab
+                        is the live source-of-truth for CARC/RARC →
+                        bucket mapping. Edits there flow into Monday
+                        on the next ERA after sync_playbook.py runs. */}
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <a
+                    href={DRIVE_ERA_FOLDER_URL}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+                  >
+                    ERA Drive folder
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                  <a
+                    href={DENIAL_PLAYBOOK_SHEET_URL}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+                  >
+                    Denial Playbook sheet
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               {linesWithIssues.map((l) => {
                 const interpreted = lookupDenialAnalysis(l.carc, l.rarc);
+                // Map the three playbook states to a StatusBadge tone
+                // + label. The pill lives next to "Denial Reason
+                // (Playbook)" so the operator instantly sees whether
+                // the auto-fill they're looking at is trustworthy:
+                //   verified   = green, no action needed
+                //   unverified = amber, bucket exists but needs signoff
+                //   new        = red, never-seen combo — add it to the
+                //                Playbook sheet via the Phase-2 picker
+                //                (or directly in the Sheet for now)
+                const playbookPill =
+                  interpreted.state === "verified"
+                    ? { tone: "success" as const, label: "Verified" }
+                    : interpreted.state === "unverified"
+                      ? { tone: "warning" as const, label: "Unverified" }
+                      : { tone: "danger" as const, label: "New denial" };
                 return (
                 <div key={l.id} className="grid grid-cols-1 gap-3 rounded-md border p-3 md:grid-cols-[1fr_1fr_minmax(220px,1fr)]">
                   <div>
@@ -1066,9 +1115,12 @@ const ClaimDetail = () => {
                     </div>
                   </div>
                   <div>
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Denial Reason (Playbook)</div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Denial Reason (Playbook)</div>
+                      <StatusBadge tone={playbookPill.tone}>{playbookPill.label}</StatusBadge>
+                    </div>
                     <div className="mt-1 text-sm font-medium">
-                      {interpreted ?? <span className="text-muted-foreground italic">Not in playbook</span>}
+                      {interpreted.reason ?? <span className="text-muted-foreground italic">Not in playbook</span>}
                     </div>
                   </div>
                 </div>
