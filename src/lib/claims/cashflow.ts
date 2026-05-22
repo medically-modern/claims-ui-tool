@@ -122,6 +122,19 @@ const PRE_OR_TERMINAL: ReadonlySet<string> = new Set([
 export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
   const todayMs = today.getTime();
 
+  // Replaced parents drop out of cash flow entirely. A claim with
+  // hasChildren=true has been superseded by a Corrected/New child
+  // (full-coverage resubmission, moved to "Non-latest of threads"
+  // group on Monday by the backend — see send-to-denial /
+  // spawn-resubmission). The child is now the active claim and
+  // carries the inflow expectation; the parent's primaryStatus is
+  // typically still "Denied (Or Partly)" which would otherwise route
+  // it into highRiskDenials and double-count alongside its
+  // replacement. Mirror the four bucket filters in Claims.tsx
+  // (inEraReview / inLate / inDenials / inOutstanding) which all
+  // already exclude hasChildren.
+  if (claim.hasChildren) return "out";
+
   // Denials short-circuit BEFORE the paid-date check. Most denials
   // carry a primaryPaidDate (the ERA arrived and stamped $0 or a
   // partial); if we let the paid-date branch run first, those rows
@@ -373,15 +386,22 @@ function isLegacyFallbackLine(line: {
 
 /**
  * Corrected estPay for one line. Returns { amount, corrected } —
- * `corrected` is true when we substituted a value because the line
- * looked like a legacy fallback OR because it's a pump (E0784) and
- * we always project pumps off the fixed conservative table.
+ * `corrected` is true when the line had a legacy flat-rate fallback
+ * charge (no contracted rate available at submission, backend stamped
+ * a placeholder $1000/$500-per-unit). We swap those in for the
+ * conservative-table per-unit estimate.
  *
- * Per Brandon: cash-flow projections use ONLY the fixed
- * CONSERVATIVE_PER_UNIT_ESTIMATE values, never historical averaging.
- * A single outlier paid amount used to drift the per-HCPCS average
- * up or down; flat conservatives are predictable and easier to
- * eyeball. Bump the constants when contract data changes.
+ * Per Brandon: when a real contracted/payer-schedule rate WAS used,
+ * trust line.estPay as-is — including for pumps (E0784). Earlier
+ * versions force-overrode every E0784 line through the conservative
+ * table, but that masked legitimate per-payer pricing. Override only
+ * for lines that show the telltale flat-fallback charge signature.
+ *
+ * Cash-flow projections use the fixed CONSERVATIVE_PER_UNIT_ESTIMATE
+ * table for overrides (no historical averaging). A single outlier
+ * paid amount used to drift the per-HCPCS average up or down; flat
+ * conservatives are predictable and easier to eyeball. Bump the
+ * constants when contract data changes.
  */
 function correctedLineEstPay(
   line: {
@@ -394,13 +414,24 @@ function correctedLineEstPay(
 ): { amount: number; corrected: boolean } {
   const code = (line.hcpcs || "").trim();
 
-  // Pumps always go through the conservative override regardless of
-  // the raw charge, since PAYER_RATE_SCHEDULE writes various billable
-  // amounts into the line (Medicare A&B \$600/month, commercials \$4-
-  // 6k purchase) that don't reflect realistic expected payments.
-  const isPump = code === "E0784";
+  // Medicare A&B pump rental override. PAYER_RATE_SCHEDULE bills
+  // E0784 at $600/month for Medicare A&B, but Medicare actually pays
+  // roughly $300/month. Trusting the line's estPay would inflate the
+  // projection 2× for every Medicare pump claim. When the charge
+  // signature matches the $600 rental billable, route through the
+  // conservative table (E0784 medicare = $300) instead. The exact-
+  // $600 match keeps real contracted rates for other payers passing
+  // through untouched.
+  const isMedicarePumpRental =
+    code === "E0784" &&
+    /^Medicare A&?B$/i.test((payor || "").trim()) &&
+    (line.charge ?? 0) === 600;
 
-  if (!isLegacyFallbackLine(line) && !isPump) {
+  // Otherwise only override when the line carries the legacy flat-
+  // rate fallback charge (E0784/A4230 etc. = $1000, A4239 = $500 per
+  // unit). Real contracted rates pass through untouched so the
+  // projection reflects the backend's actual estPay.
+  if (!isLegacyFallbackLine(line) && !isMedicarePumpRental) {
     return { amount: line.estPay ?? 0, corrected: false };
   }
 

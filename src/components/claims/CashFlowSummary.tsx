@@ -113,6 +113,18 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
                 emphasis: true,
                 description: "Open claims with an insulin pump (HCPCS E0784).",
               },
+              {
+                // Surface Medicare's 13-month rental schedule alongside
+                // the commercial pump row so the operator sees both pump
+                // sources rolled up under one heading. Same data as the
+                // dedicated Future Medicare Pumps tile — duplicated here
+                // intentionally because Future Pumps dollars are folded
+                // into Total Open (per task #177), and operators want a
+                // pump-level breakdown of that total.
+                label: "Future Medicare pumps",
+                stat: stats.futurePump,
+                description: "Medicare pump rentals scheduled for future months (Future Claim status, 13-month rental).",
+              },
             ]}
             onToggle={(label, stat, desc) => toggleBucket("Total open", label, stat, desc)}
           />
