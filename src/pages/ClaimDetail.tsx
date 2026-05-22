@@ -35,7 +35,7 @@ import type {
 } from "@/lib/claims/types";
 import {
   AlertCircle, CalendarIcon, CheckCircle2, ChevronDown,
-  Clock, FileWarning, Ban, AlertTriangle, ExternalLink, Send,
+  Clock, FileWarning, Ban, AlertTriangle, Send,
 } from "lucide-react";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -46,14 +46,7 @@ import {
   type PlaybookRowLike,
 } from "@/lib/claims/playbook";
 import {
-  DRIVE_ERA_FOLDER_URL,
-  DENIAL_PLAYBOOK_SHEET_URL,
-} from "@/lib/claims/playbookConfig";
-import {
   verifyPlaybookCombo,
-  startRefreshPlaybook,
-  fetchRefreshPlaybookStatus,
-  isRefreshSummary,
   isPlaybookApiConfigured,
 } from "@/api/playbook";
 import {
@@ -236,7 +229,6 @@ const ClaimDetail = () => {
     Record<string, { reason: string; verified: true }>
   >({});
   const [playbookSavingId, setPlaybookSavingId] = useState<string | null>(null);
-  const [playbookSyncBusy, setPlaybookSyncBusy] = useState(false);
 
   function appendActivity(message: string) {
     return [
@@ -377,109 +369,6 @@ const ClaimDetail = () => {
     }
   }
 
-  /**
-   * Trigger the backend's refresh-playbook cycle and watch for it to
-   * complete. Fire-and-poll because:
-   *   - First-run backfills walk every historical Stedi ERA and can
-   *     take 10+ minutes. A blocking ?wait=true HTTP call would time
-   *     out long before that.
-   *   - Subsequent incremental runs are seconds, but the same poll
-   *     loop works either way.
-   *
-   * Flow:
-   *   1. POST /admin/refresh-playbook (returns {status: "queued"}).
-   *   2. Show a "started" toast so the operator knows it's running.
-   *   3. Capture _LAST_REFRESH_SUMMARY.started_at at this moment as
-   *      the "wait for a run newer than this" baseline.
-   *   4. Poll GET /admin/refresh-playbook-status every 5s. When the
-   *      summary's started_at is past the baseline AND ended_at is
-   *      set, the run completed — render the success/error toast and
-   *      invalidate the live combos cache.
-   *   5. Give up after 15 min (long enough for a first-run backfill)
-   *      with a "still running, check Railway logs" toast.
-   */
-  async function triggerPlaybookSync() {
-    if (!isPlaybookApiConfigured()) {
-      toast.error(
-        "Playbook API not configured (missing VITE_API_BASE_URL or VITE_ADMIN_API_KEY).",
-      );
-      return;
-    }
-
-    // Baseline: when did the most recent already-completed run start?
-    // We poll until a run with started_at > this lands.
-    const POLL_INTERVAL_MS = 5_000;
-    const MAX_POLL_MS = 15 * 60 * 1000;
-    let baseline: string | null = null;
-    try {
-      const pre = await fetchRefreshPlaybookStatus();
-      if (isRefreshSummary(pre)) baseline = pre.started_at;
-    } catch {
-      // ignore — if we can't read status now, kick off anyway.
-    }
-
-    setPlaybookSyncBusy(true);
-    try {
-      await startRefreshPlaybook();
-      toast.message("Playbook sync started.", {
-        description:
-          "Pulling new ERAs from Stedi, archiving to Drive, " +
-          "appending new combos to the sheet. Watching for completion…",
-      });
-    } catch (e) {
-      setPlaybookSyncBusy(false);
-      toast.error("Couldn't start playbook sync.", {
-        description: (e as Error).message,
-      });
-      return;
-    }
-
-    const startedAt = Date.now();
-    const tick = async () => {
-      try {
-        const status = await fetchRefreshPlaybookStatus();
-        if (
-          isRefreshSummary(status) &&
-          status.ended_at &&
-          (!baseline || status.started_at > baseline)
-        ) {
-          // New completed run lands here.
-          if (status.error) {
-            toast.error("Playbook sync finished with an error.", {
-              description: status.error,
-            });
-          } else {
-            toast.success("Playbook synced.", {
-              description:
-                `${status.transactions_processed} new ERA(s), ` +
-                `${status.combos_new} new combo(s), ` +
-                `${status.drive_uploads} Drive upload(s).`,
-            });
-          }
-          // Bust the live-combos cache so the table + pickers reflect
-          // any newly-appended rows from this run.
-          void queryClient.invalidateQueries({
-            queryKey: PLAYBOOK_COMBOS_QUERY_KEY,
-          });
-          setPlaybookSyncBusy(false);
-          return;
-        }
-      } catch {
-        // Transient status-endpoint hiccup; keep polling.
-      }
-      if (Date.now() - startedAt >= MAX_POLL_MS) {
-        toast.message("Playbook sync still running.", {
-          description:
-            "Hit the 15-minute UI watch limit. The job continues " +
-            "server-side — check Railway logs for [REFRESH] entries.",
-        });
-        setPlaybookSyncBusy(false);
-        return;
-      }
-      window.setTimeout(() => void tick(), POLL_INTERVAL_MS);
-    };
-    window.setTimeout(() => void tick(), POLL_INTERVAL_MS);
-  }
 
   /**
    * Auto-persist the Denial Action to Monday whenever the operator
@@ -1263,52 +1152,14 @@ const ClaimDetail = () => {
           </CardContent>
         </Card>
 
-        {/* Denial analysis section — work denials only */}
+        {/* Denial analysis section — work denials only. Playbook-level
+            controls (ERA Drive folder, Sheet, Sync Playbook) live on
+            the Denial Analysis Playbook workbook page; this card is
+            patient-specific and only surfaces the per-line picker. */}
         {claim.primaryStatus === "Denied (Or Partly)" && linesWithIssues.length > 0 && (
           <Card>
             <CardHeader className="pb-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <CardTitle className="text-base">Denial Analysis</CardTitle>
-                {/* Quick links to the two source-of-truth surfaces +
-                    a Sync button that triggers /admin/refresh-playbook
-                    so the operator can force the hourly cycle to run
-                    now (pulls new ERAs from Stedi, archives JSONs to
-                    Drive, appends unseen CARC/RARC combos to the
-                    Sheet). Hidden if the Playbook API isn't configured
-                    so dev environments don't show a button that 500s. */}
-                <div className="flex flex-wrap items-center gap-3 text-xs">
-                  <a
-                    href={DRIVE_ERA_FOLDER_URL}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
-                  >
-                    ERA Drive folder
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                  <a
-                    href={DENIAL_PLAYBOOK_SHEET_URL}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
-                  >
-                    Denial Playbook sheet
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                  {isPlaybookApiConfigured() && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs"
-                      disabled={playbookSyncBusy}
-                      onClick={() => void triggerPlaybookSync()}
-                    >
-                      {playbookSyncBusy ? "Syncing…" : "Sync Playbook"}
-                    </Button>
-                  )}
-                </div>
-              </div>
+              <CardTitle className="text-base">Denial Analysis</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {linesWithIssues.map((l) => {

@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/hover-card";
 import {
   Search, Plus, ChevronDown, ChevronRight, ArrowUp, ArrowDown, ArrowUpDown,
-  ChevronLeft, ChevronRight as ChevronRightIcon, RefreshCw,
+  ChevronLeft, ChevronRight as ChevronRightIcon, ExternalLink,
 } from "lucide-react";
 import { UNIQUE_COMBOS, type UniqueCombo } from "@/lib/claims/uniqueCombos";
 import {
@@ -25,8 +25,15 @@ import {
 } from "@/hooks/usePlaybookCombos";
 import {
   verifyPlaybookCombo,
+  startRefreshPlaybook,
+  fetchRefreshPlaybookStatus,
+  isRefreshSummary,
   isPlaybookApiConfigured,
 } from "@/api/playbook";
+import {
+  DRIVE_ERA_FOLDER_URL,
+  DENIAL_PLAYBOOK_SHEET_URL,
+} from "@/lib/claims/playbookConfig";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -102,7 +109,95 @@ export function DenialAnalysisTable() {
   const [analysisByRow, setAnalysisByRow] = useState<Record<number, string>>({});
   const [verifiedByRow, setVerifiedByRow] = useState<Record<number, string>>({});
   const [savingRow, setSavingRow] = useState<number | null>(null);
+  const [playbookSyncBusy, setPlaybookSyncBusy] = useState(false);
   const queryClient = useQueryClient();
+
+  /**
+   * Sync Playbook — fires the backend's refresh-playbook cycle and
+   * polls for completion. Same fire-and-poll flow that lived on
+   * ClaimDetail; lifted here because the Denial Analysis Playbook
+   * page is the right home for it (workbook-level operation, not
+   * patient-specific). First-run backfills can take 10+ minutes,
+   * so we poll /admin/refresh-playbook-status rather than blocking
+   * on ?wait=true.
+   */
+  async function triggerPlaybookSync() {
+    if (!isPlaybookApiConfigured()) {
+      toast.error(
+        "Playbook API not configured (missing VITE_API_BASE_URL or VITE_ADMIN_API_KEY).",
+      );
+      return;
+    }
+
+    const POLL_INTERVAL_MS = 5_000;
+    const MAX_POLL_MS = 15 * 60 * 1000;
+    let baseline: string | null = null;
+    try {
+      const pre = await fetchRefreshPlaybookStatus();
+      if (isRefreshSummary(pre)) baseline = pre.started_at;
+    } catch {
+      // ignore — kick off anyway
+    }
+
+    setPlaybookSyncBusy(true);
+    try {
+      await startRefreshPlaybook();
+      toast.message("Playbook sync started.", {
+        description:
+          "Pulling new ERAs from Stedi, archiving to Drive, " +
+          "appending new combos to the sheet. Watching for completion…",
+      });
+    } catch (e) {
+      setPlaybookSyncBusy(false);
+      toast.error("Couldn't start playbook sync.", {
+        description: (e as Error).message,
+      });
+      return;
+    }
+
+    const startedAt = Date.now();
+    const tick = async () => {
+      try {
+        const status = await fetchRefreshPlaybookStatus();
+        if (
+          isRefreshSummary(status) &&
+          status.ended_at &&
+          (!baseline || status.started_at > baseline)
+        ) {
+          if (status.error) {
+            toast.error("Playbook sync finished with an error.", {
+              description: status.error,
+            });
+          } else {
+            toast.success("Playbook synced.", {
+              description:
+                `${status.transactions_processed} new ERA(s), ` +
+                `${status.combos_new} new combo(s), ` +
+                `${status.drive_uploads} Drive upload(s).`,
+            });
+          }
+          void queryClient.invalidateQueries({
+            queryKey: PLAYBOOK_COMBOS_QUERY_KEY,
+          });
+          setPlaybookSyncBusy(false);
+          return;
+        }
+      } catch {
+        // transient hiccup; keep polling
+      }
+      if (Date.now() - startedAt >= MAX_POLL_MS) {
+        toast.message("Playbook sync still running.", {
+          description:
+            "Hit the 15-minute UI watch limit. The job continues " +
+            "server-side — check Railway logs for [REFRESH] entries.",
+        });
+        setPlaybookSyncBusy(false);
+        return;
+      }
+      window.setTimeout(() => void tick(), POLL_INTERVAL_MS);
+    };
+    window.setTimeout(() => void tick(), POLL_INTERVAL_MS);
+  }
 
   /**
    * Persist a row's Denial Analysis + Verified state to the Sheet.
@@ -306,40 +401,50 @@ export function DenialAnalysisTable() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">Denial Analysis Playbook</h2>
-        <HoverCard openDelay={150} closeDelay={100}>
-          <HoverCardTrigger asChild>
+        {/* Playbook-level controls. These live HERE on the workbook
+            page (not the per-patient denial workflow) because they
+            operate against the whole playbook, not a single claim:
+              - ERA Drive folder: where the cron archives every raw
+                835 JSON. Spot-check that ERAs are landing.
+              - Denial Playbook sheet: the "Unique Combos" tab is the
+                live source-of-truth.
+              - Sync Playbook: forces the hourly cron to run now
+                (instead of waiting up to 59 more minutes). Fire-and-
+                poll — toast surfaces the final summary when it lands. */}
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <a
+            href={DRIVE_ERA_FOLDER_URL}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+          >
+            ERA Drive folder
+            <ExternalLink className="h-3 w-3" />
+          </a>
+          <a
+            href={DENIAL_PLAYBOOK_SHEET_URL}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+          >
+            Denial Playbook sheet
+            <ExternalLink className="h-3 w-3" />
+          </a>
+          {isPlaybookApiConfigured() && (
             <Button
-              variant="outline"
+              type="button"
               size="sm"
-              className="gap-1"
-              onClick={() => {
-                // TODO: hook up to backend
-                console.log("Refresh Unique Denial Codes clicked");
-              }}
+              variant="outline"
+              className="h-8 text-xs"
+              disabled={playbookSyncBusy}
+              onClick={() => void triggerPlaybookSync()}
             >
-              <RefreshCw className="h-4 w-4" />
-              Refresh Unique Denial Codes
+              {playbookSyncBusy ? "Syncing…" : "Sync Playbook"}
             </Button>
-          </HoverCardTrigger>
-          <HoverCardContent align="end" className="w-96 text-sm">
-            <p className="mb-2 font-semibold">Sync Latest ERAs</p>
-            <p className="mb-2 text-muted-foreground">
-              One double-click per refresh, when you want it. Run whenever you sit down to verify
-              combos — daily or weekly. It does the entire loop:
-            </p>
-            <ul className="list-disc space-y-1 pl-4 text-muted-foreground">
-              <li>Pull only ERAs newer than <code>latest_processed_at</code> from Stedi → Drive</li>
-              <li>Run <code>era_extract</code> on the up-to-date Drive folder → merge into the Sheet</li>
-              <li>Your existing Verified columns are preserved across runs</li>
-            </ul>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Note: this button will eventually replace the{" "}
-              <code>Sync Latest ERAs.command</code> in the <code>ERAs_new</code> folder.
-            </p>
-          </HoverCardContent>
-        </HoverCard>
+          )}
+        </div>
       </div>
 
       <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
