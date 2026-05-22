@@ -27,6 +27,7 @@ import {
   MarkSecondaryPaidError,
 } from "@/api/markSecondaryPaid";
 import { confirmSecondaryPayor } from "@/api/confirmSecondaryPayor";
+import { setSecondaryText, SECONDARY_PARENT_COL } from "@/api/setSecondaryText";
 import {
   ArrowUpDown, Search, Send, ChevronDown, ChevronRight,
   ExternalLink, FileText, CheckCircle2, Clock, FileSearch, UserRound, Info,
@@ -110,6 +111,13 @@ export interface SecClaim {
   secondaryPayerOther?: string | null; // free-text payor name when secondaryPayer === "Other"
   primaryMemberId: string;
   secondaryMemberId: string;
+  /** PR Payor ID — Stedi trading partner ID we send the secondary 837
+   *  to (e.g. "ZTXQE" for Emblem Health). Read from Monday column
+   *  text_mm1gcz3y. Editable inline on the Insurance row so the
+   *  operator can correct it before clicking Submit Secondary. Empty
+   *  string means not set; submission backend will refuse with a
+   *  clear error pointing at this field. */
+  payorId?: string;
   dos: string;
   diagnosis: string;
   type: "Original" | "Corrected";
@@ -1541,7 +1549,7 @@ function SubmitSecondaryBody({
     <div className="space-y-5">
       {/* Header form */}
       <div className="space-y-3">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-[1.2fr_0.9fr_0.9fr_0.9fr_0.9fr_0.7fr_0.7fr_auto]">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-[1.1fr_0.85fr_0.85fr_0.85fr_0.6fr_0.85fr_0.65fr_0.6fr_auto]">
           <Field label="Name"><div className="text-sm font-semibold">{c.patientName}</div></Field>
           <Field label="Primary Payor">
             <div className="rounded bg-muted px-2 py-1 text-xs">{c.primaryPayor}</div>
@@ -1559,6 +1567,28 @@ function SubmitSecondaryBody({
                 <SelectItem value={OTHER_PAYER}>Other…</SelectItem>
               </SelectContent>
             </Select>
+          </Field>
+          {/* PR Payor ID — Stedi trading partner ID we send the secondary
+              837 to. Operator needs to set this before Submit Secondary
+              works (backend's build_secondary_payload refuses an empty
+              value). Saves directly to Monday on blur — no debounce because
+              this is a short opaque code; risk of overlap is low. */}
+          <Field label="PR Payor ID">
+            <Input
+              value={c.payorId ?? ""}
+              placeholder="ZTXQE"
+              onChange={(e) => onUpdate({ payorId: e.target.value })}
+              onBlur={(e) => {
+                if (!c.mondayItemId) return;
+                const next = (e.target.value || "").trim();
+                void setSecondaryText(
+                  c.mondayItemId,
+                  SECONDARY_PARENT_COL.payor_id,
+                  next,
+                );
+              }}
+              className="h-8 text-xs"
+            />
           </Field>
           <Field label="Member ID (Sec.)">
             <Input value={c.secondaryMemberId} onChange={(e) => onUpdate({ secondaryMemberId: e.target.value })} className="h-8 text-xs" />

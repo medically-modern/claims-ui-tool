@@ -46,6 +46,10 @@ const COL = {
   // Primary snapshot (copied from primary item during Mark Paid spawn)
   PRIMARY_PAID_AMOUNT: "numeric_mm3as81b",
   PRIMARY_PR_AMOUNT: "numeric_mm3ak2za",
+  // PR Payor ID — Stedi trading partner ID we'll send the secondary
+  // 837 to (e.g. "ZTXQE" for Emblem). Editable inline on the Insurance
+  // row so the operator can fix it before clicking Submit Secondary.
+  PAYOR_ID: "text_mm1gcz3y",
   PRIMARY_PAID_DATE: "date_mm3a9bdm",
   FORWARDED_FROM_PRIMARY_DATE: "date_mm3a8h3a",
   PATIENT_BILLED_DATE: "date_mm3avzpm",
@@ -391,7 +395,19 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
   const remaining = num(item, COL.PRIMARY_PR_AMOUNT) ||
     lines.reduce((s, l) => s + l.remaining, 0);
 
-  const claimLevelDeductible = lines.reduce((s, l) => s + (l.deductible ?? 0), 0);
+  // claimLevelDeductible is for the case where the primary applied the
+  // patient's annual deductible at the CLAIM level rather than per service
+  // line — there's no per-line column to attribute it to. We don't have
+  // a Monday column for that today; all our deductibles come in attached
+  // to per-line Parsed Deductible. Earlier this was set to the SUM of
+  // line-level deductibles, then SecondaryBoard added it ON TOP of the
+  // same per-line values — net effect was every claim's "Total Expected
+  // From Secondary" showed double the true deductible (Brandon's Philip
+  // Yorrie case: $283 deductible rendered as $566).
+  //
+  // Until we ingest a real claim-level deductible signal from the 835
+  // ERA, leave this undefined so the UI only counts line-level once.
+  const claimLevelDeductible: number | undefined = undefined;
 
   // Secondary payer name: take the Secondary Payer status label, fall back
   // to "—" for blank.
@@ -414,7 +430,11 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
   // PR reason / breakdown (only meaningful when patient owes a balance —
   // i.e. status is Sent to Patient, or ERA Received with patientResp > 0).
   const coinsuranceTotal = lines.reduce((s, l) => s + (l.coinsuranceCopay ?? 0), 0);
-  const deductibleTotal = claimLevelDeductible;
+  // True deductible total = sum of per-line deductibles. Used by the
+  // prBreakdown the UI shows on "Sent to Patient" / ERA-Received rows
+  // (NOT by the renderer that adds claimLevelDeductible on top of line
+  // totals — that path is now claimLevelDeductible=undefined).
+  const deductibleTotal = lines.reduce((s, l) => s + (l.deductible ?? 0), 0);
   const prReason = derivePrReason(coinsuranceTotal, deductibleTotal, 0);
 
   // Forwarded crossover hint
@@ -448,6 +468,7 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
     primaryPayDate: isoDateOrEmpty(txt(item, COL.PRIMARY_PAID_DATE)),
     primarySentDate: isoDateOrEmpty(txt(item, COL.CLAIM_SENT_DATE)) || undefined,
     primaryIcn: txt(item, COL.PRIMARY_CLAIM_ID),
+    payorId: txt(item, COL.PAYOR_ID) || undefined,
     remaining,
     claimLevelDeductible: claimLevelDeductible || undefined,
     expectedCrossoverEra,
