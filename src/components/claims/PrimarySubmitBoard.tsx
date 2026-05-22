@@ -541,10 +541,14 @@ function ClaimCard({
     );
   };
 
-  // 9 grid cells: Patient | Payer | Member ID | DOS | Dx | POS | Type | Submit (col-span-2)
+  // 10 grid cells: Patient | Payer | PR Payor ID | Member ID | DOS | Dx | POS | Type | Submit (col-span-2)
   // POS sits between Dx and Type per the operator's preferred read order.
+  // PR Payor ID lives between Payer and Member ID (Brandon's preference
+  // 2026-05-22 — operator's eye reads payer-name → payer-id → patient-id).
+  // Widths trimmed on Member ID, DOS, Dx, POS, Type to keep Submit on
+  // the same row after adding the PR Payor ID cell.
   const gridCols =
-    "grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.7fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,0.85fr)_32px] gap-3 items-end";
+    "grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_minmax(0,0.75fr)_minmax(0,0.85fr)_minmax(0,0.6fr)_minmax(0,0.6fr)_minmax(0,0.8fr)_minmax(0,0.85fr)_32px] gap-3 items-end";
   const cellCls = "min-w-0";
 
   const usedProducts = c.items.map((i) => productForHcpc(i.hcpc));
@@ -593,6 +597,50 @@ function ClaimCard({
           </Select>
         </Field>
 
+        {/* PR Payor ID — Stedi trading partner ID we send the 837 to.
+            Sits between Payor and Member ID (operator reads payer-name
+            → payer-id → patient-id). Editable inline because spawned
+            children sometimes need a different trading partner than
+            the parent (e.g. corrected claim is now going to Medicaid
+            instead of Cigna). Same debounced autosave pattern as Member ID. */}
+        <Field label="PR Payor ID" className={cellCls}>
+          <Input
+            value={c.payor_id ?? ""}
+            placeholder="ZTXQE"
+            disabled={isLocked}
+            onChange={(e) => {
+              const next = e.target.value;
+              const prev = c.payor_id;
+              onUpdate({ payor_id: next });
+              if (!c.monday_item_id) return;
+              scheduleWrite(`payor-${c.id}`, () => {
+                writeWithRevert(
+                  setClaimParentText(
+                    c.monday_item_id!, CLAIM_PARENT_COL.payor_id, next,
+                  ),
+                  () => onUpdate({ payor_id: prev }),
+                  "PR Payor ID",
+                );
+              });
+            }}
+            onBlur={(e) => {
+              const next = e.target.value;
+              if (!c.monday_item_id) return;
+              const prev = c.payor_id;
+              flushWrite(`payor-${c.id}`, () => {
+                writeWithRevert(
+                  setClaimParentText(
+                    c.monday_item_id!, CLAIM_PARENT_COL.payor_id, next,
+                  ),
+                  () => onUpdate({ payor_id: prev }),
+                  "PR Payor ID",
+                );
+              });
+            }}
+            className="h-7 w-full text-xs md:text-xs"
+          />
+        </Field>
+
         <Field label="Member ID" className={cellCls}>
           <Input
             value={c.patient.member_id}
@@ -627,50 +675,6 @@ function ClaimCard({
                   ),
                   () => onUpdate({ patient: { ...c.patient, member_id: prev } }),
                   "Member ID",
-                );
-              });
-            }}
-            className="h-7 w-full text-xs md:text-xs"
-          />
-        </Field>
-
-        {/* PR Payor ID — Stedi trading partner ID we send the 837 to.
-            Editable inline because spawned children sometimes need a
-            different trading partner than the parent (e.g. corrected
-            claim is now going to Medicaid instead of Cigna), and the
-            backend currently has no UX to fix this between spawn and
-            submit. Same debounced autosave pattern as Member ID. */}
-        <Field label="PR Payor ID" className={cellCls}>
-          <Input
-            value={c.payor_id ?? ""}
-            placeholder="e.g. ZTXQE"
-            disabled={isLocked}
-            onChange={(e) => {
-              const next = e.target.value;
-              const prev = c.payor_id;
-              onUpdate({ payor_id: next });
-              if (!c.monday_item_id) return;
-              scheduleWrite(`payor-${c.id}`, () => {
-                writeWithRevert(
-                  setClaimParentText(
-                    c.monday_item_id!, CLAIM_PARENT_COL.payor_id, next,
-                  ),
-                  () => onUpdate({ payor_id: prev }),
-                  "PR Payor ID",
-                );
-              });
-            }}
-            onBlur={(e) => {
-              const next = e.target.value;
-              if (!c.monday_item_id) return;
-              const prev = c.payor_id;
-              flushWrite(`payor-${c.id}`, () => {
-                writeWithRevert(
-                  setClaimParentText(
-                    c.monday_item_id!, CLAIM_PARENT_COL.payor_id, next,
-                  ),
-                  () => onUpdate({ payor_id: prev }),
-                  "PR Payor ID",
                 );
               });
             }}
