@@ -413,25 +413,33 @@ function correctedLineEstPay(
   payor: string | null | undefined,
 ): { amount: number; corrected: boolean } {
   const code = (line.hcpcs || "").trim();
+  const charge = line.charge ?? 0;
+  const isMedicareAB = /^Medicare A&?B$/i.test((payor || "").trim());
 
-  // Medicare A&B pump rental override. PAYER_RATE_SCHEDULE bills
-  // E0784 at $600/month for Medicare A&B, but Medicare actually pays
-  // roughly $300/month. Trusting the line's estPay would inflate the
-  // projection 2× for every Medicare pump claim. When the charge
-  // signature matches the $600 rental billable, route through the
-  // conservative table (E0784 medicare = $300) instead. The exact-
-  // $600 match keeps real contracted rates for other payers passing
-  // through untouched.
-  const isMedicarePumpRental =
+  // Pump (E0784) flat-rate signatures we should NOT trust at face
+  // value — route them through the conservative table instead.
+  //
+  // - Medicare A&B at $600: PAYER_RATE_SCHEDULE bills $600/month but
+  //   Medicare actually pays ~$300/month. Trusting line.estPay would
+  //   inflate the projection 2x. Conservative = $300 (Medicare class).
+  // - Commercial at $6000: when a commercial payer's contracted pump
+  //   rate isn't in PAYER_RATE_SCHEDULE, the backend falls back to a
+  //   flat $6000 billable. That's a placeholder, not a real rate.
+  //   Conservative = $2500 ("other" class default).
+  //
+  // Real contracted commercial pump rates (anything other than the
+  // $6000 placeholder, after the $1000 legacy fallback is handled
+  // below) pass through untouched.
+  const isPumpFlatRateSignature =
     code === "E0784" &&
-    /^Medicare A&?B$/i.test((payor || "").trim()) &&
-    (line.charge ?? 0) === 600;
+    ((isMedicareAB && charge === 600) ||
+      (!isMedicareAB && charge === 6000));
 
   // Otherwise only override when the line carries the legacy flat-
   // rate fallback charge (E0784/A4230 etc. = $1000, A4239 = $500 per
   // unit). Real contracted rates pass through untouched so the
   // projection reflects the backend's actual estPay.
-  if (!isLegacyFallbackLine(line) && !isMedicarePumpRental) {
+  if (!isLegacyFallbackLine(line) && !isPumpFlatRateSignature) {
     return { amount: line.estPay ?? 0, corrected: false };
   }
 
