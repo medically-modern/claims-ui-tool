@@ -41,7 +41,10 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { carcPlaybookText, rarcPlaybookText, lookupDenialAnalysis } from "@/lib/claims/playbook";
+import {
+  carcPlaybookText, rarcPlaybookText, lookupDenialAnalysis,
+  type PlaybookRowLike,
+} from "@/lib/claims/playbook";
 import {
   DRIVE_ERA_FOLDER_URL,
   DENIAL_PLAYBOOK_SHEET_URL,
@@ -1178,6 +1181,7 @@ const ClaimDetail = () => {
                       eraEditing={eraEditing}
                       eraEdit={eraEdits[l.id]}
                       onEraFieldChange={(field, value) => setEraField(l.id, field, value)}
+                      playbookRows={playbookRows}
                     />
                   ))}
                 </TableBody>
@@ -1630,6 +1634,7 @@ function CodeChip({ code, meaning }: { code: string; meaning: string | null }) {
 function LineRow({
   line, status, onStatusChange,
   eraEditing, eraEdit, onEraFieldChange,
+  playbookRows,
 }: {
   line: ServiceLine;
   status: LineUserStatus;
@@ -1645,6 +1650,12 @@ function LineRow({
     field: "primaryPaid" | "deductible" | "coinsurance" | "copay",
     value: number,
   ) => void;
+  /** Live Denial Playbook rows from usePlaybookCombos in the parent.
+   *  LineRow is a top-level component (not nested inside ClaimDetail),
+   *  so it can't close over the parent's playbookRows variable — we
+   *  pass it explicitly. When undefined, carcPlaybookText /
+   *  rarcPlaybookText fall back to the bundled UNIQUE_COMBOS snapshot. */
+  playbookRows?: readonly PlaybookRowLike[];
 }) {
   const [open, setOpen] = useState(false);
   // When editing, use eraEdit values for the live diff so the operator
