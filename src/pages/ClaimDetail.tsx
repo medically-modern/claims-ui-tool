@@ -111,6 +111,16 @@ const ClaimDetail = () => {
   // ERA Review for five minutes.
   const queryClient = useQueryClient();
 
+  // Live Denial Playbook combos from the backend. Must be called BEFORE
+  // any early returns (loading / not-found below) so React sees the
+  // same hook count on every render — otherwise the loading-state
+  // render and the loaded-state render disagree on the hook list and
+  // React white-screens with a "rendered fewer hooks than expected"
+  // error. The hook is cheap and disabled when the API isn't
+  // configured, so running it for non-denied claims is harmless.
+  const { data: livePlaybook } = usePlaybookCombos();
+  const playbookRows = livePlaybook?.rows;
+
   // Look up the claim from real Monday data first; fall back to mock when
   // no token is configured (local dev). Match by Claim ID column or by the
   // Monday item id, since some claims don't have a Claim ID set yet.
@@ -222,14 +232,6 @@ const ClaimDetail = () => {
   >({});
   const [playbookSavingId, setPlaybookSavingId] = useState<string | null>(null);
   const [playbookSyncBusy, setPlaybookSyncBusy] = useState(false);
-
-  // Live playbook fetched from the backend (Sheet read). Cached in
-  // React Query for 5 min and shared with DenialAnalysisTable. Falls
-  // back to the bundled UNIQUE_COMBOS snapshot when the API isn't
-  // configured or the first fetch hasn't resolved yet. Reuses the
-  // queryClient declared above (line ~113) — no new instance.
-  const { data: livePlaybook } = usePlaybookCombos();
-  const playbookRows = livePlaybook?.rows;
 
   function appendActivity(message: string) {
     return [
