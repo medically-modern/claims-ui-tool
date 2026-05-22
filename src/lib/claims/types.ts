@@ -124,6 +124,13 @@ export interface Claim {
    *  resolved back to Outstanding. Used as the effective last-action
    *  date for Late ERA aging. Null until the claim is resubmitted. */
   claimResentDate?: string | null;
+  /** "Late Action Date" (date_mm153jp1). Snooze-until timestamp for the
+   *  Uploaded Docs flow. When the operator clicks "Uploaded Docs" on a
+   *  Late-ERA row, the backend stamps this to today + 14 days. The
+   *  inLateEra() filter excludes claims whose lateActionDate is in the
+   *  future, so the row drops out of the Late ERA bucket until the
+   *  date is reached. Null when no snooze is active. */
+  lateActionDate?: string | null;
   primaryStatus: PrimaryStatus;
   status277: Status277;
   rejected277Reason?: string | null;

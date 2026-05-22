@@ -4,6 +4,7 @@ import { AppHeader } from "@/components/claims/AppHeader";
 import {
   ClaimStatusBadge,
   PrimaryStatusBadge,
+  StatusBadge,
   Status277Badge,
 } from "@/components/claims/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -50,6 +51,7 @@ import {
 } from "@/api/runClaimStatusCheck";
 import {
   claimAge, eraReceived, fmtDate, fmtMoney, lateEraThresholdDays,
+  isLateEraSnoozed,
   priorityOf, shortIssue, variance,
 } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
@@ -286,7 +288,12 @@ function inLateEra(c: Claim) {
   //
   // Parents with children fall out — the child is the active claim, the
   // parent is historical lineage only.
+  //
+  // Snoozed claims also fall out: when the operator hits "Uploaded Docs"
+  // on a Late ERA row, the backend stamps Late Action Date = today + 14d
+  // and the row should drop out of the bucket until that date elapses.
   if (c.hasChildren) return false;
+  if (isLateEraSnoozed(c)) return false;
   const age = claimAge(c) ?? 0;
   const excluded = ["Paid", "Denied (Or Partly)", "Bad Debt", "Request Rejected"];
   return Boolean(c.claimSentDate) && !eraReceived(c)
@@ -1160,6 +1167,20 @@ const Claims = () => {
                                           <span className="font-bold select-none">ID: </span>
                                           <span className="[user-select:all]">{c.memberId}</span>
                                         </div>
+                                        {/* Snooze pill — appears on Outstanding rows that were
+                                            snoozed via the Uploaded Docs action in ClaimDetail.
+                                            isLateEraSnoozed() reads claim.lateActionDate (Monday
+                                            column date_mm153jp1) and is true while the snooze is
+                                            still active. Stays in Outstanding for the snooze
+                                            window, then drops back into Late ERA when the date
+                                            elapses. */}
+                                        {isLateEraSnoozed(c) && (
+                                          <div className="mt-1">
+                                            <StatusBadge tone="warning">
+                                              Docs sent — returns to Late ERA on {fmtDate(c.lateActionDate ?? "")}
+                                            </StatusBadge>
+                                          </div>
+                                        )}
                                         {chip}
                                       </TableCell>
                                     );

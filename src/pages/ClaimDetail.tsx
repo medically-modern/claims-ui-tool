@@ -29,13 +29,14 @@ import { hasMondayToken } from "@/api/monday";
 import {
   carcMeaning, claimAge, effectivePr, eraReceived, fmtDate, fmtMoney,
   lineStatus, suggestedOutcome, variance, variancePretty,
+  isLateEraSnoozed as isLateEraSnoozedLocal,
 } from "@/lib/claims/logic";
 import type {
   Claim, DenialAction, DenialAnalysis, ServiceLine,
 } from "@/lib/claims/types";
 import {
   AlertCircle, CalendarIcon, CheckCircle2, ChevronDown,
-  Clock, FileWarning, Ban, AlertTriangle, Send,
+  Clock, FileWarning, Ban, AlertTriangle, Send, FileUp,
 } from "lucide-react";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -49,6 +50,10 @@ import {
   verifyPlaybookCombo,
   isPlaybookApiConfigured,
 } from "@/api/playbook";
+import {
+  snoozeDocsUploaded,
+  isSnoozeDocsUploadedConfigured,
+} from "@/api/snoozeDocsUploaded";
 import {
   usePlaybookCombos,
   PLAYBOOK_COMBOS_QUERY_KEY,
@@ -679,6 +684,43 @@ const ClaimDetail = () => {
       });
     } finally {
       setDenialResolveBusy(null);
+    }
+  }
+
+  // ─── "Uploaded Docs" snooze ──────────────────────────────────────────────
+  // Some payers ask for medical docs before paying/denying. Once the
+  // operator uploads them, this button stamps Late Action Date =
+  // today + 14d on Monday so the row drops out of Late ERA until the
+  // payer has had a reasonable window to respond. Optimistic local
+  // state update so the snooze pill (in Outstanding) appears on the
+  // claim list immediately on navigate-back; nothing else on this
+  // detail page renders the snooze.
+  const [docsUploadedBusy, setDocsUploadedBusy] = useState(false);
+  async function handleDocsUploaded() {
+    if (docsUploadedBusy) return;
+    if (!isSnoozeDocsUploadedConfigured()) {
+      toast.error(
+        "Uploaded Docs not wired — VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+      );
+      return;
+    }
+    setDocsUploadedBusy(true);
+    try {
+      const result = await snoozeDocsUploaded(claim.mondayItemId, 14);
+      setClaim({ ...claim, lateActionDate: result.snoozed_until });
+      // Bust the claims-list cache so the Outstanding row picks up the
+      // new snooze date + the Late ERA bucket count drops by one when
+      // the operator navigates back.
+      void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
+      toast.success("Docs uploaded — claim snoozed.", {
+        description: `Won't return to Late ERA until ${result.snoozed_until}.`,
+      });
+    } catch (e) {
+      toast.error("Couldn't snooze claim.", {
+        description: (e as Error).message,
+      });
+    } finally {
+      setDocsUploadedBusy(false);
     }
   }
 
@@ -1441,7 +1483,7 @@ const ClaimDetail = () => {
                 );
               })()
             ) : (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                 <DecisionCard
                   tone="success" icon={<CheckCircle2 className="h-5 w-5" />}
                   title="Paid"
@@ -1455,6 +1497,30 @@ const ClaimDetail = () => {
                   desc="One or more lines were denied or underpaid. Send to the denial flow."
                   cta="Send to Denial" onClick={saveDenial}
                   disabled={linesWithIssues.length === 0}
+                />
+                {/* Uploaded Docs — for the "payer asked for medical docs
+                    before paying or denying" case. Stamps Late Action
+                    Date = today + 14d on Monday and the row drops out
+                    of Late ERA until then. Re-clickable; pushes the
+                    snooze forward another 14d each time (e.g. if the
+                    payer asks for more docs). Operator should drop a
+                    note in Action Context above describing what was
+                    uploaded. */}
+                <DecisionCard
+                  tone="info" icon={<FileUp className="h-5 w-5" />}
+                  title={
+                    isLateEraSnoozedLocal(claim)
+                      ? `Docs Sent — snoozed until ${claim.lateActionDate}`
+                      : "Uploaded Docs to Payer"
+                  }
+                  desc={
+                    isLateEraSnoozedLocal(claim)
+                      ? "Already snoozed. Click again if the payer asked for additional docs — pushes the snooze another 14 days."
+                      : "Payer asked for medical docs and we sent them. Snoozes this claim from Late ERA for 14 days."
+                  }
+                  cta={docsUploadedBusy ? "Saving…" : "Uploaded Docs"}
+                  onClick={handleDocsUploaded}
+                  disabled={docsUploadedBusy}
                 />
               </div>
             )}

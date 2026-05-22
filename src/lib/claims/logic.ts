@@ -40,6 +40,25 @@ export function lateEraThresholdDays(claim: Claim): number {
   return claim.denialAction === "Appeal" ? 60 : 21;
 }
 
+/**
+ * True when the claim is in an active "docs uploaded, awaiting payer
+ * response" snooze. Operator clicked "Uploaded Docs" in the detail
+ * view → backend stamped Late Action Date (date_mm153jp1) to a future
+ * date → row drops out of the Late ERA bucket until that date passes.
+ *
+ * Snooze is compared at day granularity (Monday's date columns are
+ * stored as YYYY-MM-DD), so clicking at any time today and seeing the
+ * row immediately gone is the right behavior.
+ */
+export function isLateEraSnoozed(claim: Claim): boolean {
+  if (!claim.lateActionDate) return false;
+  const d = new Date(claim.lateActionDate);
+  if (isNaN(d.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return d.getTime() > today.getTime();
+}
+
 export function eraReceived(claim: Claim): boolean {
   return Boolean(
     claim.rawEraDate ||

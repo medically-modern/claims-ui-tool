@@ -66,6 +66,14 @@ const COL = {
   // Outstanding. Used as the effective "last submission" date for Late
   // ERA aging so freshly-resent claims don't immediately reappear.
   CLAIM_RESENT_DATE: "date_mm29scz",
+  // Late Action Date — repurposed (was unused on the schema) as the
+  // "snooze until" timestamp for the Uploaded Docs flow. When the
+  // operator uploads medical docs to a payer on a Late-ERA claim,
+  // this is stamped to today + 14d so the row drops out of the Late
+  // ERA bucket until the payer's expected response window has elapsed.
+  // inLateEra() in pages/Claims.tsx excludes claims whose Late Action
+  // Date is in the future.
+  LATE_ACTION_DATE: "date_mm153jp1",
   S277_STATUS: "color_mm1z1pb2",
   S277_REJECTED_REASON: "text_mm1zsp2x",
   CLAIM_STATUS_CATEGORY: "color_mm2qbcpy",
@@ -486,6 +494,7 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     secondaryPayer: txt(item, COL.SECONDARY_PAYER) || null,
     denialAction: mapDenialAction(txt(item, COL.DENIAL_ACTION)),
     claimResentDate: isoOrNull(txt(item, COL.CLAIM_RESENT_DATE)),
+    lateActionDate:  isoOrNull(txt(item, COL.LATE_ACTION_DATE)),
     nextActionDate: isoOrNull(txt(item, COL.NEXT_ACTION_DATE)),
     actionContext: txt(item, COL.ACTION_CONTEXT) || undefined,
     notes: txt(item, COL.NOTES) || undefined,
