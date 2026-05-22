@@ -31,6 +31,11 @@ const COL = {
   // the Resubmit row UI because spawned children sometimes need a
   // different trading partner than the parent.
   PAYOR_ID: "text_mm1gcz3y",
+  // Action Context — operator's denial-workflow notes (text_mm29v2ph).
+  // Surfaced as a disclosure on Resubmit rows so the operator can see
+  // *why* the corrected was spawned + what they decided to do before
+  // hitting Submit, without navigating to ClaimDetail.
+  ACTION_CONTEXT: "text_mm29v2ph",
   // POS — status column with labels Home (CMS 12) / Office (CMS 11).
   // Read here so the Submit Claim board's inline editor can render the
   // current value and let the operator switch before submitting.
@@ -279,6 +284,7 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
     dos: textOf(item, COL.DOS),
     icn: textOf(item, COL.PAYER_CLAIM_NUMBER) || undefined,
     payor_id: textOf(item, COL.PAYOR_ID) || undefined,
+    action_context: textOf(item, COL.ACTION_CONTEXT) || undefined,
     parent_claim_id: parentClaimId || undefined,
     items: (item.subitems ?? []).map(mapSubitem),
     createdAt: new Date(item.created_at).getTime() || Date.now(),

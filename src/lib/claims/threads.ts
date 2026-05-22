@@ -55,6 +55,12 @@ export interface ThreadClaim {
    *  before submission. Null/empty means the backend will auto-resolve
    *  from PAYER_ID_MAP via the Primary Payor label. */
   payor_id?: string;
+  /** Action Context — denial-workflow notes the operator wrote on
+   *  ClaimDetail when resolving the parent denial (text_mm29v2ph).
+   *  Surfaced read-only as a disclosure on the Resubmit row so the
+   *  operator remembers what they decided to do before hitting
+   *  Submit. Empty when no notes were captured. */
+  action_context?: string;
   payer: string;
   diagnosis?: string;
   dos: string; // ISO yyyy-mm-dd

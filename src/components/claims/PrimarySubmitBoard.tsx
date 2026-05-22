@@ -1065,6 +1065,32 @@ function ClaimCard({
         )}
       </div>
 
+      {/* Action Context disclosure — surfaces the denial-workflow
+          notes the operator wrote on ClaimDetail when resolving the
+          parent denial, so they remember WHY this corrected claim was
+          spawned + what they decided to do, without leaving the page.
+          Read-only — to edit, the operator goes to ClaimDetail where
+          the autosave is already wired. Only shown on Resubmit rows
+          (Original/New rows have no parent to inherit notes from). */}
+      {isResubmit && (
+        <details className="border-t bg-muted/30 px-3 py-2 text-xs">
+          <summary className="cursor-pointer select-none text-muted-foreground hover:text-foreground">
+            {c.action_context
+              ? "▾ Notes"
+              : "▾ Notes (none captured yet)"}
+          </summary>
+          <div className="mt-2 whitespace-pre-wrap text-sm text-foreground">
+            {c.action_context || (
+              <span className="text-muted-foreground italic">
+                No Action Context on this row. To add or edit notes,
+                open ClaimDetail on the parent denial (or this row)
+                and use the Action Context textarea — it autosaves.
+              </span>
+            )}
+          </div>
+        </details>
+      )}
+
       {isResubmit && expanded && (
         <ThreadPanel
           currentClaimId={c.id}
