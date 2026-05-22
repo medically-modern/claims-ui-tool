@@ -192,21 +192,49 @@ export function verifyPlaybookCombo(
   });
 }
 
-/** Force the hourly Sheet-refresh cycle now: pulls any new ERAs from
- *  Stedi, archives JSONs to Drive, appends any unseen CARC/RARC combos
- *  to the Sheet. Use after editing the Sheet directly or after a
- *  burst of new ERAs landed and the operator wants to make sure
- *  everything's caught up.
+/** Queued response shape returned by /admin/refresh-playbook in
+ *  async (default) mode. The actual work runs in a FastAPI
+ *  BackgroundTask; the caller polls /admin/refresh-playbook-status
+ *  for the summary once it lands. */
+export interface RefreshPlaybookQueued {
+  status: "queued";
+  message: string;
+}
+
+/** Kick off the playbook refresh in the background and return
+ *  immediately. The backend will pull new ERAs from Stedi, archive
+ *  JSONs to Drive, and append unseen CARC/RARC combos to the Sheet
+ *  — but that work happens on a worker thread. Use
+ *  fetchRefreshPlaybookStatus() to poll for completion.
  *
- *  Calls with `?wait=true` so the backend runs synchronously and
- *  returns the full summary (otherwise the default response is
- *  `{status: "queued"}` and the work happens in a background task we
- *  can't surface progress on). First-run backfills can take 10+
- *  minutes; subsequent runs are usually a few seconds. If the request
- *  times out we throw and let the caller show an error — the work
- *  continues server-side regardless. */
-export function refreshPlaybook(): Promise<RefreshPlaybookSummary> {
-  return call<RefreshPlaybookSummary>("/admin/refresh-playbook?wait=true", {
+ *  First-run backfills can take 10+ minutes (every historical Stedi
+ *  ERA gets processed); subsequent incremental runs are usually a
+ *  few seconds. Either way, fire-and-poll keeps the UI responsive
+ *  and avoids HTTP request timeouts. */
+export function startRefreshPlaybook(): Promise<RefreshPlaybookQueued> {
+  return call<RefreshPlaybookQueued>("/admin/refresh-playbook", {
     method: "POST",
   });
+}
+
+/** Get the last completed refresh run's summary. Returns
+ *  { message: ... } when no run has completed since the Railway
+ *  instance booted, or the full RefreshPlaybookSummary when one has.
+ *  Used by the Sync Playbook polling loop in ClaimDetail. */
+export function fetchRefreshPlaybookStatus(): Promise<
+  RefreshPlaybookSummary | { message: string }
+> {
+  return call<RefreshPlaybookSummary | { message: string }>(
+    "/admin/refresh-playbook-status",
+    { method: "GET" },
+  );
+}
+
+/** Type guard: did the status endpoint return a full summary or
+ *  just the "no run yet" placeholder? Polling code uses this to
+ *  decide whether to keep polling or render the result. */
+export function isRefreshSummary(
+  v: RefreshPlaybookSummary | { message: string },
+): v is RefreshPlaybookSummary {
+  return typeof (v as RefreshPlaybookSummary).started_at === "string";
 }

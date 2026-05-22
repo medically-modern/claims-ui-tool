@@ -51,7 +51,9 @@ import {
 } from "@/lib/claims/playbookConfig";
 import {
   verifyPlaybookCombo,
-  refreshPlaybook,
+  startRefreshPlaybook,
+  fetchRefreshPlaybookStatus,
+  isRefreshSummary,
   isPlaybookApiConfigured,
 } from "@/api/playbook";
 import {
@@ -375,8 +377,27 @@ const ClaimDetail = () => {
     }
   }
 
-  /** Sync now — hits /admin/refresh-playbook so the operator can force
-   *  the hourly cycle without waiting. Surfaces the summary in a toast. */
+  /**
+   * Trigger the backend's refresh-playbook cycle and watch for it to
+   * complete. Fire-and-poll because:
+   *   - First-run backfills walk every historical Stedi ERA and can
+   *     take 10+ minutes. A blocking ?wait=true HTTP call would time
+   *     out long before that.
+   *   - Subsequent incremental runs are seconds, but the same poll
+   *     loop works either way.
+   *
+   * Flow:
+   *   1. POST /admin/refresh-playbook (returns {status: "queued"}).
+   *   2. Show a "started" toast so the operator knows it's running.
+   *   3. Capture _LAST_REFRESH_SUMMARY.started_at at this moment as
+   *      the "wait for a run newer than this" baseline.
+   *   4. Poll GET /admin/refresh-playbook-status every 5s. When the
+   *      summary's started_at is past the baseline AND ended_at is
+   *      set, the run completed — render the success/error toast and
+   *      invalidate the live combos cache.
+   *   5. Give up after 15 min (long enough for a first-run backfill)
+   *      with a "still running, check Railway logs" toast.
+   */
   async function triggerPlaybookSync() {
     if (!isPlaybookApiConfigured()) {
       toast.error(
@@ -384,28 +405,80 @@ const ClaimDetail = () => {
       );
       return;
     }
+
+    // Baseline: when did the most recent already-completed run start?
+    // We poll until a run with started_at > this lands.
+    const POLL_INTERVAL_MS = 5_000;
+    const MAX_POLL_MS = 15 * 60 * 1000;
+    let baseline: string | null = null;
+    try {
+      const pre = await fetchRefreshPlaybookStatus();
+      if (isRefreshSummary(pre)) baseline = pre.started_at;
+    } catch {
+      // ignore — if we can't read status now, kick off anyway.
+    }
+
     setPlaybookSyncBusy(true);
     try {
-      const summary = await refreshPlaybook();
-      if (summary.error) {
-        toast.error("Playbook sync finished with an error.", {
-          description: summary.error,
-        });
-      } else {
-        toast.success("Playbook synced.", {
-          description:
-            `${summary.transactions_processed} new ERA(s), ` +
-            `${summary.combos_new} new combo(s), ` +
-            `${summary.drive_uploads} Drive upload(s).`,
-        });
-      }
+      await startRefreshPlaybook();
+      toast.message("Playbook sync started.", {
+        description:
+          "Pulling new ERAs from Stedi, archiving to Drive, " +
+          "appending new combos to the sheet. Watching for completion…",
+      });
     } catch (e) {
-      toast.error("Playbook sync failed.", {
+      setPlaybookSyncBusy(false);
+      toast.error("Couldn't start playbook sync.", {
         description: (e as Error).message,
       });
-    } finally {
-      setPlaybookSyncBusy(false);
+      return;
     }
+
+    const startedAt = Date.now();
+    const tick = async () => {
+      try {
+        const status = await fetchRefreshPlaybookStatus();
+        if (
+          isRefreshSummary(status) &&
+          status.ended_at &&
+          (!baseline || status.started_at > baseline)
+        ) {
+          // New completed run lands here.
+          if (status.error) {
+            toast.error("Playbook sync finished with an error.", {
+              description: status.error,
+            });
+          } else {
+            toast.success("Playbook synced.", {
+              description:
+                `${status.transactions_processed} new ERA(s), ` +
+                `${status.combos_new} new combo(s), ` +
+                `${status.drive_uploads} Drive upload(s).`,
+            });
+          }
+          // Bust the live-combos cache so the table + pickers reflect
+          // any newly-appended rows from this run.
+          void queryClient.invalidateQueries({
+            queryKey: PLAYBOOK_COMBOS_QUERY_KEY,
+          });
+          setPlaybookSyncBusy(false);
+          return;
+        }
+      } catch {
+        // Transient status-endpoint hiccup; keep polling.
+      }
+      if (Date.now() - startedAt >= MAX_POLL_MS) {
+        toast.message("Playbook sync still running.", {
+          description:
+            "Hit the 15-minute UI watch limit. The job continues " +
+            "server-side — check Railway logs for [REFRESH] entries.",
+        });
+        setPlaybookSyncBusy(false);
+        return;
+      }
+      window.setTimeout(() => void tick(), POLL_INTERVAL_MS);
+    };
+    window.setTimeout(() => void tick(), POLL_INTERVAL_MS);
   }
 
   /**
