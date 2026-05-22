@@ -47,6 +47,11 @@ import {
   DENIAL_PLAYBOOK_SHEET_URL,
 } from "@/lib/claims/playbookConfig";
 import {
+  verifyPlaybookCombo,
+  refreshPlaybook,
+  isPlaybookApiConfigured,
+} from "@/api/playbook";
+import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
   AlertDialogTitle,
@@ -194,6 +199,26 @@ const ClaimDetail = () => {
   );
   const [overrideReason, setOverrideReason] = useState("");
 
+  // ─── Per-line Playbook verify state ───────────────────────────────────────
+  // For each denied line, the operator can verify the (CARC, RARC)
+  // combo against the Denial Playbook sheet without leaving the page.
+  // Three slices of state govern that flow:
+  //   - playbookEditing[lineId] — which line's picker is currently open
+  //   - playbookDraft[lineId]   — the bucket the operator is about to save
+  //   - playbookOverride[lineId] — sheet write succeeded; show this row as
+  //                                Verified with the new bucket immediately,
+  //                                without waiting for a re-fetch or page
+  //                                reload. Optimistic UI.
+  //   - playbookSavingId        — which line's save is in flight (one at a
+  //                                time keeps the UI honest about toasts).
+  const [playbookEditing, setPlaybookEditing] = useState<Record<string, boolean>>({});
+  const [playbookDraft, setPlaybookDraft] = useState<Record<string, string>>({});
+  const [playbookOverride, setPlaybookOverride] = useState<
+    Record<string, { reason: string; verified: true }>
+  >({});
+  const [playbookSavingId, setPlaybookSavingId] = useState<string | null>(null);
+  const [playbookSyncBusy, setPlaybookSyncBusy] = useState(false);
+
   function appendActivity(message: string) {
     return [
       ...(claim.activity ?? []),
@@ -261,6 +286,104 @@ const ClaimDetail = () => {
         return "Bad Debt";
       default:
         return null;
+    }
+  }
+
+  // ─── Playbook verify handlers ─────────────────────────────────────────────
+  /** Open the bucket picker for a line, seeded with the current label. */
+  function startPlaybookEdit(lineId: string, currentBucket: string) {
+    setPlaybookEditing((m) => ({ ...m, [lineId]: true }));
+    setPlaybookDraft((m) => ({ ...m, [lineId]: currentBucket }));
+  }
+
+  /** Cancel without saving — closes the picker, discards the draft. */
+  function cancelPlaybookEdit(lineId: string) {
+    setPlaybookEditing((m) => ({ ...m, [lineId]: false }));
+    setPlaybookDraft((m) => {
+      const next = { ...m };
+      delete next[lineId];
+      return next;
+    });
+  }
+
+  /**
+   * Save the operator's pick to the Sheet via the backend's
+   * /admin/playbook/verify-combo endpoint. On success, optimistically
+   * mark the line as Verified locally so the pill flips green
+   * immediately — we don't wait for a re-fetch. The backend force-
+   * refreshes its lookup cache as part of the same request, so the
+   * next ERA hitting this (CARC, RARC) combo auto-fills the right
+   * bucket.
+   */
+  async function savePlaybookVerify(line: ServiceLine) {
+    const bucket = (playbookDraft[line.id] || "").trim();
+    if (!bucket) {
+      toast.error("Pick a bucket first.");
+      return;
+    }
+    if (!isPlaybookApiConfigured()) {
+      toast.error(
+        "Playbook API not configured (missing VITE_API_BASE_URL or VITE_ADMIN_API_KEY).",
+      );
+      return;
+    }
+    setPlaybookSavingId(line.id);
+    try {
+      const result = await verifyPlaybookCombo({
+        carc: line.carc.map(String).join(","),
+        rarc: line.rarc.join(","),
+        verifiedAnalysis: bucket,
+      });
+      setPlaybookOverride((m) => ({
+        ...m,
+        [line.id]: { reason: result.verified_analysis, verified: true },
+      }));
+      setPlaybookEditing((m) => ({ ...m, [line.id]: false }));
+      toast.success(
+        result.was_appended
+          ? `New combo verified (row appended to sheet).`
+          : `Combo verified.`,
+        { description: `${bucket} — cache reloaded (${result.cache_combos_loaded} combos).` },
+      );
+    } catch (e) {
+      toast.error("Couldn't save to the Playbook sheet.", {
+        description: (e as Error).message,
+      });
+    } finally {
+      setPlaybookSavingId(null);
+    }
+  }
+
+  /** Sync now — hits /admin/refresh-playbook so the operator can force
+   *  the hourly cycle without waiting. Surfaces the summary in a toast. */
+  async function triggerPlaybookSync() {
+    if (!isPlaybookApiConfigured()) {
+      toast.error(
+        "Playbook API not configured (missing VITE_API_BASE_URL or VITE_ADMIN_API_KEY).",
+      );
+      return;
+    }
+    setPlaybookSyncBusy(true);
+    try {
+      const summary = await refreshPlaybook();
+      if (summary.error) {
+        toast.error("Playbook sync finished with an error.", {
+          description: summary.error,
+        });
+      } else {
+        toast.success("Playbook synced.", {
+          description:
+            `${summary.transactions_processed} new ERA(s), ` +
+            `${summary.combos_new} new combo(s), ` +
+            `${summary.drive_uploads} Drive upload(s).`,
+        });
+      }
+    } catch (e) {
+      toast.error("Playbook sync failed.", {
+        description: (e as Error).message,
+      });
+    } finally {
+      setPlaybookSyncBusy(false);
     }
   }
 
@@ -1051,15 +1174,13 @@ const ClaimDetail = () => {
             <CardHeader className="pb-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle className="text-base">Denial Analysis</CardTitle>
-                {/* Quick links to the two source-of-truth surfaces that
-                    drive this section:
-                      - ERA Drive folder: where the hourly cron archives
-                        every raw 835 JSON, so you can spot-check that
-                        a denial's ERA actually landed in our system.
-                      - Denial Playbook Sheet: the "Unique Combos" tab
-                        is the live source-of-truth for CARC/RARC →
-                        bucket mapping. Edits there flow into Monday
-                        on the next ERA after sync_playbook.py runs. */}
+                {/* Quick links to the two source-of-truth surfaces +
+                    a Sync button that triggers /admin/refresh-playbook
+                    so the operator can force the hourly cycle to run
+                    now (pulls new ERAs from Stedi, archives JSONs to
+                    Drive, appends unseen CARC/RARC combos to the
+                    Sheet). Hidden if the Playbook API isn't configured
+                    so dev environments don't show a button that 500s. */}
                 <div className="flex flex-wrap items-center gap-3 text-xs">
                   <a
                     href={DRIVE_ERA_FOLDER_URL}
@@ -1079,29 +1200,49 @@ const ClaimDetail = () => {
                     Denial Playbook sheet
                     <ExternalLink className="h-3 w-3" />
                   </a>
+                  {isPlaybookApiConfigured() && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      disabled={playbookSyncBusy}
+                      onClick={() => void triggerPlaybookSync()}
+                    >
+                      {playbookSyncBusy ? "Syncing…" : "Sync Playbook"}
+                    </Button>
+                  )}
                 </div>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
               {linesWithIssues.map((l) => {
                 const interpreted = lookupDenialAnalysis(l.carc, l.rarc);
-                // Map the three playbook states to a StatusBadge tone
-                // + label. The pill lives next to "Denial Reason
-                // (Playbook)" so the operator instantly sees whether
-                // the auto-fill they're looking at is trustworthy:
-                //   verified   = green, no action needed
-                //   unverified = amber, bucket exists but needs signoff
-                //   new        = red, never-seen combo — add it to the
-                //                Playbook sheet via the Phase-2 picker
-                //                (or directly in the Sheet for now)
+                // Optimistic override: once the operator successfully
+                // verifies this line's combo via the picker, we treat
+                // it as Verified locally without waiting for a fetch
+                // refresh. The override persists for the lifetime of
+                // this page render — a navigation away + back will
+                // re-derive from the bundled snapshot (which by then
+                // should match, once the backend's force-refreshed
+                // cache has been picked up on the next ERA).
+                const ov = playbookOverride[l.id];
+                const effectiveState = ov ? "verified" : interpreted.state;
+                const effectiveReason = ov ? ov.reason : interpreted.reason;
+
                 const playbookPill =
-                  interpreted.state === "verified"
+                  effectiveState === "verified"
                     ? { tone: "success" as const, label: "Verified" }
-                    : interpreted.state === "unverified"
+                    : effectiveState === "unverified"
                       ? { tone: "warning" as const, label: "Unverified" }
                       : { tone: "danger" as const, label: "New denial" };
+
+                const editing = !!playbookEditing[l.id];
+                const saving  = playbookSavingId === l.id;
+                const draft   = playbookDraft[l.id] ?? effectiveReason ?? "";
+
                 return (
-                <div key={l.id} className="grid grid-cols-1 gap-3 rounded-md border p-3 md:grid-cols-[1fr_1fr_minmax(220px,1fr)]">
+                <div key={l.id} className="grid grid-cols-1 gap-3 rounded-md border p-3 md:grid-cols-[1fr_1fr_minmax(260px,1fr)]">
                   <div>
                     <div className="font-medium text-sm">{l.product}</div>
                     <div className="text-xs text-muted-foreground">{l.hcpcs}{l.modifiers.length ? ` · ${l.modifiers.join(", ")}` : ""}</div>
@@ -1119,9 +1260,77 @@ const ClaimDetail = () => {
                       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Denial Reason (Playbook)</div>
                       <StatusBadge tone={playbookPill.tone}>{playbookPill.label}</StatusBadge>
                     </div>
-                    <div className="mt-1 text-sm font-medium">
-                      {interpreted.reason ?? <span className="text-muted-foreground italic">Not in playbook</span>}
-                    </div>
+                    {/* Two modes:
+                        1) Read mode — current label + a "Verify" / "Change"
+                           link that opens the picker. Hidden when the
+                           Playbook API isn't configured.
+                        2) Edit mode — dropdown seeded with current bucket
+                           + Save / Cancel. Save writes the Verified
+                           columns to the Playbook sheet via the backend
+                           and force-refreshes the lookup cache so future
+                           ERAs with the same (CARC, RARC) auto-fill. */}
+                    {!editing && (
+                      <div className="mt-1 flex items-center justify-between gap-2">
+                        <div className="text-sm font-medium">
+                          {effectiveReason ?? (
+                            <span className="text-muted-foreground italic">
+                              Not in playbook
+                            </span>
+                          )}
+                        </div>
+                        {isPlaybookApiConfigured() && (
+                          <button
+                            type="button"
+                            onClick={() => startPlaybookEdit(l.id, effectiveReason ?? "")}
+                            className="text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                          >
+                            {effectiveState === "verified" ? "Change" : "Verify"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {editing && (
+                      <div className="mt-2 space-y-2">
+                        <Select
+                          value={draft || undefined}
+                          onValueChange={(v) =>
+                            setPlaybookDraft((m) => ({ ...m, [l.id]: v }))
+                          }
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="Pick bucket…" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {DENIAL_ANALYSIS_OPTIONS.map((opt) => (
+                              <SelectItem key={opt} value={opt}>
+                                {opt}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-xs"
+                            disabled={saving}
+                            onClick={() => cancelPlaybookEdit(l.id)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 text-xs"
+                            disabled={saving || !draft}
+                            onClick={() => void savePlaybookVerify(l)}
+                          >
+                            {saving ? "Saving…" : "Save"}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
                 );
