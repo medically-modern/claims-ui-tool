@@ -1067,7 +1067,11 @@ function SecondaryRow({
             )}
           </div>
         </div>
-        <StatusPill status={c.status} bucket={b} />
+        {/* On Awaiting Acceptance rows the 277 badge is the lifecycle
+            indicator — the generic "Secondary Submitted" status pill
+            would be redundant + visually competing. On every other
+            bucket keep the existing StatusPill. */}
+        {b === "awaiting" ? null : <StatusPill status={c.status} bucket={b} />}
       </button>
 
       {expanded && (
@@ -1102,25 +1106,29 @@ function SecondaryRow({
 }
 
 /**
- * 277 lifecycle badge for a row in Awaiting Acceptance.
- * Null = no 277 yet (just sent, in flight). Mirrors PrimarySubmitBoard's
- * per-row 277 indicator so operators can spot rejects without expanding.
+ * 277 lifecycle badge — exact visual + label vocabulary as
+ * PrimarySubmitBoard.Status277Badge so the two boards stay coherent.
+ * Display priority:
+ *   1. Status277 from the 277 acknowledgment.
+ *   2. "Submitted" — 837 went out, no 277 back yet.
+ * Payer Accepted graduates out of the Awaiting bucket before render; it
+ * stays in the switch for type-union completeness.
  */
 function Row277Badge({ status }: { status: import("@/lib/claims/types").Status277 }) {
-  if (!status) {
-    return (
-      <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-        No 277 yet
-      </span>
-    );
-  }
-  const tone =
-    status === "Payer Accepted" ? "bg-success-soft text-success-soft-foreground" :
-    status === "Stedi Accepted" ? "bg-info-soft text-info-soft-foreground" :
-    "bg-destructive/10 text-destructive";
+  const { label, classes } =
+    status === "Payer Accepted"  ? { label: "Payer Accepted",   classes: "bg-emerald-100 text-emerald-800 border-emerald-200" }
+    : status === "Stedi Accepted"  ? { label: "Stedi Accepted",   classes: "bg-amber-100 text-amber-800 border-amber-200" }
+    : status === "Payer Rejected"  ? { label: "Payer Rejected",   classes: "bg-rose-100 text-rose-800 border-rose-200" }
+    : status === "Stedi Rejected"  ? { label: "Stedi Rejected",   classes: "bg-rose-100 text-rose-800 border-rose-200" }
+    : { label: "Submitted", classes: "bg-sky-100 text-sky-800 border-sky-200" };
   return (
-    <span className={cn("ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium", tone)}>
-      {status}
+    <span
+      className={cn(
+        "inline-flex h-6 items-center justify-center rounded-md border px-2 text-xs font-medium",
+        classes,
+      )}
+    >
+      {label}
     </span>
   );
 }
