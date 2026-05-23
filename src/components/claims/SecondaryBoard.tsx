@@ -56,7 +56,7 @@ export type SecondaryStatus =
   | "Patient Paid"
   | "Bad Debt";
 
-type SubmitBucket = "confirm" | "insurance" | "patient";
+type SubmitBucket = "confirm" | "insurance" | "patient" | "awaiting";
 type ReviewBucket = "outstanding" | "era" | "paid";
 type AnyBucket = SubmitBucket | ReviewBucket;
 
@@ -123,6 +123,16 @@ export interface SecClaim {
    *  string means not set; submission backend will refuse with a
    *  clear error pointing at this field. */
   payorId?: string;
+  /** 277 lifecycle status mirrored from the primary board concept.
+   *  Source: Secondary Board column color_mm1z1pb2 ("277 Status"),
+   *  written by routes/stedi_webhook.handle_277_event when the 277
+   *  for a secondary 837 lands. Drives the Awaiting Acceptance bucket
+   *  (rows graduate to Outstanding once status flips to "Payer
+   *  Accepted"). Null = no 277 received yet. */
+  status277?: import("@/lib/claims/types").Status277;
+  /** 277 rejection reason from Secondary Board column text_mm1zsp2x.
+   *  Only meaningful when status277 ∈ {Stedi Rejected, Payer Rejected}. */
+  rejectionReason277?: string;
   dos: string;
   diagnosis: string;
   type: "Original" | "Corrected";
@@ -510,6 +520,14 @@ function bucketOf(c: SecClaim): AnyBucket | null {
   if (c.status === "Awaiting Payor Confirmation") return "confirm";
   if (c.status === "Primary Paid - Submit Secondary") return "insurance";
   if (c.status === "Sent to Patient") return "patient";
+  // Awaiting Acceptance — mirrors the primary bucket. Submitted via
+  // Stedi but the payer hasn't acknowledged with a clean 277 yet.
+  // Graduates to "outstanding" once status277 = "Payer Accepted".
+  // Forwarded rows stay in outstanding (no 277 expected — they're
+  // waiting on the crossover ERA, not on payer ack).
+  if (c.status === "Secondary Submitted" && c.status277 !== "Payer Accepted") {
+    return "awaiting";
+  }
   if (c.status === "Primary Paid - Forwarded" || c.status === "Secondary Submitted") return "outstanding";
   if (c.status === "Secondary ERA Received") {
     // Split fully-paid ERAs (secondary covered the PR within $0.50)
@@ -524,17 +542,27 @@ function bucketOf(c: SecClaim): AnyBucket | null {
   return null;
 }
 
-const BUCKET_META: Record<AnyBucket, { label: string; icon: React.ReactNode; tone: string }> = {
+const BUCKET_META: Record<AnyBucket, { label: string; icon: React.ReactNode; tone: string; description?: string }> = {
   confirm:     { label: "Confirm Payor",    icon: <FileSearch className="h-4 w-4" />, tone: "text-warning-soft-foreground" },
   insurance:   { label: "Insurance",        icon: <Send className="h-4 w-4" />,      tone: "text-warning-soft-foreground" },
   patient:     { label: "Patient",          icon: <UserRound className="h-4 w-4" />, tone: "text-primary" },
+  awaiting:    {
+    label: "Awaiting Acceptance",
+    icon: <Clock className="h-4 w-4" />,
+    tone: "text-info-soft-foreground",
+    description: "Submitted to the secondary payer (via Stedi) but no 'Payer Accepted' 277 yet. Stays here until the payer acknowledges, then graduates to Outstanding.",
+  },
   outstanding: { label: "Outstanding",      icon: <Clock className="h-4 w-4" />,     tone: "text-info-soft-foreground" },
   era:         { label: "ERA Review",       icon: <FileSearch className="h-4 w-4" />, tone: "text-info-soft-foreground" },
   paid:        { label: "Paid",             icon: <CheckCircle2 className="h-4 w-4" />, tone: "text-success-soft-foreground" },
 };
 
 const MODE_BUCKETS: Record<SecondaryMode, AnyBucket[]> = {
-  submit: ["confirm", "insurance", "patient"],
+  // Awaiting Acceptance sits alongside Insurance/Patient in the Submit
+  // mode because that's where the operator monitors what's already
+  // been 837'd and is in 277 limbo — same mental cohort as "things I
+  // just submitted, watching the response."
+  submit: ["confirm", "insurance", "patient", "awaiting"],
   review: ["outstanding", "era", "paid"],
 };
 
@@ -577,13 +605,38 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const counts = useMemo(() => {
-    const out: Record<AnyBucket, number> = { confirm: 0, insurance: 0, patient: 0, outstanding: 0, era: 0, paid: 0 };
+    const out: Record<AnyBucket, number> = { confirm: 0, insurance: 0, patient: 0, awaiting: 0, outstanding: 0, era: 0, paid: 0 };
     for (const c of claims) {
       const b = bucketOf(c);
       if (b) out[b] += 1;
     }
     return out;
   }, [claims]);
+
+  // Awaiting Acceptance roll-ups — mirror PrimarySubmitBoard's pills so
+  // the operator can see trouble on the tile without clicking in.
+  //   red:   payer rejected (277 said no — needs rework)
+  //   amber: Stedi-Accepted for ≥48h with no payer response (stale)
+  const awaitingClaims = useMemo(
+    () => claims.filter((c) => bucketOf(c) === "awaiting"),
+    [claims],
+  );
+  const awaitingPayerRejectedCount = useMemo(
+    () => awaitingClaims.filter((c) => c.status277 === "Payer Rejected").length,
+    [awaitingClaims],
+  );
+  const awaitingStaleCount = useMemo(() => {
+    const now = Date.now();
+    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+    return awaitingClaims.filter((c) => {
+      if (c.status277 !== "Stedi Accepted") return false;
+      const sentIso = c.primarySentDate;
+      if (!sentIso) return false;
+      const sentMs = new Date(sentIso).getTime();
+      if (!Number.isFinite(sentMs)) return false;
+      return now - sentMs >= FORTY_EIGHT_HOURS_MS;
+    }).length;
+  }, [awaitingClaims]);
 
   const visible = useMemo(() => {
     return claims
@@ -796,7 +849,10 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
     }
   }
 
-  const gridCols = buckets.length >= 3 ? "md:grid-cols-3" : "md:grid-cols-2";
+  const gridCols =
+    buckets.length >= 4 ? "md:grid-cols-4" :
+    buckets.length === 3 ? "md:grid-cols-3" :
+    "md:grid-cols-2";
 
   return (
     <div className="space-y-4">
@@ -815,7 +871,22 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
               {BUCKET_META[k].icon}
               {BUCKET_META[k].label}
             </div>
-            <div className="mt-1 text-2xl font-semibold">{counts[k]}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <span className="text-2xl font-semibold">{counts[k]}</span>
+              {/* Awaiting Acceptance — surface trouble so the operator
+                  notices it on the tile, same pattern as PrimarySubmitBoard.
+                  red = payer rejected, amber = Stedi-Accepted ≥48h stale. */}
+              {k === "awaiting" && awaitingPayerRejectedCount > 0 && (
+                <span className="rounded-full bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                  {awaitingPayerRejectedCount} payer rejected
+                </span>
+              )}
+              {k === "awaiting" && awaitingStaleCount > 0 && (
+                <span className="rounded-full bg-warning-soft px-1.5 py-0.5 text-[10px] font-medium text-warning-soft-foreground">
+                  {awaitingStaleCount} stale 48h+
+                </span>
+              )}
+            </div>
           </button>
         ))}
       </section>
@@ -976,6 +1047,11 @@ function SecondaryRow({
               )}
             </span>
             <span className="text-xs text-muted-foreground">· DOS {fmt(c.dos)}</span>
+            {/* 277 lifecycle pill — only on Awaiting Acceptance rows.
+                Mirrors the per-row badge on PrimarySubmitBoard so the
+                operator can see Stedi-Accepted vs Payer-Rejected vs
+                still-no-277 at a glance without expanding. */}
+            {b === "awaiting" && <Row277Badge status={c.status277 ?? null} />}
           </div>
           <div className="mt-0.5 text-xs text-muted-foreground">
             Primary paid: <span className="tabular-nums text-foreground">{$(c.primaryPaid)}</span>
@@ -1010,6 +1086,9 @@ function SecondaryRow({
               onMarkPaid={onMarkPatientPaid}
             />
           )}
+          {b === "awaiting" && (
+            <AwaitingAcceptanceBody c={c} />
+          )}
           {b === "outstanding" && (
             <ForwardedBody c={c} onMarkPosted={onMarkPosted} />
           )}
@@ -1019,6 +1098,86 @@ function SecondaryRow({
         </div>
       )}
     </Card>
+  );
+}
+
+/**
+ * 277 lifecycle badge for a row in Awaiting Acceptance.
+ * Null = no 277 yet (just sent, in flight). Mirrors PrimarySubmitBoard's
+ * per-row 277 indicator so operators can spot rejects without expanding.
+ */
+function Row277Badge({ status }: { status: import("@/lib/claims/types").Status277 }) {
+  if (!status) {
+    return (
+      <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+        No 277 yet
+      </span>
+    );
+  }
+  const tone =
+    status === "Payer Accepted" ? "bg-success-soft text-success-soft-foreground" :
+    status === "Stedi Accepted" ? "bg-info-soft text-info-soft-foreground" :
+    "bg-destructive/10 text-destructive";
+  return (
+    <span className={cn("ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium", tone)}>
+      {status}
+    </span>
+  );
+}
+
+/**
+ * Expanded body for Awaiting Acceptance rows. Read-only — surfaces the
+ * 277 status, rejection reason (if any), and key submission timestamps
+ * so the operator can decide whether to resubmit or just keep waiting.
+ *
+ * No action buttons here on purpose: rejected rows route through the
+ * regular Resubmit flow on the primary board (the operator spawns a
+ * corrected secondary from the parent), and stale-Stedi-Accepted rows
+ * just need patience.
+ */
+function AwaitingAcceptanceBody({ c }: { c: SecClaim }) {
+  const status = c.status277 ?? null;
+  const isRejected = status === "Stedi Rejected" || status === "Payer Rejected";
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <span className="text-muted-foreground">277 status:</span>
+        <Row277Badge status={status} />
+        {c.primarySentDate && (
+          <span className="text-muted-foreground">
+            · Submitted: <span className="text-foreground tabular-nums">{fmt(c.primarySentDate)}</span>
+          </span>
+        )}
+        {c.payorId && (
+          <span className="text-muted-foreground">
+            · Trading partner: <span className="text-foreground tabular-nums">{c.payorId}</span>
+          </span>
+        )}
+      </div>
+      {isRejected && c.rejectionReason277 && (
+        <div className="rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs">
+          <div className="font-medium text-destructive">Rejection reason</div>
+          <div className="mt-1 whitespace-pre-wrap text-foreground">
+            {c.rejectionReason277}
+          </div>
+        </div>
+      )}
+      {!status && (
+        <p className="text-xs text-muted-foreground">
+          837 sent to Stedi. Waiting on the first 277 acknowledgement —
+          typically lands within minutes for Stedi-Accepted, longer for the
+          payer-side response. Row will graduate to Outstanding once the
+          payer accepts.
+        </p>
+      )}
+      {status === "Stedi Accepted" && (
+        <p className="text-xs text-muted-foreground">
+          Stedi accepted the claim and forwarded it to the payer. Waiting on
+          the payer's 277. Stale rows ({"≥"}48h since submission) get a yellow
+          pill on the tile so they don't get forgotten.
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -20,6 +20,20 @@ import type {
   SecondaryStatus,
   PrReason,
 } from "@/components/claims/SecondaryBoard";
+import type { Status277 } from "@/lib/claims/types";
+
+/** Mirror of allClaims.mapStatus277 — keeps the secondary 277 column
+ *  reader on the same vocabulary as primary, so the bucket logic in
+ *  SecondaryBoard.tsx can use the same Status277 type. */
+function mapStatus277(label: string): Status277 {
+  switch (label.trim()) {
+    case "Payer Accepted":  return "Payer Accepted";
+    case "Stedi Accepted":  return "Stedi Accepted";
+    case "Payer Rejected":  return "Payer Rejected";
+    case "Stedi Rejected":  return "Stedi Rejected";
+    default:                return null;
+  }
+}
 
 // ---------- column id reference (parent) ----------
 
@@ -89,6 +103,11 @@ const COL = {
   // Workflow
   SUBMISSION_TYPE: "color_mm3awg8g",
   SECONDARY_STATUS: "color_mm3a5yak",
+  // 277 lifecycle — duplicated from primary at board copy time so the
+  // column IDs are identical. Written by routes/stedi_webhook after the
+  // primary lookup falls through to the Secondary Board.
+  STATUS_277: "color_mm1z1pb2",
+  STATUS_277_REASON: "text_mm1zsp2x",
   // Payor Confirmed — Yes once the operator has reviewed in the Confirm
   // Payor tab. Forwarded crossovers auto-confirm at spawn.
   PAYOR_CONFIRMED: "color_mm3bhy6m",
@@ -469,6 +488,8 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
     primarySentDate: isoDateOrEmpty(txt(item, COL.CLAIM_SENT_DATE)) || undefined,
     primaryIcn: txt(item, COL.PRIMARY_CLAIM_ID),
     payorId: txt(item, COL.PAYOR_ID) || undefined,
+    status277: mapStatus277(txt(item, COL.STATUS_277)),
+    rejectionReason277: txt(item, COL.STATUS_277_REASON) || undefined,
     remaining,
     claimLevelDeductible: claimLevelDeductible || undefined,
     expectedCrossoverEra,
