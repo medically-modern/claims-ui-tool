@@ -46,7 +46,6 @@ import {
   carcPlaybookText, rarcPlaybookText, lookupDenialAnalysis,
   type PlaybookRowLike,
 } from "@/lib/claims/playbook";
-import { expectedDepositDate } from "@/lib/claims/expectedDeposit";
 import {
   verifyPlaybookCombo,
   isPlaybookApiConfigured,
@@ -1019,46 +1018,9 @@ const ClaimDetail = () => {
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                     EFT Date
                   </div>
-                  {/* Payer-specific deposit lag — Fidelis/Medicaid post +1
-                      business day after BPR16. We show the *expected*
-                      deposit date as the primary value and the raw BPR16
-                      as a tooltip so the operator can cross-check Stedi
-                      without leaving the page. expectedDepositDate
-                      returns identity when no rule matches. */}
-                  {(() => {
-                    const expected = expectedDepositDate(
-                      claim.bankEftDate,
-                      claim.primaryPayor,
-                    );
-                    if (!expected.date) {
-                      return <div className="mt-1 text-sm font-medium">—</div>;
-                    }
-                    if (!expected.shifted) {
-                      return (
-                        <div className="mt-1 text-sm font-medium">
-                          {fmtDate(expected.date)}
-                        </div>
-                      );
-                    }
-                    return (
-                      <TooltipProvider delayDuration={150}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div className="mt-1 cursor-help text-sm font-medium">
-                              {fmtDate(expected.date)}
-                              <span className="ml-1 text-[10px] text-muted-foreground">
-                                (expected)
-                              </span>
-                            </div>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom" className="max-w-xs text-xs">
-                            Payer-stated EFT: {expected.source ? fmtDate(expected.source) : "—"}.
-                            {" "}{expected.reason}.
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    );
-                  })()}
+                  <div className="mt-1 text-sm font-medium">
+                    {claim.bankEftDate ? fmtDate(claim.bankEftDate) : "—"}
+                  </div>
                 </div>
                 <div>
                   {/* Identifier the operator Ctrl+Fs for in Chase / TD.

@@ -40,14 +40,21 @@ export function isPureMedicaid(payer: string | null | undefined): boolean {
  * published cycle calendar (cycle 2543: end Wed 5/13/2026, check
  * release Wed 6/3/2026):
  *
- *   EFT date = cycle_end_Wednesday + 21 days
+ *   eMedNY-stated EFT date = cycle_end_Wednesday + 21 days
  *
  * where cycle_end_Wednesday is the next Wednesday ON OR AFTER the
  * submission date. Claims sent ON a Wednesday stay in THAT day's
  * cycle — they do not roll forward.
  *
- * Example: claim sent Wed 5/13 → cycle ends 5/13 → EFT Wed 6/3.
- * Example: claim sent Mon 5/18 → cycle ends Wed 5/20 → EFT Wed 6/10.
+ * EMPIRICAL ADJUSTMENT (Brandon, 2026-05-22): pure Medicaid actually
+ * deposits on THURSDAY, not the Wednesday eMedNY states. So we add a
+ * fixed +1 calendar day on top of the eMedNY formula. The +1 lands
+ * on Thursday (a business day) so no business-day skip needed.
+ *
+ * Example: claim sent Wed 5/13 → cycle ends 5/13 → eMedNY EFT Wed 6/3
+ *          → deposit Thu 6/4.
+ * Example: claim sent Mon 5/18 → cycle ends Wed 5/20 → eMedNY EFT Wed 6/10
+ *          → deposit Thu 6/11.
  *
  * Mirrors the backend _emedny_pay_date in services/claims_submission_
  * service.py — keep both in sync.
@@ -59,6 +66,9 @@ export function medicaidPaymentDate(sentDate: Date): Date {
   cycleEnd.setDate(cycleEnd.getDate() + daysUntilWed);
   const eft = new Date(cycleEnd);
   eft.setDate(eft.getDate() + 21);
+  // +1 to land on Thursday — the day money actually shows up in
+  // the bank, not the Wednesday eMedNY states.
+  eft.setDate(eft.getDate() + 1);
   return eft;
 }
 
