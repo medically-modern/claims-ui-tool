@@ -28,6 +28,7 @@ import {
 } from "@/api/markSecondaryPaid";
 import { confirmSecondaryPayor } from "@/api/confirmSecondaryPayor";
 import { setSecondaryText, SECONDARY_PARENT_COL } from "@/api/setSecondaryText";
+import { expectedDepositDate } from "@/lib/claims/expectedDeposit";
 import {
   submitSecondary as apiSubmitSecondary,
   isSubmitSecondaryConfigured,
@@ -2404,9 +2405,45 @@ function EraReviewBody({ c, onMarkPosted }: { c: SecClaim; onMarkPosted: () => v
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   EFT Date
                 </div>
-                <div className="mt-1 text-sm font-medium">
-                  {c.bankEftDate ? fmt(c.bankEftDate) : "—"}
-                </div>
+                {/* Per-payer deposit lag — Fidelis/Medicaid post +1 bd
+                    after BPR16. We match on the secondary payer (the
+                    payer that issued THIS ERA), falling back to primary
+                    if blank, since the BPR comes from whoever sent the
+                    835. See lib/claims/expectedDeposit. */}
+                {(() => {
+                  const expected = expectedDepositDate(
+                    c.bankEftDate,
+                    c.secondaryPayer || c.primaryPayor,
+                  );
+                  if (!expected.date) {
+                    return <div className="mt-1 text-sm font-medium">—</div>;
+                  }
+                  if (!expected.shifted) {
+                    return (
+                      <div className="mt-1 text-sm font-medium">
+                        {fmt(expected.date)}
+                      </div>
+                    );
+                  }
+                  return (
+                    <TooltipProvider delayDuration={150}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="mt-1 cursor-help text-sm font-medium">
+                            {fmt(expected.date)}
+                            <span className="ml-1 text-[10px] text-muted-foreground">
+                              (expected)
+                            </span>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="max-w-xs text-xs">
+                          Payer-stated EFT: {expected.source ? fmt(expected.source) : "—"}.
+                          {" "}{expected.reason}.
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  );
+                })()}
               </div>
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
