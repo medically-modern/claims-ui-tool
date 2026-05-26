@@ -843,14 +843,18 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
   }
 
   /**
-   * Confirm Payor — operator picks the final destination (Insurance vs
-   * Patient) for a freshly-spawned secondary. Writes Submission Type +
-   * Payor Confirmed = Yes on Monday in one batch. Row falls out of the
-   * Confirm bucket on the next refetch.
+   * Confirm Payor — operator picks the final destination (Insurance,
+   * Patient, or Waived) for a freshly-spawned secondary. Writes
+   * Submission Type + Payor Confirmed = Yes on Monday in one batch.
+   * Row falls out of the Confirm bucket on the next refetch.
+   *
+   * Waived path: operator decided not to collect (write-off, courtesy
+   * waiver). Backend stamps Secondary Status=Paid + Secondary Paid=0
+   * and moves the row to Paid And Closed in one step.
    */
   async function confirmPayor(
     c: SecClaim,
-    dest: "Insurance" | "Patient",
+    dest: "Insurance" | "Patient" | "Waived",
   ) {
     if (!c.mondayItemId) {
       toast({ title: "No Monday item id", description: c.patientName });
@@ -860,15 +864,19 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
     updateClaim(c.id, {
       payorConfirmed: true,
       status:
-        dest === "Insurance"
-          ? "Primary Paid - Submit Secondary"
-          : "Sent to Patient",
+        dest === "Insurance" ? "Primary Paid - Submit Secondary" :
+        dest === "Waived"    ? "Secondary Paid" :
+                                "Sent to Patient",
     });
     try {
       await confirmSecondaryPayor(c.mondayItemId, dest);
+      const description =
+        dest === "Insurance" ? `${c.patientName} → Submit to Insurance.` :
+        dest === "Waived"    ? `${c.patientName} → Payment waived, row closed.` :
+                                `${c.patientName} → Patient bucket.`;
       toast({
         title: `Confirmed: ${dest}`,
-        description: `${c.patientName} → ${dest === "Insurance" ? "Submit to Insurance" : "Patient bucket"}.`,
+        description,
       });
       void refetchSecondary();
     } catch (e) {
@@ -1042,7 +1050,7 @@ function SecondaryRow({
   onGenerateStatement: () => void;
   onMarkPatientPaid: () => void;
   onMarkPosted: () => void;
-  onConfirmPayor: (dest: "Insurance" | "Patient") => void;
+  onConfirmPayor: (dest: "Insurance" | "Patient" | "Waived") => void;
 }) {
   const b = bucketOf(c);
 
@@ -1652,7 +1660,7 @@ function ConfirmPayorBody({
   onConfirm,
 }: {
   c: SecClaim;
-  onConfirm: (dest: "Insurance" | "Patient") => void;
+  onConfirm: (dest: "Insurance" | "Patient" | "Waived") => void;
 }) {
   // Suggested destination — backend already classified at spawn. We use
   // c.secondaryPayer (the Monday status label set during spawn) to hint
@@ -1711,9 +1719,15 @@ function ConfirmPayorBody({
         </div>
       </div>
 
-      {/* Two big buttons — operator picks one. Suggested gets primary
-          emphasis; the other stays available as an outline button. */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+      {/* Three big buttons — operator picks one. Suggested gets the
+          emerald default emphasis; the other two stay as outlines.
+          Waive Payment is the operator-driven write-off path:
+          terminal-zero, used when there's no secondary insurance AND
+          we've decided not to bill the patient (courtesy waiver,
+          small balance, etc). Confirms via a dialog because it's a
+          destructive-ish action — sets Secondary Paid to $0 + closes
+          the row. */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <Button
           size="lg"
           className={cn(
@@ -1739,6 +1753,24 @@ function ConfirmPayorBody({
         >
           <UserRound className="mr-2 h-4 w-4" />
           Bill the Patient
+        </Button>
+        <Button
+          size="lg"
+          variant="outline"
+          onClick={() => {
+            const remaining = $(c.remaining);
+            if (
+              confirm(
+                `Waive ${remaining} for ${c.patientName}?\n\nThis closes the row at $0. ` +
+                "Use this when you're not collecting the balance (write-off, courtesy waiver, etc).",
+              )
+            ) {
+              onConfirm("Waived");
+            }
+          }}
+        >
+          <Ban className="mr-2 h-4 w-4" />
+          Waive Payment
         </Button>
       </div>
     </div>

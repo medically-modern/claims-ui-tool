@@ -1,12 +1,17 @@
-// Confirm Payor flow — operator picks Insurance or Patient as the
-// final destination for a freshly-spawned secondary item. Writes
-// Submission Type + Payor Confirmed AND moves the item to the right
-// Monday group so the visual board mirrors the workflow stage.
+// Confirm Payor flow — operator picks the final destination for a
+// freshly-spawned secondary item. Writes Submission Type + Payor
+// Confirmed AND moves the item to the right Monday group so the
+// visual board mirrors the workflow stage.
 //
 //   Insurance -> Submit Claim group (group_mkpehq9q)
 //                Operator submits the 837 from there.
 //   Patient   -> Send Invoice group (group_mm3ba7x1)
 //                Operator generates + sends the patient statement.
+//   Waived    -> Paid And Closed group (group_mkxsng4r)
+//                Operator decided not to collect (write-off, courtesy
+//                waiver, etc.). Status flips to Paid with $0 stamped
+//                in Secondary Paid so the row closes cleanly without
+//                affecting cash-flow expectations.
 //
 // Direct Monday write — no backend coordinator needed because no
 // cross-board state changes (Primary stays Partial, Subscription
@@ -15,8 +20,15 @@
 
 import { mondayQuery, SECONDARY_BOARD_ID } from "./monday";
 
-const SUBMIT_CLAIM_GROUP = "group_mkpehq9q";
-const SEND_INVOICE_GROUP = "group_mm3ba7x1";
+const SUBMIT_CLAIM_GROUP    = "group_mkpehq9q";
+const SEND_INVOICE_GROUP    = "group_mm3ba7x1";
+const PAID_AND_CLOSED_GROUP = "group_mkxsng4r";
+
+// Secondary Status label indices (verified on Monday 2026-05-26):
+//   7 = Paid
+// Writing by index instead of label so we don't accidentally create
+// a duplicate label (same lesson as the Review/Accepted rename).
+const SECONDARY_STATUS_PAID_INDEX = 7;
 
 const UPDATE_COLS_MUT = `
   mutation ConfirmPayorCols(
@@ -39,15 +51,28 @@ const MOVE_GROUP_MUT = `
   }
 `;
 
+export type ConfirmSecondaryDestination = "Insurance" | "Patient" | "Waived";
+
 export async function confirmSecondaryPayor(
   mondayItemId: string,
-  submissionType: "Insurance" | "Patient",
+  submissionType: ConfirmSecondaryDestination,
 ): Promise<void> {
-  // 1. Columns: Submission Type + Payor Confirmed.
-  const values = {
+  // Build the column patch. Insurance/Patient stamp Submission Type +
+  // Payor Confirmed. Waived ALSO stamps Secondary Status=Paid +
+  // Secondary Paid (A)=0 so the row is in a terminal state and the
+  // cash-flow analysis treats it as closed-zero rather than expected-
+  // future-inflow.
+  const values: Record<string, unknown> = {
     color_mm3awg8g: { label: submissionType },
     color_mm3bhy6m: { label: "Yes" },
   };
+  if (submissionType === "Waived") {
+    values["color_mm3a5yak"] = { index: SECONDARY_STATUS_PAID_INDEX };
+    // numeric_mm115q76 = Secondary Paid (A). Writing "0" explicitly
+    // rather than leaving null so the cashflow logic treats this as
+    // "settled at $0" not "no ERA yet".
+    values["numeric_mm115q76"] = "0";
+  }
   await mondayQuery(UPDATE_COLS_MUT, {
     itemId: mondayItemId,
     boardId: String(SECONDARY_BOARD_ID),
@@ -59,7 +84,9 @@ export async function confirmSecondaryPayor(
   // frontend will route correctly via bucketOf. The group move is
   // for the operator's Monday-side visual organization.
   const targetGroup =
-    submissionType === "Insurance" ? SUBMIT_CLAIM_GROUP : SEND_INVOICE_GROUP;
+    submissionType === "Insurance" ? SUBMIT_CLAIM_GROUP :
+    submissionType === "Waived"    ? PAID_AND_CLOSED_GROUP :
+                                     SEND_INVOICE_GROUP;
   try {
     await mondayQuery(MOVE_GROUP_MUT, {
       itemId: mondayItemId,
