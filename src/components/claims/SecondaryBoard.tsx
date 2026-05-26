@@ -823,10 +823,42 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
       toast({ title: "Couldn't update Monday", description: (e as Error).message });
     }
   }
-  const markPosted = (c: SecClaim) => {
+  /**
+   * Operator approves the secondary ERA and posts it. This is the
+   * mandatory review step before a row leaves the active queue. Writes
+   * to Monday in one call:
+   *   - Secondary Status -> "Paid" (replaces "Review" set on ERA arrival)
+   *   - Group move:
+   *       CHK payment method -> group_mm3qkck6 "Paid but need to EFT"
+   *       (operator still needs to enroll the payer for EFT)
+   *       Anything else      -> group_mkxsng4r "Paid And Closed"
+   *
+   * Optimistic local flip + refetch on success so the bucket transition
+   * is instant. If the Monday write fails, the optimistic flip rolls
+   * back via the next refetch (Monday is the source of truth).
+   */
+  async function markPosted(c: SecClaim) {
+    if (!c.mondayItemId) return;
+    const method = (c.bankPaymentMethod || "").trim().toUpperCase();
+    const isCheck = method === "CHK";
+    const groupId = isCheck ? "group_mm3qkck6" : "group_mkxsng4r";
     updateClaim(c.id, { status: "Secondary Paid" });
-    toast({ title: `Crossover posted: ${c.patientName}` });
-  };
+    try {
+      await setSecondaryStatusAndMove(c.mondayItemId, "Paid", groupId);
+      toast({
+        title: `Posted: ${c.patientName}`,
+        description: isCheck
+          ? "Moved to Paid but need to EFT — enroll payer for EFT next."
+          : "Moved to Paid And Closed.",
+      });
+      void refetchSecondary();
+    } catch (e) {
+      toast({
+        title: "Couldn't post on Monday",
+        description: (e as Error).message,
+      });
+    }
+  }
 
   /**
    * Confirm Payor — operator picks the final destination (Insurance vs
