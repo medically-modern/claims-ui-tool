@@ -529,16 +529,14 @@ function bucketOf(c: SecClaim): AnyBucket | null {
     return "awaiting";
   }
   if (c.status === "Primary Paid - Forwarded" || c.status === "Secondary Submitted") return "outstanding";
-  if (c.status === "Secondary ERA Received") {
-    // Split fully-paid ERAs (secondary covered the PR within $0.50)
-    // into their own bucket so the operator's ERA Review queue is
-    // only the rows that actually need a decision — partial pays,
-    // denials, discrepancies. Same tolerance the line-status logic
-    // uses elsewhere.
-    const paid = c.secondaryPaid ?? 0;
-    if (paid > 0 && paid >= c.remaining - 0.5) return "paid";
-    return "era";
-  }
+  // Any ERA-received row lands in the ERA Review bucket for operator
+  // sign-off. Even when the secondary covered the patient's remaining
+  // balance dollar-for-dollar, we still want a human eye on it (CARC/
+  // RARC codes, denial line items, bank reconciliation) before it's
+  // declared closed. Mark Posted moves it to "Secondary Paid" status,
+  // which is what bucketOf reads to route into the Paid bucket.
+  if (c.status === "Secondary ERA Received") return "era";
+  if (c.status === "Secondary Paid") return "paid";
   return null;
 }
 
