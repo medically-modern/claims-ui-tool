@@ -79,31 +79,23 @@ function daysBetween(isoFrom: string | null, isoTo: Date): number | null {
   return Math.max(0, Math.floor(ms / (24 * 60 * 60 * 1000)));
 }
 
-/** Translate Monday's underlying status string into the display label
- *  operators prefer (Approved → Accepted, Denied → Rejected). */
-function displayStatus(status: EftEnrollmentStatus): string {
-  if (status === "Approved") return "Accepted";
-  if (status === "Denied")   return "Rejected";
-  return status ?? "Not Started";
-}
-
 function StatusPill({ status }: { status: EftEnrollmentStatus }) {
-  const cfg =
-    status === "Approved"    ? { tone: "bg-emerald-100 text-emerald-800 border-emerald-200" } :
-    status === "Submitted"   ? { tone: "bg-amber-100 text-amber-800 border-amber-200" } :
-    status === "Denied"      ? { tone: "bg-rose-100 text-rose-800 border-rose-200" } :
-    status === "Not Started" ? { tone: "bg-muted text-muted-foreground border-border" } :
-                               { tone: "bg-muted text-muted-foreground border-border" };
+  const label = status ?? "Not Started";
+  const tone =
+    status === "Accepted"    ? "bg-emerald-100 text-emerald-800 border-emerald-200" :
+    status === "Submitted"   ? "bg-amber-100 text-amber-800 border-amber-200" :
+    status === "Rejected"    ? "bg-rose-100 text-rose-800 border-rose-200" :
+                               "bg-muted text-muted-foreground border-border";
   return (
-    <span className={cn("inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium", cfg.tone)}>
-      {displayStatus(status)}
+    <span className={cn("inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium", tone)}>
+      {label}
     </span>
   );
 }
 
 interface FilterState {
   search: string;
-  status: "all" | "not-started" | "submitted" | "approved" | "denied";
+  status: "all" | "not-started" | "submitted" | "accepted" | "rejected";
   board:  "all" | "primary" | "secondary";
   payer:  "all" | string;
 }
@@ -143,8 +135,8 @@ export function EftEnrollmentTable() {
         const want =
           filters.status === "not-started" ? "Not Started" :
           filters.status === "submitted"   ? "Submitted"   :
-          filters.status === "approved"    ? "Approved"    :
-                                              "Denied";
+          filters.status === "accepted"    ? "Accepted"    :
+                                              "Rejected";
         const have = r.enrollmentStatus ?? "Not Started";
         if (have !== want) return false;
       }
@@ -176,15 +168,15 @@ export function EftEnrollmentTable() {
   const stats = useMemo(() => {
     const all = rows ?? [];
     const byStatus = {
-      "Not Started": 0, "Submitted": 0, "Approved": 0, "Denied": 0,
+      "Not Started": 0, "Submitted": 0, "Accepted": 0, "Rejected": 0,
     } as Record<string, number>;
     for (const r of all) byStatus[r.enrollmentStatus ?? "Not Started"] += 1;
     return {
       total:      all.length,
       notStarted: byStatus["Not Started"],
       submitted:  byStatus["Submitted"],
-      approved:   byStatus["Approved"],   // displayed as "Accepted"
-      denied:     byStatus["Denied"],     // displayed as "Rejected"
+      accepted:   byStatus["Accepted"],
+      rejected:   byStatus["Rejected"],
     };
   }, [rows]);
 
@@ -259,13 +251,45 @@ export function EftEnrollmentTable() {
 
   return (
     <div className="space-y-4">
-      {/* Header tiles */}
+      {/* Header tiles — clicking a tile filters the table to that
+          bucket. Total clears the status filter; the other four set it
+          to the matching label. Active tile is highlighted. */}
       <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <StatTile label="Total" value={stats.total} tone="default" />
-        <StatTile label="Not Started" value={stats.notStarted} tone="muted" />
-        <StatTile label="Submitted" value={stats.submitted} tone="amber" />
-        <StatTile label="Accepted" value={stats.approved} tone="emerald" />
-        <StatTile label="Rejected" value={stats.denied} tone="rose" />
+        <StatTile
+          label="Total"
+          value={stats.total}
+          tone="default"
+          active={filters.status === "all"}
+          onClick={() => setFilters((f) => ({ ...f, status: "all" }))}
+        />
+        <StatTile
+          label="Not Started"
+          value={stats.notStarted}
+          tone="muted"
+          active={filters.status === "not-started"}
+          onClick={() => setFilters((f) => ({ ...f, status: "not-started" }))}
+        />
+        <StatTile
+          label="Submitted"
+          value={stats.submitted}
+          tone="amber"
+          active={filters.status === "submitted"}
+          onClick={() => setFilters((f) => ({ ...f, status: "submitted" }))}
+        />
+        <StatTile
+          label="Accepted"
+          value={stats.accepted}
+          tone="emerald"
+          active={filters.status === "accepted"}
+          onClick={() => setFilters((f) => ({ ...f, status: "accepted" }))}
+        />
+        <StatTile
+          label="Rejected"
+          value={stats.rejected}
+          tone="rose"
+          active={filters.status === "rejected"}
+          onClick={() => setFilters((f) => ({ ...f, status: "rejected" }))}
+        />
       </section>
 
       {/* Filters */}
@@ -292,8 +316,8 @@ export function EftEnrollmentTable() {
             <SelectItem value="all">All statuses</SelectItem>
             <SelectItem value="not-started">Not Started</SelectItem>
             <SelectItem value="submitted">Submitted</SelectItem>
-            <SelectItem value="approved">Accepted</SelectItem>
-            <SelectItem value="denied">Rejected</SelectItem>
+            <SelectItem value="accepted">Accepted</SelectItem>
+            <SelectItem value="rejected">Rejected</SelectItem>
           </SelectContent>
         </Select>
         <Select
@@ -605,11 +629,13 @@ function DetailField({
 }
 
 function StatTile({
-  label, value, tone,
+  label, value, tone, active, onClick,
 }: {
   label: string;
   value: number;
   tone: "default" | "muted" | "amber" | "emerald" | "rose";
+  active?: boolean;
+  onClick?: () => void;
 }) {
   const cls =
     tone === "amber"   ? "text-amber-700" :
@@ -618,11 +644,17 @@ function StatTile({
     tone === "muted"   ? "text-muted-foreground" :
                          "text-foreground";
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-        <div className={cn("mt-1 text-2xl font-semibold tabular-nums", cls)}>{value}</div>
-      </CardContent>
-    </Card>
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-lg border bg-card p-4 text-left transition-colors",
+        onClick && "hover:bg-accent cursor-pointer",
+        active && "ring-2 ring-primary",
+      )}
+    >
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className={cn("mt-1 text-2xl font-semibold tabular-nums", cls)}>{value}</div>
+    </button>
   );
 }

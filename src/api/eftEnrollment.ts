@@ -37,8 +37,8 @@ import { mondayQuery } from "./monday";
 export type EftEnrollmentStatus =
   | "Not Started"
   | "Submitted"
-  | "Approved"
-  | "Denied"
+  | "Accepted"
+  | "Rejected"
   | null;
 
 export interface EftEnrollmentRow {
@@ -169,9 +169,17 @@ function parseEnrollmentStatus(text: string): EftEnrollmentStatus {
   switch (text) {
     case "Not Started":
     case "Submitted":
-    case "Approved":
-    case "Denied":
+    case "Accepted":
+    case "Rejected":
       return text;
+    // Backwards-compat for any rows still carrying the original
+    // pre-rename labels. Brandon renamed both column label sets on
+    // 2026-05-26; any historical writes that landed before that point
+    // get normalized here so they bucket correctly.
+    case "Approved":
+      return "Accepted";
+    case "Denied":
+      return "Rejected";
     default:
       return null;
   }
