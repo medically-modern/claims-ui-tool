@@ -36,7 +36,7 @@ import {
 import {
   ArrowUpDown, Search, Send, ChevronDown, ChevronRight,
   ExternalLink, FileText, CheckCircle2, Clock, FileSearch, UserRound, Info,
-  Loader2,
+  Loader2, Ban,
 } from "lucide-react";
 
 export type SecondaryMode = "submit" | "review";
