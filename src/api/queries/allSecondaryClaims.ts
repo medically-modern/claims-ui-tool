@@ -261,9 +261,14 @@ function productFromHcpc(hcpc: string): string {
  * Decide which SecondaryStatus a row should occupy based on Monday columns.
  *
  * Priority order:
- *   1. Secondary ERA arrived (paid amount > 0 or ERA date set) -> ERA Review
- *   2. Monday Secondary Status maps to a terminal/late state -> use it
- *   3. Otherwise route by Submission Type when status is still "Submit"
+ *   1. Operator-terminal statuses (Paid, Patient Paid, Bad Debt) — once
+ *      the operator marks a row as one of these, respect it even when
+ *      there's an ERA's paid amount on the row. This is what keeps a
+ *      manually-posted row (e.g. paid via old clearinghouse) from
+ *      bouncing back into ERA Review on every refetch.
+ *   2. Secondary ERA arrived (paid amount > 0 or ERA date set) -> ERA Review
+ *   3. Monday Secondary Status maps to another in-flight state -> use it
+ *   4. Otherwise route by Submission Type when status is still "Submit"
  */
 function deriveStatus(
   submissionType: string,
@@ -272,6 +277,14 @@ function deriveStatus(
   rawEraDate: string,
   payorConfirmed: boolean,
 ): SecondaryStatus {
+  // Terminal operator-marked statuses win over the hasEra short-circuit.
+  // Without this, Asif/Brandy-style rows that the operator marked Paid
+  // after posting via an old clearinghouse keep showing up in ERA
+  // Review forever because they also have a Secondary Paid amount.
+  if (secondaryStatus === "Paid")        return "Secondary Paid";
+  if (secondaryStatus === "Patient Paid") return "Patient Paid";
+  if (secondaryStatus === "Bad Debt")    return "Bad Debt";
+
   const hasEra = secondaryPaidAmount > 0 || !!rawEraDate;
   if (hasEra) return "Secondary ERA Received";
 
