@@ -1,23 +1,23 @@
-// EFT Enrollment tracker — the 5th top-level tab on the Claims page.
+// EFT Enrollment tracker — 5th tab on the Claims page.
 //
 // Reads both Primary and Secondary Claims Boards filtered to rows where
-// Payer EFT'd? = "No" (i.e. paper-check ERAs the operator still needs
-// to enroll in EFT). Combined into one operator-friendly table grouped
-// by payer so high-volume payers stack together.
+// Payer EFT'd? = "No" (paper-check ERAs needing EFT enrollment). Merged
+// into one operator-friendly table grouped by payer.
 //
-// Per-row actions:
-//   Mark Submitted -> POST /admin/eft-enrollment/mark action=submitted
-//                     stamps EFT Submitted Date + status=Submitted
-//   Mark Approved  -> action=approved
-//                     status=Approved + Payer EFT'd?=Yes
-//                     (the /monday/eftd-flipped webhook then auto-moves
-//                      the row to Paid And Closed, so it falls off this
-//                      tracker on next refetch)
-//   Mark Denied    -> action=denied
-//                     status=Denied; row stays in tracker for retry
+// Layout (per Brandon, 2026-05-26):
+//   Compact row shows: chevron | Patient | Type | Payer | Paid | Status |
+//                      Submitted | Days
+//   Expanded drawer (toggled per row) shows: bank reconciliation details
+//                      (check #, deposit, trace, ORIG, BPR EFT date),
+//                      Action Context notes, and the three Mark buttons
+//                      Submitted / Accepted / Rejected.
 //
-// Inline notes editor saves to the existing Action Context column
-// (text_mm29v2ph) shared with the claim's other workflow notes.
+// Naming note: Monday's underlying labels are "Approved" / "Denied" at
+// indices 3 / 4. The UI here displays them as "Accepted" / "Rejected"
+// per the operator's preferred vocabulary. The backend action names
+// stay as "approved" / "denied" — same semantics, just display swap.
+// If Brandon ever wants Monday's column labels to match, rename them
+// in Monday UI directly (right-click column → Customize → labels).
 
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -39,6 +39,7 @@ import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
   CheckCircle2, Send, Ban, RefreshCw, Search, AlertCircle, Loader2,
+  ChevronDown, ChevronRight,
 } from "lucide-react";
 import {
   useEftEnrollmentRows,
@@ -53,6 +54,8 @@ import {
   type EftEnrollmentAction,
 } from "@/api/eftEnrollmentMark";
 import { setActionContextOnBoard } from "@/api/setActionContextBoardAware";
+
+// ── helpers ────────────────────────────────────────────────────────────────
 
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
@@ -76,16 +79,24 @@ function daysBetween(isoFrom: string | null, isoTo: Date): number | null {
   return Math.max(0, Math.floor(ms / (24 * 60 * 60 * 1000)));
 }
 
+/** Translate Monday's underlying status string into the display label
+ *  operators prefer (Approved → Accepted, Denied → Rejected). */
+function displayStatus(status: EftEnrollmentStatus): string {
+  if (status === "Approved") return "Accepted";
+  if (status === "Denied")   return "Rejected";
+  return status ?? "Not Started";
+}
+
 function StatusPill({ status }: { status: EftEnrollmentStatus }) {
   const cfg =
-    status === "Approved"   ? { tone: "bg-emerald-100 text-emerald-800 border-emerald-200", label: "Approved" } :
-    status === "Submitted"  ? { tone: "bg-amber-100 text-amber-800 border-amber-200",       label: "Submitted" } :
-    status === "Denied"     ? { tone: "bg-rose-100 text-rose-800 border-rose-200",          label: "Denied" } :
-    status === "Not Started"? { tone: "bg-muted text-muted-foreground border-border",       label: "Not Started" } :
-                              { tone: "bg-muted text-muted-foreground border-border",       label: "—" };
+    status === "Approved"    ? { tone: "bg-emerald-100 text-emerald-800 border-emerald-200" } :
+    status === "Submitted"   ? { tone: "bg-amber-100 text-amber-800 border-amber-200" } :
+    status === "Denied"      ? { tone: "bg-rose-100 text-rose-800 border-rose-200" } :
+    status === "Not Started" ? { tone: "bg-muted text-muted-foreground border-border" } :
+                               { tone: "bg-muted text-muted-foreground border-border" };
   return (
     <span className={cn("inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium", cfg.tone)}>
-      {cfg.label}
+      {displayStatus(status)}
     </span>
   );
 }
@@ -104,16 +115,18 @@ const INITIAL_FILTERS: FilterState = {
   payer:  "all",
 };
 
+// ── component ──────────────────────────────────────────────────────────────
+
 export function EftEnrollmentTable() {
   const qc = useQueryClient();
   const { data: rows, isLoading, isFetching, refetch, error } = useEftEnrollmentRows();
   const today = useMemo(() => new Date(), []);
 
   const [filters, setFilters] = useState<FilterState>(INITIAL_FILTERS);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [actionBusy, setActionBusy] = useState<Record<string, EftEnrollmentAction | null>>({});
   const [notesDraft, setNotesDraft] = useState<Record<string, string>>({});
 
-  // Distinct payer list for the filter dropdown.
   const payerOptions = useMemo(() => {
     const set = new Set<string>();
     for (const r of rows ?? []) {
@@ -122,7 +135,6 @@ export function EftEnrollmentTable() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [rows]);
 
-  // Filter pipeline.
   const visible = useMemo(() => {
     const list = (rows ?? []).filter((r) => {
       if (filters.board !== "all" && r.board !== filters.board) return false;
@@ -146,7 +158,6 @@ export function EftEnrollmentTable() {
       }
       return true;
     });
-    // Group by payer, then by patient within a payer for stable ordering.
     list.sort((a, b) => {
       if (a.payer !== b.payer) return a.payer.localeCompare(b.payer);
       return a.patientName.localeCompare(b.patientName);
@@ -154,8 +165,6 @@ export function EftEnrollmentTable() {
     return list;
   }, [rows, filters]);
 
-  // Same-payer counts surfaced as a small badge so the operator can see
-  // "this payer has N rows waiting, prioritize."
   const payerCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of rows ?? []) {
@@ -164,7 +173,6 @@ export function EftEnrollmentTable() {
     return m;
   }, [rows]);
 
-  // Stats above the table.
   const stats = useMemo(() => {
     const all = rows ?? [];
     const byStatus = {
@@ -175,8 +183,8 @@ export function EftEnrollmentTable() {
       total:      all.length,
       notStarted: byStatus["Not Started"],
       submitted:  byStatus["Submitted"],
-      approved:   byStatus["Approved"],
-      denied:     byStatus["Denied"],
+      approved:   byStatus["Approved"],   // displayed as "Accepted"
+      denied:     byStatus["Denied"],     // displayed as "Rejected"
     };
   }, [rows]);
 
@@ -191,20 +199,23 @@ export function EftEnrollmentTable() {
     setActionBusy((p) => ({ ...p, [row.itemId]: action }));
     try {
       await markEftEnrollment(row.itemId, row.board, action);
+      const verb =
+        action === "submitted" ? "Submitted" :
+        action === "approved"  ? "Accepted"  :
+                                 "Rejected";
       toast({
-        title: `${row.patientName} → ${action[0].toUpperCase()}${action.slice(1)}`,
+        title: `${row.patientName} → ${verb}`,
         description:
           action === "submitted" ? "Enrollment submission date stamped." :
-          action === "approved"  ? "Marked approved — row will move to Paid And Closed." :
-                                   "Marked denied — try again with a different contact.",
+          action === "approved"  ? "Marked accepted — row will move to Paid And Closed." :
+                                   "Marked rejected — retry with a different contact.",
       });
       await qc.invalidateQueries({ queryKey: EFT_ENROLLMENT_QUERY_KEY });
     } catch (e) {
       const status = e instanceof EftEnrollmentMarkError ? e.status : undefined;
       toast({
-        title: `Couldn't ${action} ${row.patientName}`,
+        title: `Couldn't update ${row.patientName}`,
         description: (e as Error).message,
-        // 400 = operator-fixable; surface the backend detail
         duration: status === 400 ? 12_000 : 6_000,
       });
     } finally {
@@ -214,8 +225,8 @@ export function EftEnrollmentTable() {
 
   async function saveNotes(row: EftEnrollmentRow) {
     const draft = notesDraft[row.itemId];
-    if (draft == null) return; // never edited
-    if (draft === row.notes) return; // no change
+    if (draft == null) return;
+    if (draft === row.notes) return;
     try {
       await setActionContextOnBoard(row.itemId, row.board, draft);
       toast({ title: "Notes saved", description: row.patientName });
@@ -226,6 +237,10 @@ export function EftEnrollmentTable() {
         description: (e as Error).message,
       });
     }
+  }
+
+  function toggle(id: string) {
+    setExpanded((p) => ({ ...p, [id]: !p[id] }));
   }
 
   if (error) {
@@ -249,8 +264,8 @@ export function EftEnrollmentTable() {
         <StatTile label="Total" value={stats.total} tone="default" />
         <StatTile label="Not Started" value={stats.notStarted} tone="muted" />
         <StatTile label="Submitted" value={stats.submitted} tone="amber" />
-        <StatTile label="Approved" value={stats.approved} tone="emerald" />
-        <StatTile label="Denied" value={stats.denied} tone="rose" />
+        <StatTile label="Accepted" value={stats.approved} tone="emerald" />
+        <StatTile label="Rejected" value={stats.denied} tone="rose" />
       </section>
 
       {/* Filters */}
@@ -277,8 +292,8 @@ export function EftEnrollmentTable() {
             <SelectItem value="all">All statuses</SelectItem>
             <SelectItem value="not-started">Not Started</SelectItem>
             <SelectItem value="submitted">Submitted</SelectItem>
-            <SelectItem value="approved">Approved</SelectItem>
-            <SelectItem value="denied">Denied</SelectItem>
+            <SelectItem value="approved">Accepted</SelectItem>
+            <SelectItem value="denied">Rejected</SelectItem>
           </SelectContent>
         </Select>
         <Select
@@ -332,32 +347,27 @@ export function EftEnrollmentTable() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-8" />
                   <TableHead className="min-w-[180px]">Patient</TableHead>
                   <TableHead>Type</TableHead>
-                  <TableHead className="min-w-[180px]">Payer</TableHead>
+                  <TableHead className="min-w-[220px]">Payer</TableHead>
                   <TableHead>Paid</TableHead>
-                  <TableHead>Check #</TableHead>
-                  <TableHead className="text-right">Deposit</TableHead>
-                  <TableHead>Trace # / Originator</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Submitted</TableHead>
                   <TableHead>Days</TableHead>
-                  <TableHead className="min-w-[220px]">Notes</TableHead>
-                  <TableHead className="min-w-[260px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={12} className="py-10 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
                       Loading…
                     </TableCell>
                   </TableRow>
                 ) : visible.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={12} className="py-10 text-center text-sm text-muted-foreground">
-                      No rows match the filters. Either you've enrolled every payer, or
-                      adjust the filters above.
+                    <TableCell colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
+                      No rows match the filters.
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -366,117 +376,26 @@ export function EftEnrollmentTable() {
                     const newPayer = !prev || prev.payer !== row.payer;
                     const days = daysBetween(row.submittedDate, today);
                     const sameCount = payerCounts.get(row.payer) ?? 0;
+                    const isOpen = !!expanded[row.itemId];
                     const busy = actionBusy[row.itemId] ?? null;
-                    const noteValue = notesDraft[row.itemId] ?? row.notes;
                     return (
-                      <TableRow
+                      <Row
                         key={row.itemId}
-                        className={cn(newPayer && idx > 0 && "border-t-4 border-t-border")}
-                      >
-                        <TableCell className="font-medium">{row.patientName}</TableCell>
-                        <TableCell>
-                          <Badge variant={row.board === "primary" ? "default" : "secondary"}>
-                            {row.board === "primary" ? "Primary" : "Secondary"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-sm">{row.payer || "—"}</span>
-                            {newPayer && sameCount > 1 && (
-                              <span className="text-[10px] text-muted-foreground">
-                                {sameCount} rows for this payer
-                              </span>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-xs tabular-nums">{fmtDate(row.paidDate)}</TableCell>
-                        <TableCell className="font-mono text-xs">{row.checkNumber || "—"}</TableCell>
-                        <TableCell className="text-right text-xs tabular-nums">
-                          {fmtMoney(row.bankDepositTotal)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col gap-0.5 font-mono text-[10px] leading-tight">
-                            {row.bankTraceNumber && <span>TRN {row.bankTraceNumber}</span>}
-                            {row.bankPayerOriginatorId && <span>ORIG {row.bankPayerOriginatorId}</span>}
-                            {!row.bankTraceNumber && !row.bankPayerOriginatorId && <span>—</span>}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <StatusPill status={row.enrollmentStatus} />
-                        </TableCell>
-                        <TableCell className="text-xs tabular-nums">{fmtDate(row.submittedDate)}</TableCell>
-                        <TableCell className="text-xs tabular-nums">
-                          {days != null ? (
-                            <TooltipProvider delayDuration={150}>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className={cn(
-                                    "cursor-help",
-                                    days >= 30 && "text-destructive font-medium",
-                                    days >= 14 && days < 30 && "text-amber-700 font-medium",
-                                  )}>
-                                    {days}d
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="text-xs">
-                                  Days since EFT enrollment was submitted.
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          ) : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <Textarea
-                            value={noteValue}
-                            onChange={(e) =>
-                              setNotesDraft((p) => ({ ...p, [row.itemId]: e.target.value }))
-                            }
-                            onBlur={() => void saveNotes(row)}
-                            placeholder="Notes (saves on blur)"
-                            className="min-h-[60px] text-xs"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={busy != null}
-                              onClick={() => void runAction(row, "submitted")}
-                              className="h-7 text-xs"
-                            >
-                              {busy === "submitted"
-                                ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                                : <Send className="mr-1 h-3 w-3" />}
-                              Submitted
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={busy != null}
-                              onClick={() => void runAction(row, "approved")}
-                              className="h-7 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 text-xs"
-                            >
-                              {busy === "approved"
-                                ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                                : <CheckCircle2 className="mr-1 h-3 w-3" />}
-                              Approved
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={busy != null}
-                              onClick={() => void runAction(row, "denied")}
-                              className="h-7 bg-rose-50 text-rose-800 hover:bg-rose-100 text-xs"
-                            >
-                              {busy === "denied"
-                                ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                                : <Ban className="mr-1 h-3 w-3" />}
-                              Denied
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
+                        row={row}
+                        newPayer={newPayer}
+                        firstOfList={idx === 0}
+                        sameCount={sameCount}
+                        days={days}
+                        isOpen={isOpen}
+                        busy={busy}
+                        notesDraft={notesDraft[row.itemId]}
+                        onToggle={() => toggle(row.itemId)}
+                        onAction={(a) => void runAction(row, a)}
+                        onNotesChange={(v) =>
+                          setNotesDraft((p) => ({ ...p, [row.itemId]: v }))
+                        }
+                        onNotesBlur={() => void saveNotes(row)}
+                      />
                     );
                   })
                 )}
@@ -485,6 +404,202 @@ export function EftEnrollmentTable() {
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ── Row + Drawer ───────────────────────────────────────────────────────────
+
+function Row({
+  row, newPayer, firstOfList, sameCount, days, isOpen, busy, notesDraft,
+  onToggle, onAction, onNotesChange, onNotesBlur,
+}: {
+  row: EftEnrollmentRow;
+  newPayer: boolean;
+  firstOfList: boolean;
+  sameCount: number;
+  days: number | null;
+  isOpen: boolean;
+  busy: EftEnrollmentAction | null;
+  notesDraft: string | undefined;
+  onToggle: () => void;
+  onAction: (a: EftEnrollmentAction) => void;
+  onNotesChange: (v: string) => void;
+  onNotesBlur: () => void;
+}) {
+  return (
+    <>
+      <TableRow
+        className={cn(
+          newPayer && !firstOfList && "border-t-4 border-t-border",
+          "cursor-pointer hover:bg-muted/30",
+        )}
+        onClick={onToggle}
+      >
+        <TableCell className="w-8 pr-0">
+          {isOpen
+            ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+        </TableCell>
+        <TableCell className="font-medium">{row.patientName}</TableCell>
+        <TableCell>
+          <Badge variant={row.board === "primary" ? "default" : "secondary"}>
+            {row.board === "primary" ? "Primary" : "Secondary"}
+          </Badge>
+        </TableCell>
+        <TableCell>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm">{row.payer || "—"}</span>
+            {newPayer && sameCount > 1 && (
+              <span className="text-[10px] text-muted-foreground">
+                {sameCount} rows for this payer
+              </span>
+            )}
+          </div>
+        </TableCell>
+        <TableCell className="text-xs tabular-nums">{fmtDate(row.paidDate)}</TableCell>
+        <TableCell>
+          <StatusPill status={row.enrollmentStatus} />
+        </TableCell>
+        <TableCell className="text-xs tabular-nums">{fmtDate(row.submittedDate)}</TableCell>
+        <TableCell className="text-xs tabular-nums">
+          {days != null ? (
+            <TooltipProvider delayDuration={150}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className={cn(
+                    "cursor-help",
+                    days >= 30 && "text-destructive font-medium",
+                    days >= 14 && days < 30 && "text-amber-700 font-medium",
+                  )}>
+                    {days}d
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  Days since EFT enrollment was submitted.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          ) : "—"}
+        </TableCell>
+      </TableRow>
+      {isOpen && (
+        <TableRow className="bg-muted/10">
+          <TableCell />
+          <TableCell colSpan={7} className="px-4 py-4">
+            <Drawer
+              row={row}
+              busy={busy}
+              notesDraft={notesDraft}
+              onAction={onAction}
+              onNotesChange={onNotesChange}
+              onNotesBlur={onNotesBlur}
+            />
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  );
+}
+
+function Drawer({
+  row, busy, notesDraft, onAction, onNotesChange, onNotesBlur,
+}: {
+  row: EftEnrollmentRow;
+  busy: EftEnrollmentAction | null;
+  notesDraft: string | undefined;
+  onAction: (a: EftEnrollmentAction) => void;
+  onNotesChange: (v: string) => void;
+  onNotesBlur: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      {/* Bank info — what the operator needs when calling the payer or
+          filling out the EFT enrollment form. */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <DetailField label="Check #" value={row.checkNumber} mono />
+        <DetailField label="Deposit Total" value={fmtMoney(row.bankDepositTotal)} mono />
+        <DetailField label="Trace # (TRN)" value={row.bankTraceNumber} mono />
+        <DetailField label="Payer Originator ID" value={row.bankPayerOriginatorId} mono />
+        <DetailField label="BPR EFT Date" value={fmtDate(row.bankEftDate)} />
+      </div>
+
+      {/* Notes — re-uses the existing Action Context column on both
+          boards. Saves on blur so the operator can switch rows
+          without losing edits. */}
+      <div>
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Notes
+        </div>
+        <Textarea
+          value={notesDraft ?? row.notes}
+          onChange={(e) => onNotesChange(e.target.value)}
+          onBlur={onNotesBlur}
+          placeholder="Add notes — payer rep name, ref #, retry reason… (saves on blur)"
+          className="mt-1 min-h-[80px] text-xs"
+        />
+      </div>
+
+      {/* Actions. Buttons are Submitted / Accepted / Rejected per
+          Brandon's preferred vocabulary. Backend action names stay
+          submitted / approved / denied. */}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy != null}
+          onClick={() => onAction("submitted")}
+          className="h-8"
+        >
+          {busy === "submitted"
+            ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            : <Send className="mr-1 h-3.5 w-3.5" />}
+          Mark Submitted
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy != null}
+          onClick={() => onAction("approved")}
+          className="h-8 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+        >
+          {busy === "approved"
+            ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            : <CheckCircle2 className="mr-1 h-3.5 w-3.5" />}
+          Mark Accepted
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy != null}
+          onClick={() => onAction("denied")}
+          className="h-8 bg-rose-50 text-rose-800 hover:bg-rose-100"
+        >
+          {busy === "denied"
+            ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            : <Ban className="mr-1 h-3.5 w-3.5" />}
+          Mark Rejected
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function DetailField({
+  label, value, mono,
+}: {
+  label: string;
+  value: string | null | undefined;
+  mono?: boolean;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className={cn("mt-1 text-sm", mono && "font-mono")}>
+        {value || "—"}
+      </div>
     </div>
   );
 }
