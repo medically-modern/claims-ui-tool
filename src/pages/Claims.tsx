@@ -56,6 +56,7 @@ import {
 } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
 import { sendToDenial, isSendToDenialConfigured, SendToDenialError } from "@/api/sendToDenial";
+import { snoozeLateEra, isSnoozeLateEraConfigured, SnoozeLateEraError } from "@/api/snoozeLateEra";
 import {
   AlertTriangle, ArrowRight, Check, Clock, FileJson, FileSearch, MoreHorizontal, RefreshCw, Search, Send, Wallet, XCircle,
 } from "lucide-react";
@@ -290,11 +291,12 @@ function inLateEra(c: Claim) {
   // Parents with children fall out — the child is the active claim, the
   // parent is historical lineage only.
   //
-  // Snoozed claims also fall out: when the operator hits "Uploaded Docs"
-  // on a Late ERA row, the backend stamps Late Action Date = today + 14d
-  // and the row should drop out of the bucket until that date elapses.
+  // Snoozed claims STAY in the bucket. The Late ERA view splits them
+  // into a "Snoozed" sub-tab (see lateSubTab) so the operator can see
+  // which rows they've already checked vs which need action now. The
+  // snooze window is shared with the Uploaded Docs flow — both reasons
+  // push Late Action Date forward and land the row in the Snoozed tab.
   if (c.hasChildren) return false;
-  if (isLateEraSnoozed(c)) return false;
   const age = claimAge(c) ?? 0;
   const excluded = ["Paid", "Denied (Or Partly)", "Bad Debt", "Request Rejected"];
   return Boolean(c.claimSentDate) && !eraReceived(c)
@@ -449,6 +451,13 @@ const Claims = () => {
   const [board, setBoard] = useState<BoardKey>("primary");
   const [mode, setMode] = useState<ModeKey>("review");
   const [category, setCategory] = useState<CategoryKey>("era");
+  // Sub-tab within the Late ERA bucket. "check" = needs an active claim
+  // status check (lateActionDate null or in the past). "snoozed" = the
+  // operator already checked it (or uploaded docs) and pushed the
+  // next-check date forward; row sits here until that date elapses.
+  // Snoozed rows return to "check" automatically once today >= the
+  // snooze date — no Monday write required for the transition.
+  const [lateSubTab, setLateSubTab] = useState<"check" | "snoozed">("check");
   const [search, setSearch] = useState("");
   const [payerFilter, setPayerFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -642,6 +651,40 @@ const Claims = () => {
   // the Subscription Board's Primary Claim Paid? column to Denied (when
   // every line paid $0) or Partial (at least one line paid > 0).
   // Tracks the in-flight row so the icon can disable while writing.
+  // Tracks per-row in-flight Keep Outstanding presses. Mirrors
+  // sendDenialBusy below — same map shape, same disabled+opacity pattern
+  // on the button. Cleared in the finally block whether the snooze
+  // landed or threw.
+  const [keepOutstandingBusy, setKeepOutstandingBusy] =
+    useState<Record<string, boolean>>({});
+
+  async function keepOutstandingForRow(c: Claim) {
+    if (keepOutstandingBusy[c.id]) return;
+    if (!isSnoozeLateEraConfigured()) {
+      toast({
+        title: "Keep Outstanding not configured",
+        description: "VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+      });
+      return;
+    }
+    setKeepOutstandingBusy((p) => ({ ...p, [c.id]: true }));
+    try {
+      const res = await snoozeLateEra(c.mondayItemId);
+      toast({
+        title: `Kept Outstanding: ${c.patientName}`,
+        description:
+          `Snoozed until ${res.snoozed_until} (10 days). ` +
+          `Returns to Check Status automatically.`,
+      });
+      void refetchClaims();
+    } catch (e) {
+      const msg = e instanceof SnoozeLateEraError ? e.message : (e as Error).message;
+      toast({ title: "Couldn't snooze row", description: msg });
+    } finally {
+      setKeepOutstandingBusy((p) => ({ ...p, [c.id]: false }));
+    }
+  }
+
   const [sendDenialBusy, setSendDenialBusy] = useState<Record<string, boolean>>({});
   async function sendToDenialForRow(c: Claim) {
     if (sendDenialBusy[c.id]) return;
@@ -758,8 +801,16 @@ const Claims = () => {
 
   const lateEraStats = useMemo(() => {
     const list = MOCK_CLAIMS.filter(inLateEra);
+    // Sub-bucket counts — the Late ERA tile lines now surface these so
+    // the operator can see at a glance how many of the bucket are
+    // actively awaiting a status check vs how many are snoozed pending
+    // a previously-confirmed wait.
+    const snoozed = list.filter(isLateEraSnoozed);
+    const check = list.filter((c) => !isLateEraSnoozed(c));
     return {
       count: list.length,
+      checkCount: check.length,
+      snoozedCount: snoozed.length,
       over30: list.filter((c) => (claimAge(c) ?? 0) >= 30).length,
       between20and30: list.filter((c) => {
         const a = claimAge(c) ?? 0;
@@ -825,6 +876,15 @@ const Claims = () => {
 
   const rows = useMemo(() => {
     const filtered = MOCK_CLAIMS.filter(CATEGORY_FILTERS[category])
+      // Late ERA sub-tab split. Snoozed = lateActionDate in the future
+      // (an Uploaded Docs press OR a Keep Outstanding press pushed it).
+      // Check Status = everything else in the bucket.
+      .filter((c) => {
+        if (category !== "late") return true;
+        return lateSubTab === "snoozed"
+          ? isLateEraSnoozed(c)
+          : !isLateEraSnoozed(c);
+      })
       .filter((c) => {
         if (payerFilter !== "all" && c.primaryPayor !== payerFilter) return false;
         if (statusFilter !== "all" && c.primaryStatus !== statusFilter) return false;
@@ -848,7 +908,7 @@ const Claims = () => {
       return [...filtered].sort((a, b) => compareRows(a, b, col, sort.dir));
     }
     return filtered;
-  }, [MOCK_CLAIMS, category, search, payerFilter, statusFilter, sort]);
+  }, [MOCK_CLAIMS, category, lateSubTab, search, payerFilter, statusFilter, sort]);
 
   const columns = CATEGORY_COLUMNS[category];
 
@@ -940,8 +1000,9 @@ const Claims = () => {
                 label="Late ERAs"
                 value={String(lateEraStats.count)}
                 lines={[
+                  { label: "Check Status", value: String(lateEraStats.checkCount) },
+                  { label: "Snoozed", value: String(lateEraStats.snoozedCount) },
                   { label: "≥ 30 days", value: String(lateEraStats.over30) },
-                  { label: "20–30 days", value: String(lateEraStats.between20and30) },
                   { label: "Est. pay", value: fmtMoney0(lateEraStats.estPay) },
                 ]}
               />
@@ -1030,6 +1091,39 @@ const Claims = () => {
                 </Select>
               </CardContent>
             </Card>
+
+            {/* Late ERA sub-tabs — Check Status vs Snoozed. Only shown when
+                viewing the Late ERA bucket. "Check Status" surfaces rows that
+                need an active claim status check (or where the snooze window
+                already elapsed). "Snoozed" surfaces rows where the operator
+                already pressed Keep Outstanding (or Uploaded Docs) — those
+                sit here until Late Action Date passes, then return to Check
+                Status automatically. */}
+            {category === "late" && (
+              <div className="flex items-center gap-2">
+                <Tabs value={lateSubTab} onValueChange={(v) => setLateSubTab(v as "check" | "snoozed")}>
+                  <TabsList className="bg-card border">
+                    <TabsTrigger value="check">
+                      Check Status
+                      <span className="ml-2 rounded bg-warning-soft px-1.5 py-0.5 text-xs font-medium text-warning-soft-foreground">
+                        {lateEraStats.checkCount}
+                      </span>
+                    </TabsTrigger>
+                    <TabsTrigger value="snoozed">
+                      Snoozed
+                      <span className="ml-2 rounded bg-info-soft px-1.5 py-0.5 text-xs font-medium text-info-soft-foreground">
+                        {lateEraStats.snoozedCount}
+                      </span>
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+                <p className="text-xs text-muted-foreground">
+                  {lateSubTab === "snoozed"
+                    ? "Already checked — waiting for next check date."
+                    : "Need an active claim status check."}
+                </p>
+              </div>
+            )}
 
             {/* Table */}
             <Card>
@@ -1186,7 +1280,7 @@ const Claims = () => {
                                         {isLateEraSnoozed(c) && (
                                           <div className="mt-1">
                                             <StatusBadge tone="warning">
-                                              Docs sent — returns to Late ERA on {fmtDate(c.lateActionDate ?? "")}
+                                              Snoozed — next check on {fmtDate(c.lateActionDate ?? "")}
                                             </StatusBadge>
                                           </div>
                                         )}
@@ -1290,15 +1384,23 @@ const Claims = () => {
                                         {result ? (
                                           (() => {
                                             const meta = STATUS_CHECK_META[result.status];
+                                            // Wired to snoozeLateEra. Pushes Late Action Date
+                                            // to today + 10 calendar days so the row drops
+                                            // into the Snoozed sub-tab. Idempotent — pressing
+                                            // again while already snoozed resets the 10 days
+                                            // from the new click. Busy spinner mirrors the
+                                            // denialBtn pattern below.
                                             const keepBtn = (
                                               <Tooltip key="keep">
                                                 <TooltipTrigger asChild>
                                                   <button
                                                     type="button"
                                                     aria-label="Keep Outstanding"
-                                                    onClick={() => toast({ title: "Kept Outstanding", description: c.patientName })}
+                                                    disabled={!!keepOutstandingBusy[c.id]}
+                                                    onClick={() => void keepOutstandingForRow(c)}
                                                     className={cn(
                                                       "grid h-9 w-9 place-items-center rounded-md transition-colors shadow-sm",
+                                                      keepOutstandingBusy[c.id] && "opacity-60 cursor-wait",
                                                       meta.recommend === "keep"
                                                         ? "bg-info-soft text-info-soft-foreground hover:bg-info hover:text-info-foreground"
                                                         : "bg-muted text-muted-foreground hover:bg-info-soft hover:text-info-soft-foreground",
