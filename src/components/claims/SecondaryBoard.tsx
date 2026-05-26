@@ -57,7 +57,7 @@ export type SecondaryStatus =
   | "Bad Debt";
 
 type SubmitBucket = "confirm" | "insurance" | "patient" | "awaiting";
-type ReviewBucket = "outstanding" | "era" | "paid";
+type ReviewBucket = "outstanding" | "era" | "needsEft" | "paid";
 type AnyBucket = SubmitBucket | ReviewBucket;
 
 export type PrReason = "Deductible" | "Coinsurance" | "Copay" | "Non-covered service" | "Bad debt (write off)";
@@ -535,7 +535,15 @@ function bucketOf(c: SecClaim): AnyBucket | null {
   // RARC codes, denial line items, bank reconciliation) before it's
   // declared closed. Mark Posted moves it to "Secondary Paid" status,
   // which is what bucketOf reads to route into the Paid bucket.
-  if (c.status === "Secondary ERA Received") return "era";
+  if (c.status === "Secondary ERA Received") {
+    // CHK-paid ERAs route to their own bucket so the operator can chase
+    // EFT enrollment for the payer going forward. Money already arrived
+    // via paper check; the work is enrollment follow-up, not posting.
+    // Mirrored on the Monday side via group_mm3qkck6 ("Paid but need
+    // to EFT") populated by services/secondary_era_writeback.
+    if ((c.bankPaymentMethod || "").toUpperCase() === "CHK") return "needsEft";
+    return "era";
+  }
   if (c.status === "Secondary Paid") return "paid";
   return null;
 }
@@ -552,6 +560,12 @@ const BUCKET_META: Record<AnyBucket, { label: string; icon: React.ReactNode; ton
   },
   outstanding: { label: "Outstanding",      icon: <Clock className="h-4 w-4" />,     tone: "text-info-soft-foreground" },
   era:         { label: "ERA Review",       icon: <FileSearch className="h-4 w-4" />, tone: "text-info-soft-foreground" },
+  needsEft:    {
+    label: "Paid but need to EFT",
+    icon: <FileText className="h-4 w-4" />,
+    tone: "text-warning-soft-foreground",
+    description: "Secondary paid by paper check. Money arrived; the to-do here is enrolling the payer for EFT so future remits land electronically. Marking Posted moves the row to Paid.",
+  },
   paid:        { label: "Paid",             icon: <CheckCircle2 className="h-4 w-4" />, tone: "text-success-soft-foreground" },
 };
 
@@ -561,7 +575,11 @@ const MODE_BUCKETS: Record<SecondaryMode, AnyBucket[]> = {
   // been 837'd and is in 277 limbo — same mental cohort as "things I
   // just submitted, watching the response."
   submit: ["confirm", "insurance", "patient", "awaiting"],
-  review: ["outstanding", "era", "paid"],
+  // Review-mode buckets in order of operator attention:
+  // Outstanding (waiting for ERA) -> ERA Review (just landed,
+  // electronic) -> Paid but need to EFT (just landed, paper check) ->
+  // Paid (operator has signed off).
+  review: ["outstanding", "era", "needsEft", "paid"],
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -603,7 +621,7 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const counts = useMemo(() => {
-    const out: Record<AnyBucket, number> = { confirm: 0, insurance: 0, patient: 0, awaiting: 0, outstanding: 0, era: 0, paid: 0 };
+    const out: Record<AnyBucket, number> = { confirm: 0, insurance: 0, patient: 0, awaiting: 0, outstanding: 0, era: 0, needsEft: 0, paid: 0 };
     for (const c of claims) {
       const b = bucketOf(c);
       if (b) out[b] += 1;
@@ -1095,6 +1113,13 @@ function SecondaryRow({
             <ForwardedBody c={c} onMarkPosted={onMarkPosted} />
           )}
           {b === "era" && (
+            <EraReviewBody c={c} onMarkPosted={onMarkPosted} />
+          )}
+          {b === "needsEft" && (
+            // Same review body as ERA — operator still needs to see line
+            // items + bank info — but the action affordance is unchanged
+            // since Mark Posted moves it to Paid the same way. The bucket
+            // label itself signals "go enroll the payer in EFT".
             <EraReviewBody c={c} onMarkPosted={onMarkPosted} />
           )}
         </div>
