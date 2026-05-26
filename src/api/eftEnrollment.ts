@@ -88,7 +88,17 @@ const SECONDARY_COLS = {
   payerEftd:       "color_mm3qap5q",
   enrollStatus:    "color_mm3q5qby",
   submittedDate:   "date_mm3qghrt",
+  // Secondary Payer status column. For Medicare-supplement crossovers
+  // this often just reads "Medicare Suppl." as a placeholder until the
+  // actual supplemental payer is known — see payorRaw below for the
+  // real payer name carried in the ERA.
   payor:           "color_mkxq1a2p",
+  // Secondary Payer Name (Raw) — written by secondary_era_writeback
+  // from the 835 N1*PR loop. Carries the actual payer name (e.g.
+  // "HIGHMARK BLUE CROSS BLUE SHIELD WV"), which is what we actually
+  // need for EFT enrollment. Falls back to the status column when
+  // blank (some older rows pre-date this writeback).
+  payorRaw:        "text_mm3a2yax",
   paidDate:        "date_mm11zg2f",
   bankDeposit:     "numeric_mm3js9d0",
   bankEftDate:     "date_mm3jq5zk",
@@ -192,11 +202,18 @@ function mapPrimaryItem(item: MondayItem): EftEnrollmentRow {
 }
 
 function mapSecondaryItem(item: MondayItem): EftEnrollmentRow {
+  // Prefer the raw payer name (from the 835 N1*PR loop) over the
+  // Secondary Payer status column, which often reads "Medicare Suppl."
+  // for Medicare crossovers. Falls back to the status column when raw
+  // is blank — usually older rows that pre-date the raw-name writeback.
+  const payerRaw    = valueAt(item, SECONDARY_COLS.payorRaw);
+  const payerStatus = valueAt(item, SECONDARY_COLS.payor);
+  const payer       = payerRaw || payerStatus;
   return {
     itemId:                item.id,
     board:                 "secondary",
     patientName:           item.name,
-    payer:                 valueAt(item, SECONDARY_COLS.payor),
+    payer,
     paidDate:              valueAt(item, SECONDARY_COLS.paidDate) || null,
     checkNumber:           valueAt(item, SECONDARY_COLS.checkNumber) || null,
     bankDepositTotal:      parseNumber(valueAt(item, SECONDARY_COLS.bankDeposit)),
