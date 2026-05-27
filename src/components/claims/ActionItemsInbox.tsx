@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useAllClaims } from "@/hooks/useAllClaims";
-import { useAllSecondaryClaims } from "@/api/queries/allSecondaryClaims";
+import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
 import { useThreadClaims } from "@/lib/claims/threadStore";
 import { useEftEnrollmentRows } from "@/api/eftEnrollment";
 import {
