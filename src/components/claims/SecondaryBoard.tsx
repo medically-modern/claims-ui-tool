@@ -568,7 +568,14 @@ const MODE_BUCKETS: Record<SecondaryMode, AnyBucket[]> = {
 // Main board
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
+// One-shot deep-link target from the Action Items inbox. Versioned by
+// object identity (new ref every chip click) so re-clicking the same
+// chip after the operator has navigated internally still snaps back.
+export interface SecondaryNavTo {
+  secondaryBucket?: AnyBucket;
+}
+
+export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMode; navTo?: SecondaryNavTo | null }) {
   // Live data from Monday's Secondary Claims Board (id 18413019028).
   // Falls back to mock data when no Monday token is configured (local dev
   // without a .env, or PR previews) so the UI still renders something.
@@ -601,6 +608,18 @@ export function SecondaryBoard({ mode = "submit" }: { mode?: SecondaryMode }) {
   useMemo(() => {
     if (!buckets.includes(bucket)) setBucket(buckets[0]);
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Apply inbox deep-link target when the prop reference changes.
+  // Guards against a navTo for a bucket that isn't valid in the
+  // current mode (e.g. inbox says "era" but mode just flipped to
+  // "submit" before this effect runs — wait for the next render
+  // when buckets array updates).
+  useEffect(() => {
+    if (!navTo?.secondaryBucket) return;
+    if (buckets.includes(navTo.secondaryBucket)) {
+      setBucket(navTo.secondaryBucket);
+    }
+  }, [navTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const counts = useMemo(() => {
     const out: Record<AnyBucket, number> = { confirm: 0, insurance: 0, patient: 0, awaiting: 0, outstanding: 0, era: 0, paid: 0 };

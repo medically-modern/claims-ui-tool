@@ -19,7 +19,7 @@
 // If Brandon ever wants Monday's column labels to match, rename them
 // in Monday UI directly (right-click column → Customize → labels).
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -109,12 +109,30 @@ const INITIAL_FILTERS: FilterState = {
 
 // ── component ──────────────────────────────────────────────────────────────
 
-export function EftEnrollmentTable() {
+// One-shot deep-link target from the Action Items inbox. New object
+// reference each click triggers the useEffect below to override the
+// status filter. Open-typed for future inbox buckets (Submitted,
+// Accepted, Rejected) even though only "not-started" is wired today.
+export interface EftNavTo {
+  eftStatus?: "all" | "not-started" | "submitted" | "accepted" | "rejected";
+}
+
+export function EftEnrollmentTable({ navTo }: { navTo?: EftNavTo | null } = {}) {
   const qc = useQueryClient();
   const { data: rows, isLoading, isFetching, refetch, error } = useEftEnrollmentRows();
   const today = useMemo(() => new Date(), []);
 
   const [filters, setFilters] = useState<FilterState>(INITIAL_FILTERS);
+
+  // Apply inbox deep-link by overriding the status filter on every
+  // new navTo object reference. Doesn't touch other filter dimensions
+  // (board / payer / search) so the operator's other constraints
+  // survive a re-targeting.
+  useEffect(() => {
+    if (navTo?.eftStatus) {
+      setFilters((f) => ({ ...f, status: navTo.eftStatus! }));
+    }
+  }, [navTo]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [actionBusy, setActionBusy] = useState<Record<string, EftEnrollmentAction | null>>({});
   const [notesDraft, setNotesDraft] = useState<Record<string, string>>({});

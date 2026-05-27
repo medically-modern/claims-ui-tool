@@ -452,6 +452,14 @@ const Claims = () => {
   const [board, setBoard] = useState<BoardKey>("primary");
   const [mode, setMode] = useState<ModeKey>("review");
   const [category, setCategory] = useState<CategoryKey>("era");
+  // Action Items inbox deep-link target. Reset each chip click so the
+  // child useEffect re-applies even on repeated clicks of the same chip
+  // (useEffect deps watch the object reference, not the value).
+  const [inboxNavTo, setInboxNavTo] = useState<{
+    primaryQueue?: "new" | "resubmit" | "awaiting";
+    secondaryBucket?: "confirm" | "insurance" | "patient" | "awaiting" | "era" | "outstanding" | "paid";
+    eftStatus?: "all" | "not-started" | "submitted" | "accepted" | "rejected";
+  } | null>(null);
   // Sub-tab within the Late ERA bucket. "check" = needs an active claim
   // status check (lateActionDate null or in the past). "snoozed" = the
   // operator already checked it (or uploaded docs) and pushed the
@@ -947,9 +955,30 @@ const Claims = () => {
           <ActionItemsInbox
             className="mx-auto"
             onNavigate={(target) => {
+              // Set top-level board + mode first so the right component
+              // mounts. Then narrow into the specific sub-tab via:
+              //   - category + lateSubTab (Primary Review — owned here)
+              //   - inboxNavTo (Primary Submit / Secondary / EFT —
+              //     one-shot deep-link target consumed by useEffects
+              //     inside those child components; new object ref per
+              //     click so re-clicks re-apply).
               setBoard(target.board);
-              if (target.board === "primary" || target.board === "secondary") {
+              if (target.mode && (target.board === "primary" || target.board === "secondary")) {
                 setMode(target.mode);
+              }
+              if (target.primaryCategory) {
+                setCategory(target.primaryCategory);
+              }
+              if (target.lateSubTab) {
+                setLateSubTab(target.lateSubTab as "check" | "snoozed");
+              }
+              // Anything child-component-internal gets parked in inboxNavTo.
+              if (target.primaryQueue || target.secondaryBucket || target.eftStatus) {
+                setInboxNavTo({
+                  primaryQueue: target.primaryQueue,
+                  secondaryBucket: target.secondaryBucket,
+                  eftStatus: target.eftStatus,
+                });
               }
             }}
           />
@@ -977,7 +1006,7 @@ const Claims = () => {
         )}
 
         {board === "eft" ? (
-          <EftEnrollmentTable />
+          <EftEnrollmentTable navTo={inboxNavTo} />
         ) : board === "playbook" ? (
           <DenialAnalysisTable />
         ) : board === "cashflow" ? (
@@ -986,9 +1015,9 @@ const Claims = () => {
             secondaryClaims={secondaryClaims ?? []}
           />
         ) : board === "secondary" ? (
-          <SecondaryBoard mode={mode} />
+          <SecondaryBoard mode={mode} navTo={inboxNavTo} />
         ) : mode === "submit" ? (
-          <PrimarySubmitBoard />
+          <PrimarySubmitBoard navTo={inboxNavTo} />
         ) : (
           <>
             {/* Clickable summary tiles for all 6 categories */}

@@ -134,9 +134,28 @@ function productForHcpc(hcpc: string) {
   );
 }
 
-export function PrimarySubmitBoard() {
+// One-shot navigation target from the Action Items inbox. The parent
+// updates this object (new reference each click) and the useEffect
+// below switches `queue` accordingly. Versioning by object identity
+// rather than by a stale-prone "applied" flag means re-clicking the
+// same chip re-applies the queue — important when the operator drills
+// in, navigates internally to a different tile, then clicks the same
+// inbox chip again expecting to land back where they were.
+export interface PrimarySubmitNavTo {
+  primaryQueue?: "new" | "resubmit" | "awaiting";
+}
+
+export function PrimarySubmitBoard({ navTo }: { navTo?: PrimarySubmitNavTo | null }) {
   const { claims, updateClaim, updateItem, addItem, removeItem } = useThreadClaims();
   const [queue, setQueue] = useState<QueueKey>("new");
+
+  // Apply inbox target when the prop reference changes. Wrapping the
+  // dependency on `navTo` (not `navTo?.primaryQueue`) is intentional:
+  // a re-click that produces the same queue value should still
+  // re-fire the effect because the parent will hand us a new object.
+  useEffect(() => {
+    if (navTo?.primaryQueue) setQueue(navTo.primaryQueue);
+  }, [navTo]);
   const [search, setSearch] = useState("");
   const [payerFilter, setPayerFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<SortKey>("dos");

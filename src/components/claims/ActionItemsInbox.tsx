@@ -51,26 +51,36 @@ interface Bucket {
   label: string;       // concise chip label
   fullLabel: string;   // tooltip / section-context label
   section: Section;
-  navTo: { board: "primary" | "secondary" | "eft"; mode: "submit" | "review" };
+  navTo: NavTo;
 }
 
-// Concise chip label = the visible text on the chip. Full label is
-// kept around for the tooltip when the abbreviation is ambiguous
-// (e.g. two "Rejected" chips across Primary/Secondary — section
-// dividers + tooltip disambiguate them in-place).
+// `navTo` is the rich payload passed to the parent's onNavigate.
+// Beyond board+mode, it carries the specific sub-tab so the parent
+// can deep-link into the right tile rather than just the right board.
+// See Claims.tsx for how each field is applied.
+interface NavTo {
+  board: "primary" | "secondary" | "eft";
+  mode?: "submit" | "review";
+  primaryCategory?: "era" | "late" | "denied";   // selects the Primary Review tile
+  lateSubTab?: "check" | "snoozed";              // sub-tab inside Late ERAs
+  primaryQueue?: "new" | "resubmit" | "awaiting"; // tile inside Primary Submit
+  secondaryBucket?: "confirm" | "insurance" | "patient" | "awaiting" | "era";
+  eftStatus?: "not-started";
+}
+
 const BUCKETS: Bucket[] = [
-  { id: "p-new",       label: "New",        fullLabel: "New Claims",                       section: "Primary",   navTo: { board: "primary",   mode: "submit" } },
-  { id: "p-resubmit",  label: "Resubmit",   fullLabel: "Resubmit",                         section: "Primary",   navTo: { board: "primary",   mode: "submit" } },
-  { id: "p-rejected",  label: "Rejected",   fullLabel: "Awaiting Acceptance · Rejected",   section: "Primary",   navTo: { board: "primary",   mode: "submit" } },
-  { id: "p-era",       label: "ERA",        fullLabel: "ERA Review",                       section: "Primary",   navTo: { board: "primary",   mode: "review" } },
-  { id: "p-late",      label: "Late",       fullLabel: "Late ERAs · Check Status",         section: "Primary",   navTo: { board: "primary",   mode: "review" } },
-  { id: "p-denied",    label: "Denials",    fullLabel: "Denials",                          section: "Primary",   navTo: { board: "primary",   mode: "review" } },
-  { id: "s-confirm",   label: "Confirm",    fullLabel: "Confirm Payor",                    section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
-  { id: "s-insurance", label: "Insurance",  fullLabel: "Insurance",                        section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
-  { id: "s-patient",   label: "Patient",    fullLabel: "Patient",                          section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
-  { id: "s-rejected",  label: "Rejected",   fullLabel: "Awaiting Acceptance · Rejected",   section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
-  { id: "s-era",       label: "ERA",        fullLabel: "ERA Review",                       section: "Secondary", navTo: { board: "secondary", mode: "review" } },
-  { id: "eft-todo",    label: "EFT",        fullLabel: "EFT Enrollment · Not Started",     section: "EFT",       navTo: { board: "eft",       mode: "submit" } },
+  { id: "p-new",       label: "Submit Primary",      fullLabel: "Submit Primary · New Claims",                section: "Primary",   navTo: { board: "primary",   mode: "submit", primaryQueue: "new" } },
+  { id: "p-resubmit",  label: "Resubmit Primary",    fullLabel: "Resubmit Primary",                           section: "Primary",   navTo: { board: "primary",   mode: "submit", primaryQueue: "resubmit" } },
+  { id: "p-rejected",  label: "Rejected Primary",    fullLabel: "Rejected Primary · Awaiting Acceptance",     section: "Primary",   navTo: { board: "primary",   mode: "submit", primaryQueue: "awaiting" } },
+  { id: "p-era",       label: "Review Primary",      fullLabel: "Review Primary · ERA Review",                section: "Primary",   navTo: { board: "primary",   mode: "review", primaryCategory: "era" } },
+  { id: "p-late",      label: "Late Primary",        fullLabel: "Late ERAs Primary · Check Status",           section: "Primary",   navTo: { board: "primary",   mode: "review", primaryCategory: "late", lateSubTab: "check" } },
+  { id: "p-denied",    label: "Denials",             fullLabel: "Denials",                                    section: "Primary",   navTo: { board: "primary",   mode: "review", primaryCategory: "denied" } },
+  { id: "s-confirm",   label: "Confirm Secondary",   fullLabel: "Confirm Secondary Payor",                    section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "confirm" } },
+  { id: "s-insurance", label: "Submit Secondary",    fullLabel: "Submit Secondary · Insurance",               section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "insurance" } },
+  { id: "s-patient",   label: "Send Secondary",      fullLabel: "Send Secondary · Patient",                   section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "patient" } },
+  { id: "s-rejected",  label: "Rejected Secondary",  fullLabel: "Rejected Secondary · Awaiting Acceptance",   section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "awaiting" } },
+  { id: "s-era",       label: "Review Secondary",    fullLabel: "Review Secondary · ERA Review",              section: "Secondary", navTo: { board: "secondary", mode: "review", secondaryBucket: "era" } },
+  { id: "eft-todo",    label: "EFT Enrollment",      fullLabel: "EFT Enrollment · Not Started",               section: "EFT",       navTo: { board: "eft",       eftStatus: "not-started" } },
 ];
 
 // ─── Bucket count derivation ───────────────────────────────────────────
@@ -86,13 +96,22 @@ interface CountResult {
 
 function emptyResult(): CountResult { return { count: 0, oldestIso: null }; }
 
+// Hardcoded literal of Claims.tsx's MEDICAID_OUTSTANDING_GROUP_ID —
+// that const isn't exported, so we duplicate the value. If it drifts
+// the inbox count diverges from the ERA Review tile; mirror updates
+// here when it changes there.
+const MEDICAID_OUTSTANDING_GROUP_ID = "group_mm332zns";
+
 function inEraReviewLocal(c: Claim): boolean {
-  // Mirror of Claims.tsx's inEraReview — kept here so the inbox
-  // doesn't depend on that page exporting the predicate. Diverging
-  // is a risk; if Brandon tweaks the page predicate, mirror here.
+  // EXACT mirror of Claims.tsx's inEraReview. v1 of this function was
+  // too loose (used "not Denied/Paid/Bad Debt" instead of "Review"
+  // specifically) which counted 84 instead of the actual 2 — every
+  // Outstanding, Submitted, and Submit Claim row falls into the
+  // "ERA received but status isn't Review yet" gap and the loose
+  // version pulled them all in. Keep both in lockstep.
   if (c.hasChildren) return false;
-  if (c.primaryStatus === "Paid" || c.primaryStatus === "Bad Debt") return false;
-  return eraReceived(c) && c.primaryStatus !== "Denied (Or Partly)";
+  if (c.groupId === MEDICAID_OUTSTANDING_GROUP_ID) return false;
+  return eraReceived(c) && c.primaryStatus === "Review";
 }
 
 function inLateEraLocal(c: Claim): boolean {
@@ -134,7 +153,7 @@ function fmtOldest(iso: string | null): string {
 }
 
 interface ActionItemsInboxProps {
-  onNavigate: (target: { board: "primary" | "secondary" | "eft"; mode: "submit" | "review" }) => void;
+  onNavigate: (target: NavTo) => void;
   className?: string;
 }
 
