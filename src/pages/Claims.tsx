@@ -57,6 +57,7 @@ import {
 import type { Claim } from "@/lib/claims/types";
 import { sendToDenial, isSendToDenialConfigured, SendToDenialError } from "@/api/sendToDenial";
 import { snoozeLateEra, isSnoozeLateEraConfigured, SnoozeLateEraError } from "@/api/snoozeLateEra";
+import { ActionItemsInbox } from "@/components/claims/ActionItemsInbox";
 import {
   AlertTriangle, ArrowRight, Check, Clock, FileJson, FileSearch, MoreHorizontal, RefreshCw, Search, Send, Wallet, XCircle,
 } from "lucide-react";
@@ -926,7 +927,13 @@ const Claims = () => {
       />
 
       <main className="mx-auto max-w-[1920px] px-6 py-6 space-y-6">
-        {/* Board tabs: Primary vs Secondary | Replay ERA admin (right-aligned, separate) */}
+        {/* Top app row: Board tabs (left) | Action Items inbox
+            (center, persistent across views) | Replay ERA (right).
+            The inbox is pinned visible on every board+mode so the
+            operator can always see what needs clearing without
+            navigating back to a dashboard. Clicks on inbox bars set
+            board + mode at this level, then the user picks the
+            specific tile inside. */}
         <div className="flex items-center justify-between gap-3">
           <Tabs value={board} onValueChange={(v) => setBoard(v as BoardKey)}>
             <TabsList className="bg-card border">
@@ -937,6 +944,15 @@ const Claims = () => {
               <TabsTrigger value="eft">EFT Enrollment</TabsTrigger>
             </TabsList>
           </Tabs>
+          <ActionItemsInbox
+            className="mx-auto"
+            onNavigate={(target) => {
+              setBoard(target.board);
+              if (target.board === "primary" || target.board === "secondary") {
+                setMode(target.mode);
+              }
+            }}
+          />
           {/* Replay ERA — admin/recovery tool. Lives right-aligned and
               styled differently so it visually reads as "tool" not "tab". */}
           <Button asChild variant="outline" size="sm">
