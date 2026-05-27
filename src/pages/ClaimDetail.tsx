@@ -305,6 +305,15 @@ const ClaimDetail = () => {
       case "Submit auth":
       case "Upload docs":
       case "Contact payer":
+      // Action Complete — the operator did whatever needed doing
+      // (often a generic catch-all when none of the specific actions
+      // fit) and wants to park the row back in Outstanding so the
+      // Late ERA clock restarts and the response is awaited there.
+      // Routes to Outstanding for the same reason Contact payer does:
+      // the resolution moves OUT of Denials but the claim is still
+      // in flight, not terminal. New claim / Corrected claim stay on
+      // Submit Claim since they require a fresh 837.
+      case "Action Complete":
         return "Outstanding";
       case "Bad Debt":
       case "No Action / Write Off":
