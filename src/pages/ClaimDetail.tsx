@@ -144,7 +144,7 @@ const ClaimDetail = () => {
     return (
       <div className="min-h-screen bg-background">
         <AppHeader title="Loading…" showBack />
-        <main className="mx-auto max-w-[1440px] px-6 py-12">
+        <main className="mx-auto max-w-[1920px] px-6 py-12">
           <p className="text-muted-foreground">Fetching claim {claimId} from Monday…</p>
         </main>
       </div>
@@ -155,7 +155,7 @@ const ClaimDetail = () => {
     return (
       <div className="min-h-screen bg-background">
         <AppHeader title="Claim not found" showBack />
-        <main className="mx-auto max-w-[1440px] px-6 py-12">
+        <main className="mx-auto max-w-[1920px] px-6 py-12">
           <p className="text-muted-foreground">No claim with id {claimId}.</p>
           <Button asChild className="mt-4"><Link to="/claims">Back to queue</Link></Button>
         </main>
@@ -943,7 +943,7 @@ const ClaimDetail = () => {
         showBack
       />
 
-      <main className="mx-auto max-w-[1440px] px-6 py-6 space-y-6">
+      <main className="mx-auto max-w-[1920px] px-6 py-6 space-y-6">
         {/* Thread breadcrumb — surfaces when this claim is part of a
             resubmission lineage. Walks parent_claim_id up to the root and
             children down so the operator can see what this claim

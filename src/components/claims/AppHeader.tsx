@@ -13,7 +13,7 @@ export function AppHeader({
 }) {
   return (
     <header className="border-b bg-card">
-      <div className="mx-auto flex max-w-[1440px] items-start justify-between gap-6 px-6 py-5">
+      <div className="mx-auto flex max-w-[1920px] items-start justify-between gap-6 px-6 py-5">
         <div className="flex items-start gap-3">
           <div className="mt-1 grid h-9 w-9 place-items-center rounded-lg bg-primary text-primary-foreground">
             <Stethoscope className="h-5 w-5" />

@@ -925,7 +925,7 @@ const Claims = () => {
         subtitle="Review ERAs, check unpaid claims, and resolve claim issues."
       />
 
-      <main className="mx-auto max-w-[1440px] px-6 py-6 space-y-6">
+      <main className="mx-auto max-w-[1920px] px-6 py-6 space-y-6">
         {/* Board tabs: Primary vs Secondary | Replay ERA admin (right-aligned, separate) */}
         <div className="flex items-center justify-between gap-3">
           <Tabs value={board} onValueChange={(v) => setBoard(v as BoardKey)}>
