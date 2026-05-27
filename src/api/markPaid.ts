@@ -106,11 +106,21 @@ export function secondaryItemUrl(secondaryItemId: string): string {
 
 // Secondary Payer values that DON'T indicate a real secondary insurance —
 // either bill the patient (Patient), or Medicare auto-crossover that the
-// ERA text would have surfaced (Medicare Suppl.). Anything else in the
-// column means "we have a real secondary insurance on file."
+// ERA text would have surfaced (Medicare Suppl.), or an explicit
+// no-insurance flag the operator set ("None", "Bad Debt",
+// "No Patient Responsibility"). Anything else in the column means
+// "we have a real secondary insurance on file."
+//
+// KEEP IN SYNC with the backend's NON_INSURANCE_SECONDARY_VALUES set in
+// services/secondary_board_service.py — both classifiers run on the
+// same column values and should produce identical results, otherwise
+// the Mark Paid confirmation preview will mislead the operator.
 const NON_INSURANCE_SECONDARY_VALUES = new Set<string>([
   "Patient",
   "Medicare Suppl.",
+  "None",
+  "Bad Debt",
+  "No Patient Responsibility",
 ]);
 
 export type SubmissionType = "Forwarded" | "Insurance" | "Patient";
