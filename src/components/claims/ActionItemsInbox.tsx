@@ -48,24 +48,29 @@ type Section = "Primary" | "Secondary" | "EFT";
 
 interface Bucket {
   id: string;
-  label: string;
+  label: string;       // concise chip label
+  fullLabel: string;   // tooltip / section-context label
   section: Section;
   navTo: { board: "primary" | "secondary" | "eft"; mode: "submit" | "review" };
 }
 
+// Concise chip label = the visible text on the chip. Full label is
+// kept around for the tooltip when the abbreviation is ambiguous
+// (e.g. two "Rejected" chips across Primary/Secondary — section
+// dividers + tooltip disambiguate them in-place).
 const BUCKETS: Bucket[] = [
-  { id: "p-new",       label: "New Claims",           section: "Primary",   navTo: { board: "primary",   mode: "submit" } },
-  { id: "p-resubmit",  label: "Resubmit",             section: "Primary",   navTo: { board: "primary",   mode: "submit" } },
-  { id: "p-rejected",  label: "Awaiting · Rejected",  section: "Primary",   navTo: { board: "primary",   mode: "submit" } },
-  { id: "p-era",       label: "ERA Review",           section: "Primary",   navTo: { board: "primary",   mode: "review" } },
-  { id: "p-late",      label: "Late ERAs · Check",    section: "Primary",   navTo: { board: "primary",   mode: "review" } },
-  { id: "p-denied",    label: "Denials",              section: "Primary",   navTo: { board: "primary",   mode: "review" } },
-  { id: "s-confirm",   label: "Confirm Payor",        section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
-  { id: "s-insurance", label: "Insurance",            section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
-  { id: "s-patient",   label: "Patient",              section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
-  { id: "s-rejected",  label: "Awaiting · Rejected",  section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
-  { id: "s-era",       label: "ERA Review",           section: "Secondary", navTo: { board: "secondary", mode: "review" } },
-  { id: "eft-todo",    label: "EFT · Not Started",    section: "EFT",       navTo: { board: "eft",       mode: "submit" } },
+  { id: "p-new",       label: "New",        fullLabel: "New Claims",                       section: "Primary",   navTo: { board: "primary",   mode: "submit" } },
+  { id: "p-resubmit",  label: "Resubmit",   fullLabel: "Resubmit",                         section: "Primary",   navTo: { board: "primary",   mode: "submit" } },
+  { id: "p-rejected",  label: "Rejected",   fullLabel: "Awaiting Acceptance · Rejected",   section: "Primary",   navTo: { board: "primary",   mode: "submit" } },
+  { id: "p-era",       label: "ERA",        fullLabel: "ERA Review",                       section: "Primary",   navTo: { board: "primary",   mode: "review" } },
+  { id: "p-late",      label: "Late",       fullLabel: "Late ERAs · Check Status",         section: "Primary",   navTo: { board: "primary",   mode: "review" } },
+  { id: "p-denied",    label: "Denials",    fullLabel: "Denials",                          section: "Primary",   navTo: { board: "primary",   mode: "review" } },
+  { id: "s-confirm",   label: "Confirm",    fullLabel: "Confirm Payor",                    section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
+  { id: "s-insurance", label: "Insurance",  fullLabel: "Insurance",                        section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
+  { id: "s-patient",   label: "Patient",    fullLabel: "Patient",                          section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
+  { id: "s-rejected",  label: "Rejected",   fullLabel: "Awaiting Acceptance · Rejected",   section: "Secondary", navTo: { board: "secondary", mode: "submit" } },
+  { id: "s-era",       label: "ERA",        fullLabel: "ERA Review",                       section: "Secondary", navTo: { board: "secondary", mode: "review" } },
+  { id: "eft-todo",    label: "EFT",        fullLabel: "EFT Enrollment · Not Started",     section: "EFT",       navTo: { board: "eft",       mode: "submit" } },
 ];
 
 // ─── Bucket count derivation ───────────────────────────────────────────
@@ -220,22 +225,6 @@ export function ActionItemsInbox({ onNavigate, className }: ActionItemsInboxProp
     [counts],
   );
 
-  const maxCount = useMemo(
-    () => Math.max(1, ...Object.values(counts).map((r) => r.count)),
-    [counts],
-  );
-
-  // Bar height scales linearly with count, clamped between MIN_BAR_H
-  // (so even count-1 buckets are visible) and MAX_BAR_H (so the
-  // tallest bar doesn't blow out the header height).
-  const MIN_BAR_H = 6;
-  const MAX_BAR_H = 28;
-  const barHeight = (count: number): number => {
-    if (count === 0) return 2;  // sliver — bucket is cleared
-    const scale = count / maxCount;
-    return Math.round(MIN_BAR_H + scale * (MAX_BAR_H - MIN_BAR_H));
-  };
-
   if (totalOpen === 0) {
     return (
       <div className={cn(
@@ -248,65 +237,54 @@ export function ActionItemsInbox({ onNavigate, className }: ActionItemsInboxProp
     );
   }
 
+  // Render only the buckets with count > 0, so the strip shrinks as
+  // the operator clears items and never wastes space on zeros. Section
+  // dividers appear between visible groups, not between the original
+  // 12 slots, which keeps the row tight.
+  const visibleBuckets = BUCKETS.filter((b) => counts[b.id].count > 0);
+
   return (
     <TooltipProvider delayDuration={120}>
       <div
-        className={cn(
-          "flex items-end gap-[3px] rounded-md border bg-card px-2 py-1.5",
-          className,
-        )}
+        className={cn("flex items-center gap-1 text-xs", className)}
         role="group"
         aria-label="Action items inbox"
       >
-        {BUCKETS.map((b, idx) => {
-          const prev = BUCKETS[idx - 1];
+        {visibleBuckets.map((b, idx) => {
+          const prev = visibleBuckets[idx - 1];
           const showDivider = prev && prev.section !== b.section;
           const cr = counts[b.id];
-          const cleared = cr.count === 0;
           return (
-            <div key={b.id} className="flex items-end gap-[3px]">
+            <div key={b.id} className="flex items-center gap-1">
               {showDivider && (
-                <div className="mx-1 h-6 w-px self-center bg-border" aria-hidden />
+                <span className="mx-0.5 text-muted-foreground/50" aria-hidden>·</span>
               )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
                     onClick={() => onNavigate(b.navTo)}
-                    aria-label={`${b.section} ${b.label} ${cr.count} items`}
+                    aria-label={`${b.section} · ${b.fullLabel} · ${cr.count} items`}
                     className={cn(
-                      "group flex h-7 w-3 items-end justify-center rounded-sm transition-colors",
-                      cleared
-                        ? "bg-muted hover:bg-muted-foreground/30"
-                        : "bg-warning hover:bg-warning/80",
+                      "inline-flex items-center gap-1 rounded-md border px-2 py-1 font-medium transition-colors",
+                      "bg-warning-soft text-warning-soft-foreground border-warning-soft/70",
+                      "hover:bg-warning hover:text-warning-foreground",
                     )}
                   >
-                    {/* The colored fill is the inner div so the outer
-                        button always has a consistent click area —
-                        even on a cleared (height=2px) bar you can
-                        still hit it and read the "no items" tooltip. */}
-                    <span
-                      aria-hidden
-                      style={{ height: `${barHeight(cr.count)}px` }}
-                      className="block w-full rounded-sm"
-                    />
+                    <span className="tabular-nums">{cr.count}</span>
+                    <span className="text-[11px] font-normal">{b.label}</span>
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
-                  <div className="font-medium">{b.section} · {b.label}</div>
+                  <div className="font-medium">{b.section} · {b.fullLabel}</div>
                   <div className="text-muted-foreground">
-                    {cr.count === 1 ? "1 item" : `${cr.count} items`}
-                    {cr.count > 0 && <> · {fmtOldest(cr.oldestIso)}</>}
+                    {cr.count === 1 ? "1 item" : `${cr.count} items`} · {fmtOldest(cr.oldestIso)}
                   </div>
                 </TooltipContent>
               </Tooltip>
             </div>
           );
         })}
-        <div className="ml-2 flex items-center gap-1 text-xs font-medium tabular-nums text-foreground">
-          <span aria-hidden>·</span>
-          <span>{totalOpen}</span>
-        </div>
       </div>
     </TooltipProvider>
   );
