@@ -83,6 +83,18 @@ export interface ServiceLine {
   prAmount: number;
   oaAmount: number;
   piAmount: number;
+  /**
+   * Operator's manual per-line outcome stamp ("Operator Line Status"
+   * column color_mm3r87yb on Subitems of Claims Board). When set, this
+   * overrides the auto-classifier in lineStatus(). Lets the operator
+   * flag underpaid lines that math-balance via a contractual adjustment
+   * (e.g., CO-131 fee-schedule discount where paid + CO = charge but
+   * the operator believes the payer should have paid more).
+   *
+   * Three labels: "Paid" / "Underpaid" / "Denied". Empty means no
+   * operator override — fall back to defaultLineUserStatus().
+   */
+  operatorLineStatus?: "Paid" | "Underpaid" | "Denied" | null;
 }
 
 export type ClaimsClearance = "Clear" | "Hold" | "Manager Review" | null;

@@ -74,6 +74,7 @@ import {
 import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 import { setActionContext as apiSetActionContext } from "@/api/setActionContext";
 import { setDenialAction as apiSetDenialAction } from "@/api/setDenialAction";
+import { setClaimSubitemStatus, isMondaySubitemId } from "@/api/setClaimField";
 import { setClaimResentDate } from "@/api/setClaimResentDate";
 import {
   spawnResubmission as apiSpawnResubmission,
@@ -203,6 +204,14 @@ const ClaimDetail = () => {
     claim.nextActionDate ? new Date(claim.nextActionDate) : undefined,
   );
   const defaultLineUserStatus = (l: ServiceLine): LineUserStatus => {
+    // Operator override wins — when the operator previously stamped
+    // "Underpaid" or "Denied" on Monday it should survive across
+    // reloads. Without this, lines that the auto-classifier judges
+    // "Paid" (e.g. CO-131 fee-schedule reductions where paid + CO =
+    // charge but the operator believes the payer should have paid
+    // more) silently reset every time the page mounts and the denial
+    // workflow UI hides because linesWithIssues becomes empty.
+    if (l.operatorLineStatus) return l.operatorLineStatus;
     const s = lineStatus(l);
     if (s === "Paid" || s === "PR") return "Paid";
     if (s === "Partial") return "Underpaid";
@@ -1186,7 +1195,21 @@ const ClaimDetail = () => {
                       key={l.id}
                       line={l}
                       status={lineUserStatus[l.id]}
-                      onStatusChange={(s) => setLineUserStatus((p) => ({ ...p, [l.id]: s }))}
+                      onStatusChange={(s) => {
+                        // Optimistic state update so the dropdown reflects
+                        // the change immediately. Persist to Monday in the
+                        // background — failure surfaces via toast but we
+                        // don't revert the UI (operator can retry).
+                        setLineUserStatus((p) => ({ ...p, [l.id]: s }));
+                        if (isMondaySubitemId(l.id)) {
+                          void setClaimSubitemStatus(l.id, "color_mm3r87yb", s)
+                            .catch((e) => {
+                              toast.error("Couldn't save line status", {
+                                description: (e as Error).message,
+                              });
+                            });
+                        }
+                      }}
                       eraEditing={eraEditing}
                       eraEdit={eraEdits[l.id]}
                       onEraFieldChange={(field, value) => setEraField(l.id, field, value)}
@@ -1202,8 +1225,18 @@ const ClaimDetail = () => {
         {/* Denial analysis section — work denials only. Playbook-level
             controls (ERA Drive folder, Sheet, Sync Playbook) live on
             the Denial Analysis Playbook workbook page; this card is
-            patient-specific and only surfaces the per-line picker. */}
-        {claim.primaryStatus === "Denied (Or Partly)" && linesWithIssues.length > 0 && (
+            patient-specific and only surfaces the per-line picker.
+
+            Visibility rule: as long as the parent's Primary Status is
+            "Denied (Or Partly)" we show this block, regardless of the
+            per-line auto-classifier. The operator already declared this
+            row a denial by moving it here; that intent should not be
+            overridden when every line happens to math-balance (e.g.
+            CO-131 fee-schedule reductions where paid + CO = charge).
+            Previously this block hid the Action Context + Denial Action
+            picker entirely on lines like Patty Eshenbaugh's CGM
+            monitor — operator saw notes vanish + no outcome picker. */}
+        {claim.primaryStatus === "Denied (Or Partly)" && (
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Denial Analysis</CardTitle>

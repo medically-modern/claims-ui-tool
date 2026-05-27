@@ -134,6 +134,12 @@ const SUB_COL = {
   RARC: "dropdown_mm2pjdcf",
   DENIAL_ANALYSIS: "color_mm2ppwry",
   LINK_TO_ORIGINAL: "text_mm35d81y",
+  // Operator's manual per-line outcome (Paid / Underpaid / Denied) —
+  // ClaimDetail's line-status dropdown writes here. Created 2026-05-27
+  // because CO-131 / CO-45 lines that math-balance via a contractual
+  // adjustment were being auto-classified as "Paid" and the operator's
+  // "Underpaid" tag couldn't persist anywhere.
+  OPERATOR_LINE_STATUS: "color_mm3r87yb",
 } as const;
 
 // ---------- HCPCS → product label ----------
@@ -437,7 +443,23 @@ function mapSubitemToLine(sub: MondaySubitem): ServiceLine {
     prAmount,
     oaAmount,
     piAmount,
+    operatorLineStatus: mapOperatorLineStatus(
+      txt(sub, SUB_COL.OPERATOR_LINE_STATUS),
+    ),
   };
+}
+
+/**
+ * Coerce a raw Monday status text into our typed union. Returns null
+ * when the cell is blank — the consumer falls back to the auto
+ * lineStatus() classifier in that case.
+ */
+function mapOperatorLineStatus(
+  raw: string,
+): "Paid" | "Underpaid" | "Denied" | null {
+  const t = (raw || "").trim();
+  if (t === "Paid" || t === "Underpaid" || t === "Denied") return t;
+  return null;
 }
 
 // ---------- parent item mapper ----------
