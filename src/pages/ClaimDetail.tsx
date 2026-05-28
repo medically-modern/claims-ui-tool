@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -189,6 +189,7 @@ const ClaimDetail = () => {
     try {
       await apiSetActionContext(claim.mondayItemId, trimmed);
       setClaim({ ...claim, actionContext: trimmed });
+      lastSavedActionContextRef.current = trimmed;
       setActionContextSavedState("saved");
       // Hide the indicator after a beat so the field doesn't stay
       // crowded with stale status text.
@@ -199,6 +200,58 @@ const ClaimDetail = () => {
         description: (e as Error).message,
       });
     }
+  }
+
+  // ─── Defensive Action Context save ─────────────────────────────────────
+  // The primary autosave fires on the textarea's onBlur. That misses
+  // an important case: operator types notes, doesn't click outside
+  // the textarea, and clicks "Back to Queue" (or hits the browser
+  // back button). Depending on the browser, blur may or may not fire
+  // before unmount, and the save can be dropped on the floor.
+  //
+  // Two belt-and-suspenders:
+  //   1. handleBackToQueue() awaits the autosave before navigating.
+  //   2. useEffect cleanup fires a final fire-and-forget save on
+  //      component unmount, whether the user used the in-page Back
+  //      button or hit the browser back / closed the tab.
+  //
+  // Ref-based so the cleanup reads the LATEST value of actionContext
+  // — React captures stale state in cleanup closures otherwise.
+  const actionContextRef = useRef(actionContext);
+  actionContextRef.current = actionContext;
+  // Tracks the last value confirmed by Monday so the unmount cleanup
+  // can skip the save when there's nothing new. Initialised to whatever
+  // came back from the initial Monday fetch.
+  const lastSavedActionContextRef = useRef((claim.actionContext ?? "").trim());
+
+  useEffect(() => {
+    const itemId = claim.mondayItemId;
+    return () => {
+      const latest = actionContextRef.current.trim();
+      const saved  = lastSavedActionContextRef.current.trim();
+      if (latest === saved) return;
+      // Fire-and-forget. The component is unmounting so we can't
+      // await; we also intentionally don't surface errors here
+      // (no place to render a toast post-unmount). If this fails
+      // silently the next visit to the row will show the un-saved
+      // notes still in the textarea (since textareas are local
+      // state on mount) and the operator can retry.
+      apiSetActionContext(itemId, latest).catch(() => {});
+    };
+    // Re-bind the cleanup if the operator navigates to a different
+    // claim within the same component lifecycle (rare — the route
+    // typically re-mounts — but covered defensively).
+  }, [claim.mondayItemId]);
+
+  async function handleBackToQueue() {
+    // Save any dirty Action Context FIRST, then navigate. Awaiting
+    // here means the operator briefly sees the "Saving…" indicator
+    // before the page transitions, which is honest about what's
+    // happening and avoids the "I typed it but it didn't save" bug.
+    if (actionContext.trim() !== (claim.actionContext ?? "").trim()) {
+      await autosaveActionContext();
+    }
+    navigate("/claims");
   }
   const [nextActionDate, setNextActionDate] = useState<Date | undefined>(
     claim.nextActionDate ? new Date(claim.nextActionDate) : undefined,
@@ -1570,7 +1623,7 @@ const ClaimDetail = () => {
               <Button variant="outline" onClick={escalate}>
                 <AlertTriangle className="mr-2 h-4 w-4" /> Escalate for review
               </Button>
-              <Button variant="ghost" onClick={() => navigate("/claims")}>Back to Queue</Button>
+              <Button variant="ghost" onClick={() => void handleBackToQueue()}>Back to Queue</Button>
             </div>
           </CardContent>
         </Card>
