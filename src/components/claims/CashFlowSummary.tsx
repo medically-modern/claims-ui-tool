@@ -134,18 +134,18 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             label="Soon"
             amount={stats.soon.total}
             count={stats.soon.count}
-            subtitle="Received ERA / Medicaid next 7 days"
+            subtitle="Finalized, not Paid / Medicaid next 7 days"
             activeKey={active?.key}
             breakdown={[
               {
-                label: "Received ERA",
+                label: "Finalized, not Paid",
                 stat: stats.soonEra,
                 description: "ERA in hand with a future EFT pay date within 7 days.",
               },
               {
-                label: "Medicaid (next Wed)",
+                label: "Medicaid (next Thursday)",
                 stat: stats.soonMedicaid,
-                description: "Pure Medicaid claims whose eMedNY pay date is within 7 days.",
+                description: "Pure Medicaid claims whose eMedNY pay date (Thursday after the cycle EFT release) is within 7 days.",
               },
               {
                 label: "Pump claims",
