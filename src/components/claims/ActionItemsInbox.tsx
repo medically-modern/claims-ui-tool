@@ -247,7 +247,7 @@ export function ActionItemsInbox({ onNavigate, className }: ActionItemsInboxProp
   if (totalOpen === 0) {
     return (
       <div className={cn(
-        "flex items-center gap-2 rounded-md border bg-success-soft/30 px-3 py-1.5 text-xs font-medium text-success-soft-foreground",
+        "flex items-center gap-2 text-xs font-medium text-success-soft-foreground",
         className,
       )}>
         <span aria-hidden>✓</span>
@@ -256,52 +256,59 @@ export function ActionItemsInbox({ onNavigate, className }: ActionItemsInboxProp
     );
   }
 
-  // Render only the buckets with count > 0, so the strip shrinks as
-  // the operator clears items and never wastes space on zeros. Section
-  // dividers appear between visible groups, not between the original
-  // 12 slots, which keeps the row tight.
-  const visibleBuckets = BUCKETS.filter((b) => counts[b.id].count > 0);
-
+  // Render ALL 12 buckets in a fixed 6×2 grid even when some are at 0
+  // — keeps the layout stable so operators learn the grid position of
+  // each bucket and aren't constantly re-scanning. Zero-count cells go
+  // muted (no jumping out, no fill), non-zero cells render the count
+  // in normal foreground weight. No background color anywhere — the
+  // bold number is the only visual signal of "this needs work."
   return (
     <TooltipProvider delayDuration={120}>
       <div
-        className={cn("flex items-center gap-1 text-xs", className)}
+        className={cn(
+          "grid grid-cols-6 gap-x-3 gap-y-0.5",
+          className,
+        )}
         role="group"
         aria-label="Action items inbox"
       >
-        {visibleBuckets.map((b, idx) => {
-          const prev = visibleBuckets[idx - 1];
-          const showDivider = prev && prev.section !== b.section;
+        {BUCKETS.map((b) => {
           const cr = counts[b.id];
+          const cleared = cr.count === 0;
           return (
-            <div key={b.id} className="flex items-center gap-1">
-              {showDivider && (
-                <span className="mx-0.5 text-muted-foreground/50" aria-hidden>·</span>
-              )}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate(b.navTo)}
-                    aria-label={`${b.section} · ${b.fullLabel} · ${cr.count} items`}
+            <Tooltip key={b.id}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => onNavigate(b.navTo)}
+                  aria-label={`${b.section} · ${b.fullLabel} · ${cr.count} items`}
+                  className={cn(
+                    "flex flex-col items-center rounded-md px-2 py-0.5 transition-colors",
+                    "hover:bg-muted",
+                    cleared && "opacity-40",
+                  )}
+                >
+                  <span
                     className={cn(
-                      "inline-flex items-center gap-1 rounded-md border px-2 py-1 font-medium transition-colors",
-                      "bg-warning-soft text-warning-soft-foreground border-warning-soft/70",
-                      "hover:bg-warning hover:text-warning-foreground",
+                      "text-sm font-semibold leading-tight tabular-nums",
+                      cleared && "text-muted-foreground",
                     )}
                   >
-                    <span className="tabular-nums">{cr.count}</span>
-                    <span className="text-[11px] font-normal">{b.label}</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="text-xs">
-                  <div className="font-medium">{b.section} · {b.fullLabel}</div>
-                  <div className="text-muted-foreground">
-                    {cr.count === 1 ? "1 item" : `${cr.count} items`} · {fmtOldest(cr.oldestIso)}
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            </div>
+                    {cr.count}
+                  </span>
+                  <span className="text-[10px] leading-tight text-muted-foreground whitespace-nowrap">
+                    {b.label}
+                  </span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                <div className="font-medium">{b.section} · {b.fullLabel}</div>
+                <div className="text-muted-foreground">
+                  {cr.count === 1 ? "1 item" : `${cr.count} items`}
+                  {cr.count > 0 && <> · {fmtOldest(cr.oldestIso)}</>}
+                </div>
+              </TooltipContent>
+            </Tooltip>
           );
         })}
       </div>
