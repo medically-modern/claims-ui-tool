@@ -601,7 +601,16 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
   const [bucket, setBucket] = useState<AnyBucket>(buckets[0]);
   const [search, setSearch] = useState("");
   const [payerFilter, setPayerFilter] = useState<string>("all");
-  const [sortBy, setSortBy] = useState<"dos" | "patient" | "payer">("dos");
+  // Sort options:
+  //   dos / patient / payer  — universal sorts available in every bucket
+  //   coinsHigh / coinsLow   — coinsurance-amount sort, exposed only in the
+  //                            Confirm Payor bucket where it's the triage
+  //                            signal for routing (claims with sizable
+  //                            patient-responsibility coinsurance get
+  //                            different handling than near-zero PR ones)
+  const [sortBy, setSortBy] = useState<
+    "dos" | "patient" | "payer" | "coinsHigh" | "coinsLow"
+  >("dos");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   // Reset bucket when mode changes
@@ -673,9 +682,36 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
       .sort((a, b) => {
         if (sortBy === "patient") return a.patientName.localeCompare(b.patientName);
         if (sortBy === "payer") return (a.secondaryPayer ?? "").localeCompare(b.secondaryPayer ?? "");
+        if (sortBy === "coinsHigh" || sortBy === "coinsLow") {
+          // Sum coinsurance + copay per row — same total the row header
+          // and the per-line table show in the Confirm Payor flow
+          // (l.coinsuranceCopay represents PR-2 + PR-3 per subitem).
+          // We treat null / undefined as 0 so rows missing per-line PR
+          // breakdowns still sort cleanly to the bottom of "highest".
+          const totalA = a.lines.reduce(
+            (s, l) => s + (l.coinsuranceCopay ?? 0),
+            0,
+          );
+          const totalB = b.lines.reduce(
+            (s, l) => s + (l.coinsuranceCopay ?? 0),
+            0,
+          );
+          return sortBy === "coinsHigh" ? totalB - totalA : totalA - totalB;
+        }
         return a.dos.localeCompare(b.dos);
       });
   }, [claims, bucket, payerFilter, search, sortBy]);
+
+  // When the operator switches buckets away from Confirm Payor and the
+  // current sort is a coinsurance-only option, fall back to DOS — the
+  // coinsurance signal isn't meaningful outside Confirm Payor (e.g.,
+  // Paid rows already settled, Outstanding rows might not even have a
+  // PR breakdown yet).
+  useEffect(() => {
+    if (bucket !== "confirm" && (sortBy === "coinsHigh" || sortBy === "coinsLow")) {
+      setSortBy("dos");
+    }
+  }, [bucket, sortBy]);
 
   const allPayers = useMemo(
     () => Array.from(new Set(claims.flatMap((c) => [c.primaryPayor, c.secondaryPayer ?? ""]))).filter(Boolean).sort(),
@@ -975,6 +1011,16 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
             <SelectItem value="dos">Sort by DOS</SelectItem>
             <SelectItem value="patient">Sort by Patient</SelectItem>
             <SelectItem value="payer">Sort by Secondary Payer</SelectItem>
+            {/* Coinsurance sorts — only meaningful in Confirm Payor where
+                they help triage: high-coinsurance rows usually want a
+                secondary-payer call, near-zero PR rows can often go
+                straight to Patient. */}
+            {bucket === "confirm" && (
+              <>
+                <SelectItem value="coinsHigh">Sort by Coinsurance (high → low)</SelectItem>
+                <SelectItem value="coinsLow">Sort by Coinsurance (low → high)</SelectItem>
+              </>
+            )}
           </SelectContent>
         </Select>
         <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
