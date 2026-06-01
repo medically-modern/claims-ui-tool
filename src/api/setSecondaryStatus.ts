@@ -80,3 +80,46 @@ export async function setSecondaryStatusAndMove(
     );
   }
 }
+
+// ─── Send Invoice trigger column ─────────────────────────────────────────────
+// Separate Monday status column (color_mm3x6qe6) with the single label
+// "Done". Flipping this to Done is the trigger Brandon's downstream Monday
+// automation watches for: when Send Invoice → Done, an external automation
+// fires the patient SMS with the invoice link.
+//
+// We keep this column intentionally minimal (one label) so the automation
+// never has to disambiguate state — the only event is "Done flip,
+// payload-ready row." Reset / re-fire happens by clearing the column on
+// Monday (no API call from here).
+//
+// The write is decoupled from Secondary Status + group move so the SMS
+// automation fires even if a future caller doesn't move the row (e.g. a
+// bulk-send tool that just stamps Send Invoice across many rows).
+const SEND_INVOICE_TRIGGER_COL = "color_mm3x6qe6";
+
+const SEND_INVOICE_TRIGGER_MUT = `
+  mutation FireSendInvoice($itemId: ID!, $boardId: ID!, $value: JSON!) {
+    change_column_value(
+      item_id: $itemId,
+      board_id: $boardId,
+      column_id: "${SEND_INVOICE_TRIGGER_COL}",
+      value: $value
+    ) { id }
+  }
+`;
+
+/**
+ * Fire the Send Invoice trigger by writing "Done" to color_mm3x6qe6.
+ * Drives the Monday automation that sends the patient an SMS with their
+ * invoice link. Idempotent — flipping to Done when already Done is a
+ * no-op on Monday's side.
+ */
+export async function fireSendInvoiceTrigger(
+  mondayItemId: string,
+): Promise<void> {
+  await mondayQuery(SEND_INVOICE_TRIGGER_MUT, {
+    itemId: mondayItemId,
+    boardId: String(SECONDARY_BOARD_ID),
+    value: JSON.stringify({ label: "Done" }),
+  });
+}

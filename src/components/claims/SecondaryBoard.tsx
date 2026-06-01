@@ -20,7 +20,11 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
 import { hasMondayToken } from "@/api/monday";
-import { setSecondaryStatus, setSecondaryStatusAndMove } from "@/api/setSecondaryStatus";
+import {
+  setSecondaryStatus,
+  setSecondaryStatusAndMove,
+  fireSendInvoiceTrigger,
+} from "@/api/setSecondaryStatus";
 import {
   markSecondaryPaid as apiMarkSecondaryPaid,
   isMarkSecondaryPaidConfigured,
@@ -816,6 +820,15 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
     // Patient flow stage 1 — invoice sent. Row moves out of Send Invoice
     // group into Patient Responsibility Outstanding, status flips to
     // Outstanding so the two-stage body switches to the Mark Paid button.
+    //
+    // ALSO fire the Send Invoice trigger column (color_mm3x6qe6 → "Done").
+    // A Monday automation listens for that flip and texts the patient the
+    // invoice link. The trigger is decoupled from the status / group move
+    // so the SMS still fires even if a future caller wants to flip Send
+    // Invoice without moving the row (e.g. a batch tool). Decoupled means
+    // we await it separately and surface a distinct error if it fails —
+    // the status write is the authoritative "we billed them" record; the
+    // trigger is the side-effect.
     updateClaim(c.id, {
       status: "Sent to Patient",
       rawSecondaryStatus: "Outstanding",
@@ -826,14 +839,31 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
         "Outstanding",
         "group_mkwta260",  // Patient Responsibility Outstanding
       );
-      toast({
-        title: `Invoice sent: ${c.patientName}`,
-        description: `Patient owes ${$(c.remaining)}. Status → Outstanding.`,
-      });
-      void refetchSecondary();
     } catch (e) {
       toast({ title: "Couldn't update Monday", description: (e as Error).message });
+      return;
     }
+    // Fire the SMS automation trigger. Failure here is reported but
+    // doesn't roll back the status flip — the row still reads as
+    // "patient billed" because that's the authoritative state on Monday.
+    // The operator can manually flip Send Invoice → Done on Monday to
+    // retry the SMS automation.
+    try {
+      await fireSendInvoiceTrigger(c.mondayItemId);
+      toast({
+        title: `Invoice sent: ${c.patientName}`,
+        description: `Patient owes ${$(c.remaining)}. Status → Outstanding. SMS automation fired.`,
+      });
+    } catch (e) {
+      toast({
+        title: `Status saved but SMS trigger failed: ${c.patientName}`,
+        description:
+          `Status flipped to Outstanding on Monday, but the Send Invoice column couldn't be set to Done. ` +
+          `Flip it manually to fire the SMS. Reason: ${(e as Error).message}`,
+        duration: 12_000,
+      });
+    }
+    void refetchSecondary();
   }
 
   /**
