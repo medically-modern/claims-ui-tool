@@ -25,7 +25,19 @@ export function useAllClaims() {
     enabled: hasMondayToken(),
     // Claim data updates relatively slowly. Five-minute freshness window is
     // fine; user can hit the Refresh button to force.
+    //
+    // With localStorage persistence (PersistQueryClientProvider in App.tsx),
+    // a reload within this window renders from cache and skips Monday
+    // entirely — the difference between ~10s of paginated GraphQL and
+    // instant first paint. Past the window, we still show cached data
+    // immediately and refetch silently in the background, so the user
+    // never sees a blank screen.
     staleTime: 5 * 60 * 1000,
+    // gcTime needs to be long enough that the persister can save and
+    // restore the entry across reloads. The QueryClient default is 5
+    // minutes — bumping per-query so claims that aren't refetched for
+    // a while still come back from localStorage on the next visit.
+    gcTime: 24 * 60 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
 }

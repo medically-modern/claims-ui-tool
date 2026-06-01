@@ -37,6 +37,9 @@ export function usePlaybookCombos() {
     // freshness window; explicit invalidation on save covers the
     // operator-edit case without waiting for the timer.
     staleTime: 5 * 60 * 1000,
+    // 24h gcTime so the persister can rehydrate across reloads — see
+    // useAllClaims.ts for the full rationale on the persistence layer.
+    gcTime: 24 * 60 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
 }
