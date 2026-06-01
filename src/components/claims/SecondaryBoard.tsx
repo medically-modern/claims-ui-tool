@@ -61,7 +61,28 @@ export type SecondaryStatus =
   | "Bad Debt";
 
 type SubmitBucket = "confirm" | "insurance" | "patient" | "awaiting";
-type ReviewBucket = "outstanding" | "era" | "paid";
+// Review mode buckets, all five:
+//   outstandingClaims  - insurance secondary submitted, awaiting ERA
+//                        (was the single "Outstanding" bucket prior to
+//                        the 2026-06 patient-flow split)
+//   outstandingInvoices- patient invoice sent (Send Invoice clicked),
+//                        awaiting patient payment. Rows leave the
+//                        Submit > Patient bucket and land here.
+//   eraReview          - secondary ERA received from the payer; needs
+//                        operator sign-off before declaring Paid.
+//   invoiceReview      - patient marked the invoice as paid; needs
+//                        operator verification that the full amount
+//                        cleared before declaring Patient Paid &
+//                        Closed. Currently routed from status =
+//                        "Patient Paid" (the Mark Paid button on
+//                        Patient stage 2 lands them here).
+//   paid               - terminal Paid And Closed.
+type ReviewBucket =
+  | "outstandingClaims"
+  | "outstandingInvoices"
+  | "eraReview"
+  | "invoiceReview"
+  | "paid";
 type AnyBucket = SubmitBucket | ReviewBucket;
 
 export type PrReason = "Deductible" | "Coinsurance" | "Copay" | "Non-covered service" | "Bad debt (write off)";
@@ -531,23 +552,45 @@ const STATUS_TONE: Record<SecLine["status"], "warning" | "danger" | "success" | 
 function bucketOf(c: SecClaim): AnyBucket | null {
   if (c.status === "Awaiting Payor Confirmation") return "confirm";
   if (c.status === "Primary Paid - Submit Secondary") return "insurance";
-  if (c.status === "Sent to Patient") return "patient";
+  // Patient flow splits across THREE buckets based on lifecycle stage:
+  //   Stage 1 (Submit > Patient)              — still needs Send Invoice.
+  //                                             rawSecondaryStatus === "Submit"
+  //   Stage 2 (Review > Outstanding Invoices) — invoice sent, awaiting payment.
+  //                                             rawSecondaryStatus ∈ {Outstanding,
+  //                                             Sent to Patient, ...}
+  //   Stage 3 (Review > Invoice Review)       — patient marked it paid; needs
+  //                                             operator verification (status =
+  //                                             "Patient Paid", handled below).
+  // The split is what lets "after sending, it shouldn't show up on the
+  // Submit board anymore" actually work — pre-split, every patient row
+  // sat in Submit > Patient regardless of stage.
+  if (c.status === "Sent to Patient") {
+    const raw = (c.rawSecondaryStatus ?? "Submit").trim();
+    if (raw === "" || raw === "Submit") return "patient";
+    return "outstandingInvoices";
+  }
+  // Patient marked the invoice paid. Land them in Invoice Review for
+  // the operator to verify the full amount cleared before declaring
+  // terminal Paid. Mark Paid (Patient stage 2) writes secondaryStatus
+  // = "Patient Paid" on Monday; deriveStatus maps that to the frontend
+  // status "Patient Paid", which is what this branch fires on.
+  if (c.status === "Patient Paid") return "invoiceReview";
   // Awaiting Acceptance — mirrors the primary bucket. Submitted via
   // Stedi but the payer hasn't acknowledged with a clean 277 yet.
-  // Graduates to "outstanding" once status277 = "Payer Accepted".
-  // Forwarded rows stay in outstanding (no 277 expected — they're
+  // Graduates to "outstandingClaims" once status277 = "Payer Accepted".
+  // Forwarded rows stay in outstandingClaims (no 277 expected — they're
   // waiting on the crossover ERA, not on payer ack).
   if (c.status === "Secondary Submitted" && c.status277 !== "Payer Accepted") {
     return "awaiting";
   }
-  if (c.status === "Primary Paid - Forwarded" || c.status === "Secondary Submitted") return "outstanding";
+  if (c.status === "Primary Paid - Forwarded" || c.status === "Secondary Submitted") return "outstandingClaims";
   // Any ERA-received row lands in the ERA Review bucket for operator
   // sign-off. Even when the secondary covered the patient's remaining
   // balance dollar-for-dollar, we still want a human eye on it (CARC/
   // RARC codes, denial line items, bank reconciliation) before it's
   // declared closed. Mark Posted moves it to "Secondary Paid" status,
   // which is what bucketOf reads to route into the Paid bucket.
-  if (c.status === "Secondary ERA Received") return "era";
+  if (c.status === "Secondary ERA Received") return "eraReview";
   if (c.status === "Secondary Paid") return "paid";
   return null;
 }
@@ -555,15 +598,42 @@ function bucketOf(c: SecClaim): AnyBucket | null {
 const BUCKET_META: Record<AnyBucket, { label: string; icon: React.ReactNode; tone: string; description?: string }> = {
   confirm:     { label: "Confirm Payor",    icon: <FileSearch className="h-4 w-4" />, tone: "text-warning-soft-foreground" },
   insurance:   { label: "Insurance",        icon: <Send className="h-4 w-4" />,      tone: "text-warning-soft-foreground" },
-  patient:     { label: "Patient",          icon: <UserRound className="h-4 w-4" />, tone: "text-primary" },
+  patient:     {
+    label: "Patient",
+    icon: <UserRound className="h-4 w-4" />,
+    tone: "text-primary",
+    description: "Stage 1 — invoice not yet sent. Once you click Send Invoice the row leaves this bucket and shows up under Review > Outstanding Invoices.",
+  },
   awaiting:    {
     label: "Awaiting Acceptance",
     icon: <Clock className="h-4 w-4" />,
     tone: "text-info-soft-foreground",
-    description: "Submitted to the secondary payer (via Stedi) but no 'Payer Accepted' 277 yet. Stays here until the payer acknowledges, then graduates to Outstanding.",
+    description: "Submitted to the secondary payer (via Stedi) but no 'Payer Accepted' 277 yet. Stays here until the payer acknowledges, then graduates to Outstanding Claims.",
   },
-  outstanding: { label: "Outstanding",      icon: <Clock className="h-4 w-4" />,     tone: "text-info-soft-foreground" },
-  era:         { label: "ERA Review",       icon: <FileSearch className="h-4 w-4" />, tone: "text-info-soft-foreground" },
+  outstandingClaims: {
+    label: "Outstanding Claims",
+    icon: <Clock className="h-4 w-4" />,
+    tone: "text-info-soft-foreground",
+    description: "Insurance secondary submitted; awaiting the payer's ERA.",
+  },
+  outstandingInvoices: {
+    label: "Outstanding Invoices",
+    icon: <FileText className="h-4 w-4" />,
+    tone: "text-info-soft-foreground",
+    description: "Patient invoice sent (Send Invoice clicked); awaiting payment from the patient.",
+  },
+  eraReview:    {
+    label: "ERA Review",
+    icon: <FileSearch className="h-4 w-4" />,
+    tone: "text-info-soft-foreground",
+    description: "Secondary ERA received; verify CARC/RARC + bank deposit, then Mark Posted.",
+  },
+  invoiceReview: {
+    label: "Invoice Review",
+    icon: <FileSearch className="h-4 w-4" />,
+    tone: "text-info-soft-foreground",
+    description: "Patient marked the invoice paid. Verify the full amount cleared before declaring Paid & Closed.",
+  },
   paid:        { label: "Paid",             icon: <CheckCircle2 className="h-4 w-4" />, tone: "text-success-soft-foreground" },
 };
 
@@ -573,7 +643,17 @@ const MODE_BUCKETS: Record<SecondaryMode, AnyBucket[]> = {
   // been 837'd and is in 277 limbo — same mental cohort as "things I
   // just submitted, watching the response."
   submit: ["confirm", "insurance", "patient", "awaiting"],
-  review: ["outstanding", "era", "paid"],
+  // Review splits Outstanding into two flows (claims vs invoices) and
+  // adds Invoice Review as a sign-off step before terminal Paid. ERA
+  // Review remains the insurance side; Invoice Review is the patient
+  // side equivalent.
+  review: [
+    "outstandingClaims",
+    "outstandingInvoices",
+    "eraReview",
+    "invoiceReview",
+    "paid",
+  ],
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -653,7 +733,11 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
   }, [navTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const counts = useMemo(() => {
-    const out: Record<AnyBucket, number> = { confirm: 0, insurance: 0, patient: 0, awaiting: 0, outstanding: 0, era: 0, paid: 0 };
+    const out: Record<AnyBucket, number> = {
+      confirm: 0, insurance: 0, patient: 0, awaiting: 0,
+      outstandingClaims: 0, outstandingInvoices: 0,
+      eraReview: 0, invoiceReview: 0, paid: 0,
+    };
     for (const c of claims) {
       const b = bucketOf(c);
       if (b) out[b] += 1;
@@ -1104,15 +1188,18 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
             <p className="text-base font-medium">Nothing in this bucket.</p>
             <p className="text-sm text-muted-foreground">All caught up.</p>
           </Card>
-        ) : bucket === "era" || bucket === "outstanding" || bucket === "paid" ? (
-          // ERA Review + Outstanding + Paid all render as a primary-style
-          // table. ERA Review (showActions=true): Status dropdown + Submit
-          // button. Outstanding + Paid (showActions=false): identical
-          // column layout but read-only — operator just needs to see what's
-          // in flight or already closed. Paid still shows the full ERA
-          // Review detail body (incl. Bank Info strip) on row expand.
-          // Insurance and Patient buckets still use SecondaryRow's card
-          // layout because their workflows need inline form controls.
+        ) : bucket === "eraReview" || bucket === "outstandingClaims" || bucket === "paid" ? (
+          // ERA Review + Outstanding Claims + Paid all render as a
+          // primary-style table. ERA Review (showActions=true): Status
+          // dropdown + Submit button. Outstanding Claims + Paid
+          // (showActions=false): identical column layout but read-only.
+          // Paid still shows the full ERA Review detail body (incl.
+          // Bank Info strip) on row expand.
+          //
+          // Insurance, Patient, Outstanding Invoices, and Invoice
+          // Review buckets fall through to the SecondaryRow card
+          // layout below because their workflows need patient-side
+          // controls (Preview Link, Send Invoice, Mark Paid).
           <SecondaryClaimsTable
             rows={visible}
             expanded={expanded}
@@ -1120,7 +1207,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
               setExpanded((p) => ({ ...p, [id]: !p[id] }))
             }
             onMarkPosted={(c) => markPosted(c)}
-            showActions={bucket === "era"}
+            showActions={bucket === "eraReview"}
           />
         ) : (
           visible.map((c) => (
@@ -1165,10 +1252,12 @@ function SecondaryRow({
   const b = bucketOf(c);
 
   const accent =
-    b === "outstanding" ? "border-l-info" :
-    b === "insurance"   ? "border-l-warning-soft-foreground" :
-    b === "era"         ? "border-l-info" :
-                          "border-l-primary";
+    b === "outstandingClaims" || b === "outstandingInvoices"
+                            ? "border-l-info" :
+    b === "insurance"       ? "border-l-warning-soft-foreground" :
+    b === "eraReview" || b === "invoiceReview"
+                            ? "border-l-info" :
+                              "border-l-primary";
 
   const totalCoins = c.lines.reduce((s, l) => s + (l.coinsuranceCopay ?? 0), 0);
   const totalDed = c.lines.reduce((s, l) => s + (l.deductible ?? 0), 0) + (c.claimLevelDeductible ?? 0);
@@ -1230,7 +1319,18 @@ function SecondaryRow({
           {b === "insurance" && (
             <SubmitSecondaryBody c={c} onUpdate={onUpdate} onSubmit={onSubmitSecondary} />
           )}
-          {b === "patient" && (
+          {/* SendToPatientBody serves THREE buckets — the body itself
+              switches between Stage 1 (Send Invoice) and Stage 2
+              (Mark Paid) based on rawSecondaryStatus, and Preview
+              Link is always visible. So patient (stage 1) AND
+              outstandingInvoices (stage 2) AND invoiceReview (after
+              Mark Paid was clicked) all render this same component:
+                patient              -> Preview Link + Send Invoice
+                outstandingInvoices  -> Preview Link + Mark Paid
+                invoiceReview        -> Preview Link + Mark Paid (read-only-ish,
+                                        operator verifies and can re-fire payment
+                                        flow if needed) */}
+          {(b === "patient" || b === "outstandingInvoices" || b === "invoiceReview") && (
             <SendToPatientBody
               c={c}
               onUpdate={onUpdate}
@@ -1240,12 +1340,6 @@ function SecondaryRow({
           )}
           {b === "awaiting" && (
             <AwaitingAcceptanceBody c={c} />
-          )}
-          {b === "outstanding" && (
-            <ForwardedBody c={c} onMarkPosted={onMarkPosted} />
-          )}
-          {b === "era" && (
-            <EraReviewBody c={c} onMarkPosted={onMarkPosted} />
           )}
         </div>
       )}
@@ -1346,7 +1440,7 @@ function StatusPill({ status, bucket }: { status: SecondaryStatus; bucket: AnyBu
     status === "Sent to Patient" ? "warning" :
     "warning";
   return (
-    <StatusBadge tone={tone} className={cn(bucket === "outstanding" && "animate-pulse")}>
+    <StatusBadge tone={tone} className={cn(bucket === "outstandingClaims" && "animate-pulse")}>
 
       {status === "Primary Paid - Forwarded" ? "Awaiting Crossover ERA" : status}
     </StatusBadge>

@@ -457,7 +457,16 @@ const Claims = () => {
   // (useEffect deps watch the object reference, not the value).
   const [inboxNavTo, setInboxNavTo] = useState<{
     primaryQueue?: "new" | "resubmit" | "awaiting";
-    secondaryBucket?: "confirm" | "insurance" | "patient" | "awaiting" | "era" | "outstanding" | "paid";
+    secondaryBucket?:
+      | "confirm"
+      | "insurance"
+      | "patient"
+      | "awaiting"
+      | "outstandingClaims"
+      | "outstandingInvoices"
+      | "eraReview"
+      | "invoiceReview"
+      | "paid";
     eftStatus?: "all" | "not-started" | "submitted" | "accepted" | "rejected";
   } | null>(null);
   // Sub-tab within the Late ERA bucket. "check" = needs an active claim

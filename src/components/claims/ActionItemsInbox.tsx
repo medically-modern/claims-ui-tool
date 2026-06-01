@@ -64,7 +64,16 @@ interface NavTo {
   primaryCategory?: "era" | "late" | "denied";   // selects the Primary Review tile
   lateSubTab?: "check" | "snoozed";              // sub-tab inside Late ERAs
   primaryQueue?: "new" | "resubmit" | "awaiting"; // tile inside Primary Submit
-  secondaryBucket?: "confirm" | "insurance" | "patient" | "awaiting" | "era";
+  secondaryBucket?:
+    | "confirm"
+    | "insurance"
+    | "patient"
+    | "awaiting"
+    | "outstandingClaims"
+    | "outstandingInvoices"
+    | "eraReview"
+    | "invoiceReview"
+    | "paid";
   eftStatus?: "not-started";
 }
 
@@ -79,7 +88,7 @@ const BUCKETS: Bucket[] = [
   { id: "s-insurance", label: "Submit Secondary",    fullLabel: "Submit Secondary · Insurance",               section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "insurance" } },
   { id: "s-patient",   label: "Send Secondary",      fullLabel: "Send Secondary · Patient",                   section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "patient" } },
   { id: "s-rejected",  label: "Rejected Secondary",  fullLabel: "Rejected Secondary · Awaiting Acceptance",   section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "awaiting" } },
-  { id: "s-era",       label: "Review Secondary",    fullLabel: "Review Secondary · ERA Review",              section: "Secondary", navTo: { board: "secondary", mode: "review", secondaryBucket: "era" } },
+  { id: "s-era",       label: "Review Secondary",    fullLabel: "Review Secondary · ERA Review",              section: "Secondary", navTo: { board: "secondary", mode: "review", secondaryBucket: "eraReview" } },
   { id: "eft-todo",    label: "EFT Enrollment",      fullLabel: "EFT Enrollment · Not Started",               section: "EFT",       navTo: { board: "eft",       eftStatus: "not-started" } },
 ];
 
