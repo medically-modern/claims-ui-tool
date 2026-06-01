@@ -103,6 +103,10 @@ const COL = {
   // Echo Health, Zelis) carry the processor's ORIG ID instead, making
   // the trace the universal search key.
   RAW_REMITTANCE_TRACE: "text_mm1gz8ss",
+  // Patient address — location column. Surfaced on the ClaimDetail
+  // meta strip so the operator can verify routing (state drives the
+  // BCBS / Anthem submit guard) without leaving the tool.
+  ADDRESS: "location_mkxxpesw",
 } as const;
 
 // ---------- subitem column id reference ----------
@@ -528,9 +532,27 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     claimType: mapClaimType(txt(item, COL.CLAIM_TYPE)),
     placeOfService: mapPlaceOfService(txt(item, COL.PLACE_OF_SERVICE)),
     groupId: item.group?.id ?? null,
+    // Patient Address (location_mkxxpesw) — full address text from
+    // Monday plus the parsed 2-letter state code. Shown on the
+    // ClaimDetail meta strip and read by the BCBS / Anthem submit
+    // guard. Parser lives in lib/claims/bcbsSubmitGuard.ts.
+    patientAddressText: txt(item, COL.ADDRESS) || null,
+    patientAddressState: extractStateCode(txt(item, COL.ADDRESS)),
     activity: [],
     lines,
   };
+}
+
+/** Pull a 2-letter US state code out of a Monday Address text value.
+ *  Looks for a token sitting right before a ZIP or before the trailing
+ *  ",US" — same heuristic the submit guard uses, just returning the
+ *  raw code rather than bucketing. Returns null when nothing parses. */
+function extractStateCode(addressText: string): string | null {
+  if (!addressText) return null;
+  const m =
+    addressText.match(/\b([A-Z]{2})\b(?=\s*\d{5}|,\s*US|,?\s*$)/i) ||
+    addressText.match(/\b([A-Z]{2})\b/);
+  return m ? m[1].toUpperCase() : null;
 }
 
 function mapClaimType(s: string): "Original" | "Corrected" | "Void" | null {

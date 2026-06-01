@@ -23,6 +23,13 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { ThreadPanel, ThreadContextStrip } from "./ThreadPanel";
 import { StatusBadge } from "./StatusBadge";
+import { BcbsSubmitGuardDialog } from "./BcbsSubmitGuardDialog";
+import {
+  evaluateBcbsSubmit,
+  parsePatientStateFromAddress,
+  type BcbsGuardResult,
+  type PatientStateBucket,
+} from "@/lib/claims/bcbsSubmitGuard";
 import { setPlaceOfService } from "@/api/setPlaceOfService";
 import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 import {
@@ -245,13 +252,30 @@ export function PrimarySubmitBoard({ navTo }: { navTo?: PrimarySubmitNavTo | nul
     );
   }, [awaitingSubmit, awaitingAcceptance, queue, payerFilter, search, sortBy]);
 
+  // BCBS / Anthem pre-submit guard. The Submit click runs
+  // evaluateBcbsSubmit() against the row; if it returns hard stops (or
+  // soft warnings that require operator confirmation), we hold the
+  // actual submit behind an AlertDialog. State holds the claim being
+  // gated + the validator result so the dialog can render and the
+  // "Submit anyway" confirm path can finalize the submission.
+  // See lib/claims/bcbsSubmitGuard.ts for the routing rules.
+  const [bcbsGuard, setBcbsGuard] = useState<{
+    claim: ThreadClaim;
+    result: BcbsGuardResult;
+  } | null>(null);
+
   // Submit: write Primary Status="Submitted" to Monday, which triggers
   // the existing claims_webhook on the backend that calls
   // submit_from_claims_board (build 837 → send to Stedi → write back
   // Claim ID / PCN / Claim Sent Date). We update local state optimistically
   // so the row visually moves out of the "Awaiting Submission" queue;
   // the next refresh will pick up the backend's writebacks.
-  const submitOne = async (c: ThreadClaim) => {
+  //
+  // Pre-flight: BCBS / Anthem claims run through evaluateBcbsSubmit()
+  // first. Hard stops block submission outright; soft warnings open a
+  // confirmation dialog. Non-BCBS claims skip the guard entirely
+  // (applies === false).
+  const performSubmit = async (c: ThreadClaim) => {
     if (!c.monday_item_id) {
       toast({
         title: "Can't submit",
@@ -277,6 +301,52 @@ export function PrimarySubmitBoard({ navTo }: { navTo?: PrimarySubmitNavTo | nul
         description: (e as Error).message,
       });
     }
+  };
+
+  /** Resolve the patient state bucket from the ThreadClaim. Prefers the
+   *  parsed `patientAddressState` (2-letter code) when available; falls
+   *  back to re-parsing the raw text in case the query didn't carry the
+   *  parsed field for some reason. */
+  function patientStateBucketFor(c: ThreadClaim): PatientStateBucket {
+    const code = c.patientAddressState?.toUpperCase();
+    if (code === "NY") return "NY";
+    if (code === "NJ") return "NJ";
+    if (code && code.length === 2) return "OTHER";
+    // Fallback to re-parsing raw address text — keeps the validator
+    // working even if the query layer skipped state derivation.
+    return parsePatientStateFromAddress(c.patientAddressText);
+  }
+
+  /** Entry point for the Submit button. Runs the BCBS guard, then
+   *  either gates via dialog or proceeds straight to performSubmit. */
+  const submitOne = async (c: ThreadClaim) => {
+    const stateBucket = patientStateBucketFor(c);
+    const guardResult = evaluateBcbsSubmit({
+      payerLabel: c.payer,
+      payorId: c.payor_id,
+      placeOfService: c.place_of_service ?? null,
+      patientState: stateBucket,
+      lineAuthIds: c.items.map((i) => i.auth_id),
+      lineProducts: c.items.map((i) => i.hcpc),
+    });
+
+    // Out of scope — proceed with the existing submit flow.
+    if (!guardResult.applies) {
+      await performSubmit(c);
+      return;
+    }
+
+    // Hard stops OR soft warnings → show the dialog. Operator either
+    // fixes upstream (hard stops, modal Close-only) or confirms
+    // "Submit anyway" (warnings only). Performing the actual submit
+    // is handled by onConfirm in the dialog mount below.
+    if (guardResult.hardStops.length > 0 || guardResult.warnings.length > 0) {
+      setBcbsGuard({ claim: c, result: guardResult });
+      return;
+    }
+
+    // All checks passed — submit.
+    await performSubmit(c);
   };
 
   // Add a new subitem to a claim. Two writes happen in parallel:
@@ -454,6 +524,24 @@ export function PrimarySubmitBoard({ navTo }: { navTo?: PrimarySubmitNavTo | nul
           ))}
         </section>
       </TooltipProvider>
+
+      {/* BCBS / Anthem pre-submit guard dialog. Hard stops block submit;
+          soft warnings allow "Submit anyway". See bcbsSubmitGuard.ts. */}
+      {bcbsGuard && (
+        <BcbsSubmitGuardDialog
+          open={!!bcbsGuard}
+          onOpenChange={(open) => {
+            if (!open) setBcbsGuard(null);
+          }}
+          patientName={bcbsGuard.claim.patient.name}
+          result={bcbsGuard.result}
+          onConfirm={() => {
+            const c = bcbsGuard.claim;
+            setBcbsGuard(null);
+            void performSubmit(c);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -104,6 +104,15 @@ export interface ThreadClaim {
    *  (corrected / void / retry). ISO YYYY-MM-DD. Trumps claimSentDate
    *  for staleness when set; without it, claimSentDate is the proxy. */
   claimResentDate?: string;
+  /** Patient address state, parsed from the Claims Board Address column
+   *  (location_mkxxpesw). 2-letter US code (e.g. "NY", "NJ", "MA") or
+   *  undefined when the column is blank / unparseable. Drives the BCBS /
+   *  Anthem pre-submit validator (see lib/claims/bcbsSubmitGuard.ts). */
+  patientAddressState?: string;
+  /** Full raw text of the Patient Address column. Kept around for the
+   *  error toast/dialog when the state can't be parsed — lets the
+   *  operator see exactly what Monday has on file. */
+  patientAddressText?: string;
   items: ThreadItem[];
   notes?: string;
   createdAt: number;

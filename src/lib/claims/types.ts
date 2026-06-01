@@ -217,6 +217,17 @@ export interface Claim {
    *  Outstanding). Used by bucket filters that need to exclude or include
    *  rows based on group placement, not just Primary Status. */
   groupId?: string | null;
+  /** Patient Address (location_mkxxpesw on the Claims Board) — raw text
+   *  Monday returns for the location column. Surfaced on the ClaimDetail
+   *  meta strip so the operator can verify the address used for routing
+   *  (state drives the BCBS / Anthem submit guard). Null/undefined when
+   *  the column is empty on Monday. */
+  patientAddressText?: string | null;
+  /** Patient Address state — 2-letter US code parsed out of
+   *  patientAddressText. Read by the BCBS / Anthem submit guard
+   *  (see lib/claims/bcbsSubmitGuard.ts) and shown as a small uppercase
+   *  pill next to the address on the meta strip. Null when unparseable. */
+  patientAddressState?: string | null;
   activity?: ActivityEntry[];
   lines: ServiceLine[];
 }

@@ -1130,10 +1130,14 @@ const ClaimDetail = () => {
         {/* Claim-level meta strip — sits directly above the Service Lines
             table so the operator can see who the claim was sent to when
             they're reading a denial (especially useful for Wrong Payer
-            denials where the line-level codes alone don't tell the story). */}
+            denials where the line-level codes alone don't tell the story).
+            Address is included so the operator can verify routing — the
+            BCBS / Anthem submit guard keys on patient state, and stale
+            addresses (Kai Burridge: NY patient with old Waltham MA on
+            file) are the canonical bug we want to surface. */}
         <Card>
           <CardContent className="p-4">
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-6">
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Claim Sent Date
@@ -1177,6 +1181,32 @@ const ClaimDetail = () => {
                   {claim.placeOfService ?? "Home"}{" "}
                   <span className="text-xs font-mono text-muted-foreground">
                     ({claim.placeOfService === "Office" ? "11" : "12"})
+                  </span>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Address
+                </div>
+                {/* Full address text from Monday's location column. The
+                    2-letter state pill is what the BCBS submit guard
+                    keys on, so we make it the visually-prominent piece
+                    while keeping the full address visible underneath. */}
+                <div className="mt-1 flex flex-wrap items-baseline gap-2 text-sm">
+                  {claim.patientAddressState ? (
+                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold uppercase tracking-wide text-foreground">
+                      {claim.patientAddressState}
+                    </span>
+                  ) : (
+                    <span className="rounded bg-rose-100 px-1.5 py-0.5 font-mono text-xs font-semibold uppercase tracking-wide text-rose-800">
+                      No state
+                    </span>
+                  )}
+                  <span
+                    className="truncate text-xs text-muted-foreground"
+                    title={claim.patientAddressText || ""}
+                  >
+                    {claim.patientAddressText || "—"}
                   </span>
                 </div>
               </div>
@@ -1524,6 +1554,12 @@ const ClaimDetail = () => {
                       {hint}
                     </p>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      {/* Same Save-ERA gate as the Outstanding-bucket
+                          cards below — operator with unsaved per-line
+                          ERA edits open shouldn't be able to commit a
+                          denial resolution and silently drop those
+                          edits. See the comment near the Outstanding
+                          DecisionCard block for full reasoning. */}
                       <DecisionCard
                         tone="info"
                         icon={<Send className="h-5 w-5" />}
@@ -1538,7 +1574,13 @@ const ClaimDetail = () => {
                         disabled={
                           allowedRoute !== "Submit Claim" ||
                           denialResolveBusy !== null ||
-                          resubmitBusy
+                          resubmitBusy ||
+                          eraEditing
+                        }
+                        disabledReason={
+                          eraEditing
+                            ? "Save ERA before making a final decision — your per-line edits aren't on Monday yet."
+                            : undefined
                         }
                       />
                       <DecisionCard
@@ -1554,7 +1596,13 @@ const ClaimDetail = () => {
                         onClick={() => void resolveDenial("Outstanding")}
                         disabled={
                           allowedRoute !== "Outstanding" ||
-                          denialResolveBusy !== null
+                          denialResolveBusy !== null ||
+                          eraEditing
+                        }
+                        disabledReason={
+                          eraEditing
+                            ? "Save ERA before making a final decision — your per-line edits aren't on Monday yet."
+                            : undefined
                         }
                       />
                       <DecisionCard
@@ -1570,7 +1618,13 @@ const ClaimDetail = () => {
                         onClick={() => void resolveDenial("Bad Debt")}
                         disabled={
                           allowedRoute !== "Bad Debt" ||
-                          denialResolveBusy !== null
+                          denialResolveBusy !== null ||
+                          eraEditing
+                        }
+                        disabledReason={
+                          eraEditing
+                            ? "Save ERA before making a final decision — your per-line edits aren't on Monday yet."
+                            : undefined
                         }
                       />
                     </div>
@@ -1579,19 +1633,39 @@ const ClaimDetail = () => {
               })()
             ) : (
               <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                {/* Mark Paid + Send to Denial are gated behind ERA save.
+                    If eraEditing is true the operator still has unsaved
+                    per-line edits open in the Service Lines table —
+                    clicking a final-decision button would commit the
+                    claim with pre-edit values and silently drop the
+                    edits. Show a tooltip pointing the operator at the
+                    Save button on the Service Lines header.
+                    Uploaded Docs stays enabled because it's a snooze,
+                    not a final decision — operator can park the claim,
+                    finish editing, then come back. */}
                 <DecisionCard
                   tone="success" icon={<CheckCircle2 className="h-5 w-5" />}
                   title="Paid"
                   desc="Primary paid correctly. Remainder is PR or going to secondary."
                   cta="Mark Paid" onClick={openMarkPaid}
-                  disabled={linesWithIssues.length > 0}
+                  disabled={linesWithIssues.length > 0 || eraEditing}
+                  disabledReason={
+                    eraEditing
+                      ? "Save ERA before making a final decision — your per-line edits aren't on Monday yet."
+                      : undefined
+                  }
                 />
                 <DecisionCard
                   tone="danger" icon={<FileWarning className="h-5 w-5" />}
                   title="Denied / Partial Denial"
                   desc="One or more lines were denied or underpaid. Send to the denial flow."
                   cta="Send to Denial" onClick={saveDenial}
-                  disabled={linesWithIssues.length === 0}
+                  disabled={linesWithIssues.length === 0 || eraEditing}
+                  disabledReason={
+                    eraEditing
+                      ? "Save ERA before making a final decision — your per-line edits aren't on Monday yet."
+                      : undefined
+                  }
                 />
                 {/* Uploaded Docs — for the "payer asked for medical docs
                     before paying or denying" case. Stamps Late Action
@@ -1922,11 +1996,16 @@ function Detail({ label, value }: { label: string; value: string }) {
 }
 
 function DecisionCard({
-  tone, icon, title, desc, cta, onClick, disabled,
+  tone, icon, title, desc, cta, onClick, disabled, disabledReason,
 }: {
   tone: "success" | "danger" | "warning" | "info" | "neutral";
   icon: React.ReactNode; title: string; desc: string; cta: string;
   onClick: () => void; disabled?: boolean;
+  /** Optional hover tooltip explaining WHY the button is disabled.
+   *  Used by the "Save ERA before making a final decision" gate when
+   *  the operator has unsaved per-line ERA edits open. Only rendered
+   *  when both disabled and disabledReason are set. */
+  disabledReason?: string;
 }) {
   const toneBg: Record<typeof tone, string> = {
     success: "bg-success-soft text-success-soft-foreground",
@@ -1949,6 +2028,39 @@ function DecisionCard({
     info: "",
     neutral: "",
   };
+  const button = (
+    <Button
+      size="sm"
+      variant={tone === "neutral" ? "outline" : "default"}
+      className={cn(ctaTone[tone])}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {cta}
+    </Button>
+  );
+  // Disabled buttons don't fire mouse events, so a Tooltip wrapping the
+  // Button directly won't trigger on hover. The Radix recommendation is
+  // to wrap in a <span> with tabIndex so the trigger surface stays
+  // hoverable. Only render the Tooltip when there's actually something
+  // to say — otherwise the wrapper would steal hover from the row.
+  const ctaWithHint =
+    disabled && disabledReason ? (
+      <TooltipProvider delayDuration={150}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span tabIndex={0} className="inline-block w-full">
+              {button}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs text-xs">
+            {disabledReason}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    ) : (
+      button
+    );
   return (
     <div className={cn("rounded-lg border p-4 flex flex-col gap-3", cardTone[tone], disabled && "opacity-50")}>
       <div className="flex items-center gap-2">
@@ -1956,15 +2068,7 @@ function DecisionCard({
         <div className="font-medium">{title}</div>
       </div>
       <p className="text-xs text-muted-foreground flex-1">{desc}</p>
-      <Button
-        size="sm"
-        variant={tone === "neutral" ? "outline" : "default"}
-        className={cn(ctaTone[tone])}
-        onClick={onClick}
-        disabled={disabled}
-      >
-        {cta}
-      </Button>
+      {ctaWithHint}
     </div>
   );
 }

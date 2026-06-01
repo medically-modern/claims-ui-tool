@@ -13,6 +13,7 @@ import type {
   ThreadItem,
   ItemStatus,
 } from "@/lib/claims/threads";
+import { parsePatientStateFromAddress } from "@/lib/claims/bcbsSubmitGuard";
 
 // Column IDs on the Claims Board (parent items). See MONDAY_BOARD_SCHEMA.md.
 const COL = {
@@ -55,6 +56,11 @@ const COL = {
   // "last on the wire" date for staleness math.
   CLAIM_SENT_DATE: "date_mm14rk8d",
   CLAIM_RESENT_DATE: "date_mm29scz",
+  // Patient address — location column. Drives the BCBS / Anthem
+  // pre-submit validator: patient's home state is the master routing
+  // switch (NY → 803/POS12, NJ → 11348/POS12, other → 803/POS11).
+  // See lib/claims/bcbsSubmitGuard.ts.
+  ADDRESS: "location_mkxxpesw",
 } as const;
 
 // Column IDs on the Subitems board. See MONDAY_BOARD_SCHEMA.md.
@@ -247,6 +253,19 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
   const parentClaimId = textOf(item, COL.PARENT_CLAIM_ID);
   const posLabel = textOf(item, COL.PLACE_OF_SERVICE);
   const primaryStatusLabel = textOf(item, COL.PRIMARY_STATUS).trim();
+  const addressText = textOf(item, COL.ADDRESS);
+  const stateBucket = parsePatientStateFromAddress(addressText);
+  // Persist the raw 2-letter code (not the bucket) where possible so
+  // downstream UI can show "MA" rather than "OTHER". Re-derive the bucket
+  // inside the validator at evaluate time.
+  const rawStateMatch = addressText.match(
+    /\b([A-Z]{2})\b(?=\s*\d{5}|,\s*US|,?\s*$)/i,
+  );
+  const patientAddressState = rawStateMatch
+    ? rawStateMatch[1].toUpperCase()
+    : stateBucket === "UNKNOWN"
+      ? undefined
+      : stateBucket; // "NY" / "NJ"
   // Map Primary Status -> ThreadClaimStatus. The query filters to
   // Submit Claim / Submitted / Request rejected (lowercase 'r' on
   // Monday). The latter two share the "Submitted" bucket on the
@@ -274,6 +293,8 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
     rejection_reason: textOf(item, COL.REJECTION_REASON) || undefined,
     claimSentDate: textOf(item, COL.CLAIM_SENT_DATE) || undefined,
     claimResentDate: textOf(item, COL.CLAIM_RESENT_DATE) || undefined,
+    patientAddressState,
+    patientAddressText: addressText || undefined,
     patient: {
       name: item.name,
       dob: textOf(item, COL.DOB),
