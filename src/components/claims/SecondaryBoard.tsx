@@ -607,13 +607,23 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
   const [payerFilter, setPayerFilter] = useState<string>("all");
   // Sort options:
   //   dos / patient / payer  — universal sorts available in every bucket
-  //   coinsHigh / coinsLow   — coinsurance-amount sort, exposed only in the
-  //                            Confirm Payor bucket where it's the triage
-  //                            signal for routing (claims with sizable
-  //                            patient-responsibility coinsurance get
-  //                            different handling than near-zero PR ones)
+  //   prHigh / prLow         — patient-responsibility-amount sort, exposed
+  //                            only in the Confirm Payor bucket where it's
+  //                            the triage signal for routing.
+  //
+  // The sort value is c.remaining, which is the row's TOTAL patient
+  // responsibility (coinsuranceCopay + deductible) — the same dollar
+  // figure the row card shows next to "Remaining" / "Deductible" /
+  // "Coinsurance" depending on which PR component dominates. We sort by
+  // remaining regardless of which label is showing so $190 of pure
+  // deductible sorts correctly against $190 of pure coinsurance.
+  //
+  // Earlier version summed line.coinsuranceCopay only, which broke for
+  // deductible-only rows (e.g. Muggzy Jackson $190.78 deductible sorted
+  // as $0 against actual-coinsurance rows). prHigh/prLow on c.remaining
+  // gets every row right.
   const [sortBy, setSortBy] = useState<
-    "dos" | "patient" | "payer" | "coinsHigh" | "coinsLow"
+    "dos" | "patient" | "payer" | "prHigh" | "prLow"
   >("dos");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -686,21 +696,16 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
       .sort((a, b) => {
         if (sortBy === "patient") return a.patientName.localeCompare(b.patientName);
         if (sortBy === "payer") return (a.secondaryPayer ?? "").localeCompare(b.secondaryPayer ?? "");
-        if (sortBy === "coinsHigh" || sortBy === "coinsLow") {
-          // Sum coinsurance + copay per row — same total the row header
-          // and the per-line table show in the Confirm Payor flow
-          // (l.coinsuranceCopay represents PR-2 + PR-3 per subitem).
-          // We treat null / undefined as 0 so rows missing per-line PR
-          // breakdowns still sort cleanly to the bottom of "highest".
-          const totalA = a.lines.reduce(
-            (s, l) => s + (l.coinsuranceCopay ?? 0),
-            0,
-          );
-          const totalB = b.lines.reduce(
-            (s, l) => s + (l.coinsuranceCopay ?? 0),
-            0,
-          );
-          return sortBy === "coinsHigh" ? totalB - totalA : totalA - totalB;
+        if (sortBy === "prHigh" || sortBy === "prLow") {
+          // Sort by c.remaining (the row-level total of coinsuranceCopay
+          // + deductible). That's the same dollar figure the row card
+          // shows whether it's labeled "Remaining" / "Deductible" /
+          // "Coinsurance" — sorting on c.remaining means the comparator
+          // doesn't care which PR-component is dominant. Null/undefined
+          // remaining treated as 0 so rows still sort predictably.
+          const totalA = a.remaining ?? 0;
+          const totalB = b.remaining ?? 0;
+          return sortBy === "prHigh" ? totalB - totalA : totalA - totalB;
         }
         return a.dos.localeCompare(b.dos);
       });
@@ -712,7 +717,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
   // Paid rows already settled, Outstanding rows might not even have a
   // PR breakdown yet).
   useEffect(() => {
-    if (bucket !== "confirm" && (sortBy === "coinsHigh" || sortBy === "coinsLow")) {
+    if (bucket !== "confirm" && (sortBy === "prHigh" || sortBy === "prLow")) {
       setSortBy("dos");
     }
   }, [bucket, sortBy]);
@@ -1041,14 +1046,16 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
             <SelectItem value="dos">Sort by DOS</SelectItem>
             <SelectItem value="patient">Sort by Patient</SelectItem>
             <SelectItem value="payer">Sort by Secondary Payer</SelectItem>
-            {/* Coinsurance sorts — only meaningful in Confirm Payor where
-                they help triage: high-coinsurance rows usually want a
-                secondary-payer call, near-zero PR rows can often go
-                straight to Patient. */}
+            {/* Patient-owes sorts — only meaningful in Confirm Payor where
+                they help triage: high-PR rows usually want a secondary-
+                payer call, near-zero PR rows can often go straight to
+                Patient. Sorts by the row's total remaining (coinsurance
+                + deductible) so it matches whichever dollar figure the
+                row card shows, regardless of breakdown label. */}
             {bucket === "confirm" && (
               <>
-                <SelectItem value="coinsHigh">Sort by Coinsurance (high → low)</SelectItem>
-                <SelectItem value="coinsLow">Sort by Coinsurance (low → high)</SelectItem>
+                <SelectItem value="prHigh">Sort by Patient Owes (high → low)</SelectItem>
+                <SelectItem value="prLow">Sort by Patient Owes (low → high)</SelectItem>
               </>
             )}
           </SelectContent>
