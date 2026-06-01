@@ -2329,9 +2329,11 @@ function SendToPatientBody({
       <div className="flex items-center justify-end gap-2">
         {(c.rawSecondaryStatus ?? "Submit") === "Submit" ? (
           <>
+            {/* Preview Link — matches the Button colour used by the
+                Uploaded Docs to Payer DecisionCard on ClaimDetail
+                (default variant, app primary blue). */}
             <Button
               size="sm"
-              variant="outline"
               disabled={!c.payLinkUrl}
               onClick={() => {
                 if (!c.payLinkUrl) return;
@@ -2345,14 +2347,17 @@ function SendToPatientBody({
                   ? "Open the patient's invoice link in a new tab"
                   : "No Pay Link URL on this row yet — populate the Monday column first."
               }
-              className="h-8 border-[#7bdcb5] bg-[#7bdcb5] text-emerald-900 hover:bg-[#5ec79b] hover:text-emerald-950 disabled:bg-[#7bdcb5]/40 disabled:text-emerald-900/60"
+              className="h-8"
             >
               <ExternalLink className="mr-1 h-3.5 w-3.5" /> Preview Link
             </Button>
+            {/* Send Invoice — same emerald-700 the Mark Paid button (stage 2)
+                uses, so the two patient-side primary actions stay visually
+                consistent. */}
             <Button
               size="sm"
               onClick={onGenerate}
-              className="h-8 bg-[#00d084] text-white hover:bg-[#00b372]"
+              className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
             >
               <FileText className="mr-1 h-3.5 w-3.5" /> Send Invoice
             </Button>
