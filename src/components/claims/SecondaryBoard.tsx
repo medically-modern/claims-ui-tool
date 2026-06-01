@@ -2314,67 +2314,58 @@ function SendToPatientBody({
           Status. Submit -> still owe the patient an invoice (Preview
           + Send Invoice buttons). Anything else (Outstanding / Sent
           to Patient) -> we already billed, now waiting on payment
-          (Mark Paid button).
+          (Preview + Mark Paid buttons).
 
-          Stage-1 layout: [Preview Link]  [Send Invoice]
-            Preview Link  — light MM-brand green; opens c.payLinkUrl
-                            (Monday text_mm3qag2c) in a new tab so the
-                            operator can see what the patient will get
-                            before flipping the SMS trigger. Disabled
-                            when no link is on file.
-            Send Invoice  — dark MM-brand green; existing flow that
-                            flips Secondary Status + fires the
-                            Send Invoice → Done column for the SMS
-                            automation. */}
+          Preview Link sits in BOTH stages: before send, so the
+          operator can sanity-check what the patient will get; after
+          send, so they can resend the link out of band (read it back
+          to the patient on the phone, paste in a follow-up email,
+          etc.) without flipping any state. Default Button variant
+          (app primary blue, matches the Uploaded Docs to Payer
+          button on ClaimDetail). */}
       <div className="flex items-center justify-end gap-2">
+        {/* Preview Link — always visible; disabled when no URL on the
+            Monday row yet. */}
+        <Button
+          size="sm"
+          disabled={!c.payLinkUrl}
+          onClick={() => {
+            if (!c.payLinkUrl) return;
+            // noopener/noreferrer keeps the new tab from accessing
+            // window.opener — standard for opening untrusted /
+            // patient-facing URLs from an internal tool.
+            window.open(c.payLinkUrl, "_blank", "noopener,noreferrer");
+          }}
+          title={
+            c.payLinkUrl
+              ? "Open the patient's invoice link in a new tab"
+              : "No Pay Link URL on this row yet — populate the Monday column first."
+          }
+          className="h-8"
+        >
+          <ExternalLink className="mr-1 h-3.5 w-3.5" /> Preview Link
+        </Button>
+
         {(c.rawSecondaryStatus ?? "Submit") === "Submit" ? (
-          <>
-            {/* Preview Link — matches the Button colour used by the
-                Uploaded Docs to Payer DecisionCard on ClaimDetail
-                (default variant, app primary blue). */}
-            <Button
-              size="sm"
-              disabled={!c.payLinkUrl}
-              onClick={() => {
-                if (!c.payLinkUrl) return;
-                // noopener/noreferrer keeps the new tab from accessing
-                // window.opener — standard for opening untrusted /
-                // patient-facing URLs from an internal tool.
-                window.open(c.payLinkUrl, "_blank", "noopener,noreferrer");
-              }}
-              title={
-                c.payLinkUrl
-                  ? "Open the patient's invoice link in a new tab"
-                  : "No Pay Link URL on this row yet — populate the Monday column first."
-              }
-              className="h-8"
-            >
-              <ExternalLink className="mr-1 h-3.5 w-3.5" /> Preview Link
-            </Button>
-            {/* Send Invoice — same emerald-700 the Mark Paid button (stage 2)
-                uses, so the two patient-side primary actions stay visually
-                consistent. */}
-            <Button
-              size="sm"
-              onClick={onGenerate}
-              className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
-            >
-              <FileText className="mr-1 h-3.5 w-3.5" /> Send Invoice
-            </Button>
-          </>
+          // Stage 1 — invoice not yet sent. Send Invoice flips
+          // Secondary Status to Outstanding AND fires the SMS
+          // automation trigger column (color_mm3x6qe6 → Done).
+          <Button
+            size="sm"
+            onClick={onGenerate}
+            className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
+          >
+            <FileText className="mr-1 h-3.5 w-3.5" /> Send Invoice
+          </Button>
         ) : (
-          <>
-            <span className="text-[11px] text-muted-foreground">
-              Stage 2 — patient paid? mark it.
-            </span>
-            <Button
-              size="sm"
-              onClick={onMarkPaid}
-              className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
-            >
-              <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
-            </Button>
-          </>
+          // Stage 2 — patient paid? mark it.
+          <Button
+            size="sm"
+            onClick={onMarkPaid}
+            className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
+          >
+            <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
+          </Button>
         )}
       </div>
     </div>
