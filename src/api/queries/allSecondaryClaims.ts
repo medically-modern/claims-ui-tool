@@ -114,6 +114,11 @@ const COL = {
   DAYS_OUTSTANDING: "color_mm29awe7",
   NOTES: "long_text_mkzrx7ke",
   NEXT_ACTION_DATE: "date_mkxpynj",
+  // Pay Link URL — text column carrying the patient-facing invoice link.
+  // Surfaced as the Preview Link button on the Patient → Send Invoice
+  // stage so the operator can open exactly what the patient will see
+  // before flipping Send Invoice → Done (which kicks off the SMS).
+  PAY_LINK_URL: "text_mm3qag2c",
 } as const;
 
 // ---------- subitem column ids (secondary subitem board) ----------
@@ -529,6 +534,7 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
     bankPayerOriginatorId: txt(item, COL.BANK_PAYER_ORIG_ID) || null,
     bankEftDate: isoDateOrEmpty(txt(item, COL.BANK_EFT_DATE)) || null,
     bankTraceNumber: txt(item, COL.RAW_REMITTANCE_TRACE) || null,
+    payLinkUrl: txt(item, COL.PAY_LINK_URL) || undefined,
     secondaryAdj: hasSecondaryEra
       ? Math.max(remaining - secondaryPaidAmount, 0)
       : undefined,

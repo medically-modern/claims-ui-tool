@@ -114,6 +114,14 @@ export interface SecClaim {
    * awaiting payment.
    */
   rawSecondaryStatus?: string;
+  /**
+   * Patient-facing pay link URL (Monday column text_mm3qag2c, "Pay
+   * Link URL"). Populated upstream when the patient invoice is built.
+   * The Preview Link button on the Patient → Send Invoice stage opens
+   * this in a new tab so the operator can verify what the patient
+   * will see before flipping Send Invoice → Done. Empty string /
+   * undefined means no link generated yet; button renders disabled. */
+  payLinkUrl?: string;
   patientName: string;
   primaryPayor: string;
   secondaryPayer: string | null;     // null = patient bucket with no secondary; "Other" = custom
@@ -2303,19 +2311,48 @@ function SendToPatientBody({
       </div>
 
       {/* Two-stage action — driven by the row's raw Monday Secondary
-          Status. Submit -> still owe the patient an invoice (Send Invoice
-          button). Anything else (Outstanding / Sent to Patient) -> we
-          already billed, now waiting on payment (Mark Paid button). */}
+          Status. Submit -> still owe the patient an invoice (Preview
+          + Send Invoice buttons). Anything else (Outstanding / Sent
+          to Patient) -> we already billed, now waiting on payment
+          (Mark Paid button).
+
+          Stage-1 layout: [Preview Link]  [Send Invoice]
+            Preview Link  — light MM-brand green; opens c.payLinkUrl
+                            (Monday text_mm3qag2c) in a new tab so the
+                            operator can see what the patient will get
+                            before flipping the SMS trigger. Disabled
+                            when no link is on file.
+            Send Invoice  — dark MM-brand green; existing flow that
+                            flips Secondary Status + fires the
+                            Send Invoice → Done column for the SMS
+                            automation. */}
       <div className="flex items-center justify-end gap-2">
         {(c.rawSecondaryStatus ?? "Submit") === "Submit" ? (
           <>
-            <span className="text-[11px] text-muted-foreground">
-              Stage 1 — generate + send the patient invoice.
-            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!c.payLinkUrl}
+              onClick={() => {
+                if (!c.payLinkUrl) return;
+                // noopener/noreferrer keeps the new tab from accessing
+                // window.opener — standard for opening untrusted /
+                // patient-facing URLs from an internal tool.
+                window.open(c.payLinkUrl, "_blank", "noopener,noreferrer");
+              }}
+              title={
+                c.payLinkUrl
+                  ? "Open the patient's invoice link in a new tab"
+                  : "No Pay Link URL on this row yet — populate the Monday column first."
+              }
+              className="h-8 border-[#7bdcb5] bg-[#7bdcb5] text-emerald-900 hover:bg-[#5ec79b] hover:text-emerald-950 disabled:bg-[#7bdcb5]/40 disabled:text-emerald-900/60"
+            >
+              <ExternalLink className="mr-1 h-3.5 w-3.5" /> Preview Link
+            </Button>
             <Button
               size="sm"
               onClick={onGenerate}
-              className="h-8 bg-blue-600 text-white hover:bg-blue-700"
+              className="h-8 bg-[#00d084] text-white hover:bg-[#00b372]"
             >
               <FileText className="mr-1 h-3.5 w-3.5" /> Send Invoice
             </Button>
