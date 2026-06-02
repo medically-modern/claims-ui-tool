@@ -92,7 +92,7 @@ function circleStateFor(c: Checkpoint): CircleState {
 }
 
 function CheckpointCircle({
-  check, size = 28, onClick, title,
+  check, size = 36, onClick, title,
 }: {
   check: Checkpoint;
   size?: number;
@@ -102,8 +102,8 @@ function CheckpointCircle({
   const state = circleStateFor(check);
   const sizeStyle = { width: size, height: size };
   const inner =
-    state === "green" ? <Check className="h-4 w-4 text-white"  strokeWidth={3} /> :
-    state === "red"   ? <X     className="h-4 w-4 text-white"  strokeWidth={3} /> :
+    state === "green" ? <Check className="h-5 w-5 text-white"  strokeWidth={3} /> :
+    state === "red"   ? <X     className="h-5 w-5 text-white"  strokeWidth={3} /> :
     null;
   const cls =
     state === "green"   ? "bg-emerald-600 ring-emerald-600"
@@ -137,9 +137,9 @@ function CheckpointIcon({ check, onClick, title }: { check: Checkpoint; onClick?
 }
 
 const SUB_TYPE_PILLS: Record<SubscriptionType, string> = {
-  "Sensors":             "inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700",
-  "Supplies":            "inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700",
-  "Sensors & Supplies":  "inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700",
+  "Sensors":             "inline-flex items-center whitespace-nowrap rounded-full bg-sky-100 px-3 py-1 text-[12px] font-semibold text-sky-700",
+  "Supplies":            "inline-flex items-center whitespace-nowrap rounded-full bg-violet-100 px-3 py-1 text-[12px] font-semibold text-violet-700",
+  "Sensors & Supplies":  "inline-flex items-center whitespace-nowrap rounded-full bg-orange-100 px-3 py-1 text-[12px] font-semibold text-orange-700",
 };
 
 function BlockedByPill({ value }: { value?: BlockedParty }) {
@@ -200,23 +200,22 @@ function ReviewAndSubmit({ p, onReview, onSubmit }: {
   const ready = allChecksPass(p);
   return (
     <div className="flex items-center justify-end gap-2">
-      <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={onReview}>
-        Review Profile<ArrowRight className="ml-1 h-3 w-3" />
+      <Button variant="outline" className="h-9 text-[13px] font-semibold" onClick={onReview}>
+        Review Profile<ArrowRight className="ml-1.5 h-3.5 w-3.5" />
       </Button>
       <Button
-        size="sm"
         onClick={onSubmit}
         className={cn(
-          "h-7 text-[11px] text-white",
+          "h-9 text-[13px] font-semibold text-white",
           ready
-            ? "bg-emerald-700 hover:bg-emerald-800"
+            ? "bg-emerald-700 hover:bg-emerald-800 shadow-sm"
             : "bg-slate-400 hover:bg-slate-500",
         )}
         title={ready
           ? "All 4 checks passed — send order"
           : "Not all 4 checks pass — confirm before submitting"}
       >
-        <Send className="mr-1 h-3 w-3" />Send to Order Board
+        <Send className="mr-1.5 h-3.5 w-3.5" />Send to Order Board
       </Button>
     </div>
   );
@@ -396,7 +395,19 @@ function PatientDrawer({
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export function SubscriptionBoard() {
-  const [phase, setPhase] = useState<PhaseTab>("overview");
+  type PrimaryTab = "overview" | "prep" | "order";
+  const [primary, setPrimary] = useState<PrimaryTab>("overview");
+  const [prepPhase, setPrepPhase] = useState<CheckpointKind>("confirmation");
+  // `phase` is the derived view selection used by the rest of the component.
+  const phase: PhaseTab =
+    primary === "overview" ? "overview"
+    : primary === "order"  ? "ready"
+    : prepPhase;
+  const setPhase = (next: PhaseTab) => {
+    if (next === "overview") setPrimary("overview");
+    else if (next === "ready") setPrimary("order");
+    else { setPrimary("prep"); setPrepPhase(next); }
+  };
   const [search, setSearch] = useState("");
   const [payer, setPayer] = useState<string>("All payers");
   const [blocked, setBlocked] = useState<string>("Anyone");
@@ -481,16 +492,22 @@ export function SubscriptionBoard() {
 
   return (
     <div className="space-y-4">
-      {/* Phase tabs */}
+      {/* Primary nav: Overview | Order Prep | Order */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Tabs value={phase} onValueChange={(v) => setPhase(v as PhaseTab)}>
-          <TabsList className="bg-card border flex-wrap">
-            {renderPhaseTab("overview",     "Overview",         counts.overview)}
-            {renderPhaseTab("confirmation", "Confirmation",     counts.confirmation)}
-            {renderPhaseTab("benefits",     "Eligibility",      counts.benefits)}
-            {renderPhaseTab("auth",         "Authorization",    counts.auth)}
-            {renderPhaseTab("lastPaid",     "Last Order Paid",  counts.lastPaid)}
-            {renderPhaseTab("ready",        "Submit Order",     counts.ready)}
+        <Tabs value={primary} onValueChange={(v) => setPrimary(v as PrimaryTab)}>
+          <TabsList className="bg-card border h-11 p-1">
+            <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
+              Overview
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.overview}</span>
+            </TabsTrigger>
+            <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4">
+              Order Prep
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.confirmation + counts.benefits + counts.auth + counts.lastPaid}</span>
+            </TabsTrigger>
+            <TabsTrigger value="order" className="text-[15px] font-semibold gap-2 px-4">
+              Order
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.ready}</span>
+            </TabsTrigger>
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
@@ -502,6 +519,18 @@ export function SubscriptionBoard() {
           )}
         </div>
       </div>
+
+      {/* Sub-nav under Order Prep — the 4 readiness phases */}
+      {primary === "prep" && (
+        <Tabs value={prepPhase} onValueChange={(v) => setPrepPhase(v as CheckpointKind)}>
+          <TabsList className="bg-card border">
+            {renderPhaseTab("confirmation", "Confirmation",     counts.confirmation)}
+            {renderPhaseTab("benefits",     "Eligibility",      counts.benefits)}
+            {renderPhaseTab("auth",         "Authorization",    counts.auth)}
+            {renderPhaseTab("lastPaid",     "Last Order Paid",  counts.lastPaid)}
+          </TabsList>
+        </Tabs>
+      )}
 
       {/* KPI grid */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
@@ -566,7 +595,7 @@ export function SubscriptionBoard() {
 
 // ─── Tables ──────────────────────────────────────────────────────────────────
 
-const OVERVIEW_GRID = "grid grid-cols-[200px_90px_130px_170px_minmax(64px,1fr)_minmax(64px,1fr)_minmax(64px,1fr)_minmax(64px,1fr)_240px] gap-3";
+const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_300px] gap-4";
 
 function OverviewTable({
   rows, onCellClick, onPatientClick, onSubmit,
@@ -578,7 +607,7 @@ function OverviewTable({
 }) {
   return (
     <div className="text-[13px]">
-      <div className={cn(OVERVIEW_GRID, "border-b bg-muted/40 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground items-end")}>
+      <div className={cn(OVERVIEW_GRID, "border-b bg-muted/60 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
         <div>Patient</div>
         <div>Order</div>
         <div>Subscription</div>
@@ -590,17 +619,17 @@ function OverviewTable({
         <div className="text-right pr-2">Actions</div>
       </div>
       {rows.map((p) => (
-        <div key={p.id} className={cn(OVERVIEW_GRID, "border-b px-4 py-3 hover:bg-muted/20 items-center")}>
+        <div key={p.id} className={cn(OVERVIEW_GRID, "border-b px-6 py-4 hover:bg-muted/30 transition-colors items-center")}>
           <button type="button" onClick={() => onPatientClick(p)} className="text-left">
-            <div className="text-[13px] font-semibold flex items-center">{p.name}<PauseBadge patient={p} /></div>
-            <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
+            <div className="text-[15px] font-semibold text-foreground flex items-center">{p.name}<PauseBadge patient={p} /></div>
+            <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">{p.phone}</div>
           </button>
           <div>
-            <div className="text-[13px] font-medium tabular-nums">{fmtDate(p.nextOrderDate)}</div>
-            <div className="text-[11px] text-muted-foreground tabular-nums">in {daysBetween(p.nextOrderDate)}d</div>
+            <div className="text-[15px] font-semibold tabular-nums">{fmtDate(p.nextOrderDate)}</div>
+            <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">in {daysBetween(p.nextOrderDate)}d</div>
           </div>
           <div><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></div>
-          <div className="text-[13px] truncate">{p.primaryPayer}</div>
+          <div className="text-[14px] truncate">{p.primaryPayer}</div>
           <div className="flex justify-center"><CheckpointCircle check={p.confirmation} onClick={() => onCellClick(p, "confirmation")} /></div>
           <div className="flex justify-center"><CheckpointCircle check={p.benefits}     onClick={() => onCellClick(p, "benefits")} /></div>
           <div className="flex justify-center"><CheckpointCircle check={p.auth}          onClick={() => onCellClick(p, "auth")} /></div>
