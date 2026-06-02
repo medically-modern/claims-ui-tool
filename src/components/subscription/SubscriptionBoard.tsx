@@ -39,8 +39,8 @@ import { cn } from "@/lib/utils";
 
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
-  currentPhase, ORDER_PREP_PATIENTS, PAYER_OPTIONS, PHASE_LABELS,
-  SubscriptionPatient, SubscriptionType,
+  currentPhase, ORDER_PREP_PATIENTS, PATIENT_STATUS_OPTIONS, PAUSE_REASON_OPTIONS,
+  PAYER_OPTIONS, PHASE_LABELS, SubscriptionPatient, SubscriptionType,
 } from "./mockData";
 
 type PhaseTab = "overview" | CheckpointKind | "ready";
@@ -107,6 +107,19 @@ function BlockedByPill({ value }: { value?: BlockedParty }) {
   return (
     <span className={cn("inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold", c.cls)}>
       {c.icon}{c.label}
+    </span>
+  );
+}
+
+
+function PauseBadge({ patient }: { patient: SubscriptionPatient }) {
+  if (patient.patientStatus !== "Paused") return null;
+  return (
+    <span
+      className="ml-1.5 inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-tight text-amber-800"
+      title={patient.pauseReason ? `Paused: ${patient.pauseReason}` : "Paused (no reason set)"}
+    >
+      Paused{patient.pauseReason ? ` · ${patient.pauseReason}` : ""}
     </span>
   );
 }
@@ -340,6 +353,8 @@ export function SubscriptionBoard() {
   const [search, setSearch] = useState("");
   const [payer, setPayer] = useState<string>("All payers");
   const [blocked, setBlocked] = useState<string>("Anyone");
+  const [statusFilter, setStatusFilter] = useState<string>("Active");
+  const [pauseReason, setPauseReason] = useState<string>("Any pause reason");
   const [activePatient, setActivePatient] = useState<SubscriptionPatient | null>(null);
   const [activeKind, setActiveKind] = useState<CheckpointKind | "patient" | null>(null);
 
@@ -369,13 +384,15 @@ export function SubscriptionBoard() {
         if (!nameMatch && !idMatch && !phoneMatch) return false;
       }
       if (payer !== "All payers" && p.primaryPayer !== payer) return false;
+      if (statusFilter !== "All" && p.patientStatus !== statusFilter) return false;
+      if (pauseReason !== "Any pause reason" && p.pauseReason !== pauseReason) return false;
       if (blocked !== "Anyone") {
         const map = { Us: "us", Patient: "patient", Payer: "payer", System: "system" } as const;
         if (p.blockedBy !== map[blocked as keyof typeof map]) return false;
       }
       return true;
     });
-  }, [all, search, payer, blocked]);
+  }, [all, search, payer, blocked, statusFilter, pauseReason]);
 
   const rows = useMemo(() => {
     if (phase === "overview") return filteredAll;
@@ -458,6 +475,14 @@ export function SubscriptionBoard() {
           <SelectTrigger className="w-[180px]"><SelectValue placeholder="Blocked by" /></SelectTrigger>
           <SelectContent>{BLOCKED_BY_OPTIONS.map((b) => <SelectItem key={b} value={b}>{b === "Anyone" ? "Blocked by: anyone" : `Blocked by ${b}`}</SelectItem>)}</SelectContent>
         </Select>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="w-[140px]"><SelectValue placeholder="Status" /></SelectTrigger>
+          <SelectContent>{PATIENT_STATUS_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s === "All" ? "All statuses" : s}</SelectItem>)}</SelectContent>
+        </Select>
+        <Select value={pauseReason} onValueChange={setPauseReason}>
+          <SelectTrigger className="w-[240px]"><SelectValue placeholder="Pause reason" /></SelectTrigger>
+          <SelectContent className="max-h-[360px]">{PAUSE_REASON_OPTIONS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
+        </Select>
       </div>
 
       {/* Table per phase */}
@@ -520,7 +545,7 @@ function OverviewTable({
       {rows.map((p) => (
         <div key={p.id} className={cn(OVERVIEW_GRID, "border-b px-4 py-3 hover:bg-muted/20 items-center")}>
           <button type="button" onClick={() => onPatientClick(p)} className="text-left">
-            <div className="text-[13px] font-semibold">{p.name}</div>
+            <div className="text-[13px] font-semibold flex items-center">{p.name}<PauseBadge patient={p} /></div>
             <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
           </button>
           <div>
@@ -571,7 +596,7 @@ function PhaseTable({
             <TableRow key={p.id} className="align-top">
               <TableCell>
                 <button type="button" onClick={() => onPatientClick(p)} className="text-left">
-                  <div className="text-[13px] font-semibold">{p.name}</div>
+                  <div className="text-[13px] font-semibold flex items-center">{p.name}<PauseBadge patient={p} /></div>
                   <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
                 </button>
               </TableCell>
@@ -616,7 +641,7 @@ function SubmitTable({
         {rows.map((p) => (
           <TableRow key={p.id}>
             <TableCell>
-              <div className="text-[13px] font-semibold">{p.name}</div>
+              <div className="text-[13px] font-semibold flex items-center">{p.name}<PauseBadge patient={p} /></div>
               <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
             </TableCell>
             <TableCell>
