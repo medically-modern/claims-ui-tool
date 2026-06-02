@@ -1869,8 +1869,25 @@ function ConfirmPayorBody({
   // Suggested destination — backend already classified at spawn. We use
   // c.secondaryPayer (the Monday status label set during spawn) to hint
   // the operator at the rules-based pick. They can override either way.
+  //
+  // Bill-the-Patient signals:
+  //   - secondaryPayer === "Patient"  (operator already marked it)
+  //   - secondaryPayer === "None"     (no secondary insurance on file —
+  //                                    patient owes the balance directly)
+  //   - secondaryPayer is null/blank  (nothing on file at all)
+  //
+  // Everything else (Medicare Suppl., a named insurance plan, etc.)
+  // suggests Insurance because there's a real payer to bill first.
+  // "Bad Debt" / "No Patient Responsibility" are technically also
+  // non-insurance flags but the operator typically routes those to
+  // Waive Payment rather than billing the patient; we keep them on
+  // the Insurance side of the toggle for now so the operator has to
+  // make the explicit Waive choice.
+  const NO_SECONDARY_INSURANCE = new Set(["Patient", "None"]);
   const suggested: "Insurance" | "Patient" =
-    c.secondaryPayer && c.secondaryPayer !== "Patient" ? "Insurance" : "Patient";
+    c.secondaryPayer && !NO_SECONDARY_INSURANCE.has(c.secondaryPayer)
+      ? "Insurance"
+      : "Patient";
 
   const hasSecondaryId =
     !!c.secondaryMemberId && c.secondaryMemberId !== "—";
@@ -1919,7 +1936,9 @@ function ConfirmPayorBody({
           <span className="font-medium text-foreground">{suggested}</span>
           {suggested === "Insurance"
             ? ` (Secondary Payer on file: ${c.secondaryPayer ?? "—"})`
-            : " (no secondary insurance — patient owes the balance)"}
+            : c.secondaryPayer === "None"
+              ? ' (Secondary Payer = "None" — no insurance on file, bill the patient)'
+              : " (no secondary insurance — patient owes the balance)"}
         </div>
       </div>
 
