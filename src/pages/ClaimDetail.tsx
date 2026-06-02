@@ -47,6 +47,10 @@ import {
   type PlaybookRowLike,
 } from "@/lib/claims/playbook";
 import {
+  isMedicareABClaim,
+  medicareJurisdictionForState,
+} from "@/lib/claims/medicareJurisdiction";
+import {
   verifyPlaybookCombo,
   isPlaybookApiConfigured,
 } from "@/api/playbook";
@@ -1191,7 +1195,11 @@ const ClaimDetail = () => {
                 {/* Full address text from Monday's location column. The
                     2-letter state pill is what the BCBS submit guard
                     keys on, so we make it the visually-prominent piece
-                    while keeping the full address visible underneath. */}
+                    while keeping the full address visible underneath.
+                    Medicare A&B claims also get a "Jur A/B/C/D" pill
+                    next to the state — the MAC jurisdiction for that
+                    state, since each is administered by a different
+                    contractor with its own fee schedule and portal. */}
                 <div className="mt-1 flex flex-wrap items-baseline gap-2 text-sm">
                   {claim.patientAddressState ? (
                     <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold uppercase tracking-wide text-foreground">
@@ -1202,6 +1210,29 @@ const ClaimDetail = () => {
                       No state
                     </span>
                   )}
+                  {/* Medicare A&B MAC jurisdiction. Hidden on Medicare
+                      Advantage rows (Anthem Medicare, United Medicare,
+                      etc.) since those are administered by commercial
+                      payers and don't map to a CMS MAC jurisdiction. */}
+                  {isMedicareABClaim(claim.primaryPayor) &&
+                    medicareJurisdictionForState(claim.patientAddressState) && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="cursor-help rounded bg-info-soft px-1.5 py-0.5 font-mono text-xs font-semibold uppercase tracking-wide text-info-soft-foreground">
+                            Jur{" "}
+                            {medicareJurisdictionForState(
+                              claim.patientAddressState,
+                            )}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs text-xs">
+                          Medicare A&B MAC jurisdiction for{" "}
+                          {claim.patientAddressState}. Different fee
+                          schedules + portals per jurisdiction; use this
+                          when cross-referencing CMS resources.
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
                   <span
                     className="truncate text-xs text-muted-foreground"
                     title={claim.patientAddressText || ""}
