@@ -1,19 +1,20 @@
 /**
  * SubscriptionBoard.tsx — Subscription Board tab in the Claims Command Center.
  *
- * Aligned to:
- *   - SUBSCRIPTION_WORKFLOW_OVERVIEW.html — hard vs soft constraints,
- *     operator override, Medicaid DVS, MR is intentionally NOT a check
- *   - SUBSCRIPTION_UI_TOOL_PRD.md — 2 sub-tabs, KPI grid, table density,
- *     per-checkpoint drawer pattern with distinct content per cell type
+ * The sub-tab nav matches the operator's actual workflow: they batch through
+ * Confirmation, then Eligibility, then Auth, then Last Paid, then submit. Each
+ * tab shows the patients currently STUCK in that phase (leftmost not-ok check),
+ * with stuck-since, next check-in, and who's blocked-by (us / patient / payer
+ * / system) so it's clear why someone hasn't moved and when to revisit.
  *
- * Mock data only; backend wiring lands separately.
+ * "Overview" shows the full 4-column readiness table for the whole cohort.
  */
 
 import { useMemo, useState } from "react";
 import {
-  AlertTriangle, ArrowRight, Check, Clock, ExternalLink, Lock, RefreshCw,
-  Search, Send, ShieldOff, Unlock, X,
+  AlertTriangle, ArrowRight, Building2, Check, Clock, ExternalLink,
+  Heart, Lock, RefreshCw, Search, Send, Server, ShieldOff, UserCog, Users,
+  Unlock, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -34,17 +35,37 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 import {
-  CHECKPOINT_GATE, CHECKPOINT_STATE_OPTIONS, Checkpoint, CheckpointKind,
-  ORDER_PREP_PATIENTS, PAYER_OPTIONS, SUBMIT_ORDER_PATIENTS,
+  BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
+  currentPhase, ORDER_PREP_PATIENTS, PAYER_OPTIONS, PHASE_LABELS,
   SubscriptionPatient,
 } from "./mockData";
 
-type SubTab = "prep" | "submit";
+type PhaseTab = "overview" | CheckpointKind | "ready";
 
 const SUB_TYPE_PILL =
   "inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700";
 
-// ─── Checkpoint cell ─────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function fmtDate(iso: string) {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+function daysBetween(iso: string, base = new Date()) {
+  const d = new Date(iso + "T00:00:00");
+  const baseDay = new Date(base);
+  baseDay.setHours(0, 0, 0, 0);
+  return Math.round((d.getTime() - baseDay.getTime()) / 86_400_000);
+}
+function getCheckpoint(p: SubscriptionPatient, kind: CheckpointKind): Checkpoint {
+  switch (kind) {
+    case "confirmation": return p.confirmation;
+    case "benefits":     return p.benefits;
+    case "auth":         return p.auth;
+    case "lastPaid":     return p.lastPaid;
+  }
+}
+
+// ─── Atoms ───────────────────────────────────────────────────────────────────
 function CheckpointCell({ check, onClick }: { check: Checkpoint; onClick?: () => void }) {
   const palette = {
     ok:      { ring: "ring-emerald-200 bg-emerald-50",  text: "text-emerald-700",  icon: <Check className="h-3.5 w-3.5" /> },
@@ -75,7 +96,6 @@ function CheckpointCell({ check, onClick }: { check: Checkpoint; onClick?: () =>
   );
 }
 
-// ─── Run Check column pill (Subscription Board state) ───────────────────────
 function RunCheckPill({ value }: { value: SubscriptionPatient["runCheck"] }) {
   const palette = {
     Pass:   "bg-emerald-100 text-emerald-700",
@@ -91,65 +111,69 @@ function RunCheckPill({ value }: { value: SubscriptionPatient["runCheck"] }) {
   );
 }
 
-// ─── Header label with hard/soft gate badge ─────────────────────────────────
-function GateHeader({ label, kind }: { label: string; kind: CheckpointKind }) {
+function GateBadge({ kind }: { kind: CheckpointKind }) {
   const gate = CHECKPOINT_GATE[kind];
   return (
-    <div className="flex items-center gap-1.5">
-      <span>{label}</span>
-      <span
-        className={cn(
-          "inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[8.5px] font-bold uppercase tracking-tight",
-          gate === "hard" ? "bg-rose-50 text-rose-600" : "bg-slate-100 text-slate-500",
-        )}
-        title={gate === "hard"
-          ? "Hard constraint — claim denial risk if overridden"
-          : "Soft constraint — operator can override with logged reason"}
-      >
-        {gate === "hard" ? <Lock className="h-2.5 w-2.5" /> : <ShieldOff className="h-2.5 w-2.5" />}
-        {gate}
-      </span>
+    <span
+      className={cn(
+        "inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[8.5px] font-bold uppercase tracking-tight",
+        gate === "hard" ? "bg-rose-50 text-rose-600" : "bg-slate-100 text-slate-500",
+      )}
+      title={gate === "hard"
+        ? "Hard constraint — claim denial risk if overridden"
+        : "Soft constraint — operator can override with logged reason"}
+    >
+      {gate === "hard" ? <Lock className="h-2.5 w-2.5" /> : <ShieldOff className="h-2.5 w-2.5" />}
+      {gate}
+    </span>
+  );
+}
+
+function BlockedByPill({ value }: { value?: BlockedParty }) {
+  if (!value) return <span className="text-[11px] text-muted-foreground">—</span>;
+  const cfg: Record<BlockedParty, { label: string; cls: string; icon: JSX.Element }> = {
+    us:      { label: "Us",      cls: "bg-violet-100 text-violet-700",   icon: <UserCog  className="h-3 w-3" /> },
+    patient: { label: "Patient", cls: "bg-amber-100 text-amber-700",     icon: <Heart    className="h-3 w-3" /> },
+    payer:   { label: "Payer",   cls: "bg-sky-100 text-sky-700",         icon: <Building2 className="h-3 w-3" /> },
+    system:  { label: "System",  cls: "bg-slate-100 text-slate-600",     icon: <Server   className="h-3 w-3" /> },
+  };
+  const c = cfg[value];
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold", c.cls)}>
+      {c.icon}{c.label}
+    </span>
+  );
+}
+
+function CheckInCell({ iso, stuckSince }: { iso?: string; stuckSince?: string }) {
+  if (!iso) return <span className="text-[11px] text-muted-foreground">—</span>;
+  const days = daysBetween(iso);
+  const tone =
+    days < 0 ? "text-rose-600 font-semibold" :
+    days === 0 ? "text-amber-700 font-semibold" :
+    days <= 2 ? "text-amber-700" :
+    "text-foreground";
+  return (
+    <div className="leading-tight">
+      <div className={cn("text-[12px] tabular-nums", tone)}>
+        {fmtDate(iso)} <span className="text-muted-foreground">({days < 0 ? `${-days}d ago` : days === 0 ? "today" : `in ${days}d`})</span>
+      </div>
+      {stuckSince && (
+        <div className="text-[10px] text-muted-foreground tabular-nums mt-0.5">
+          stuck since {fmtDate(stuckSince)} ({-daysBetween(stuckSince)}d)
+        </div>
+      )}
     </div>
   );
 }
 
-function nextActionLabel(p: SubscriptionPatient): { label: string; primary: boolean; kind: CheckpointKind | null } {
-  if (p.confirmation.tone !== "ok") return { label: "Review Confirmation", primary: false, kind: "confirmation" };
-  if (p.benefits.tone !== "ok")     return { label: "Run Eligibility",     primary: false, kind: "benefits" };
-  if (p.auth.tone !== "ok")         return { label: "Work Auth",            primary: false, kind: "auth" };
-  if (p.lastPaid.tone !== "ok")     return { label: "Open Last Claim",     primary: false, kind: "lastPaid" };
-  return { label: "Submit Order", primary: true, kind: null };
-}
-
-/** Per PRD §8: red bar when ANY cell is bad; amber only when ANY cell is warn (pending stays no-accent). */
-function rowAccent(p: SubscriptionPatient): "red" | "amber" | "none" {
-  const cells = [p.confirmation, p.benefits, p.auth, p.lastPaid];
-  if (cells.some((c) => c.tone === "bad")) return "red";
-  if (cells.some((c) => c.tone === "warn")) return "amber";
-  return "none";
-}
-
-function fmtDate(iso: string) {
-  const d = new Date(iso + "T00:00:00");
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-function daysFromToday(iso: string) {
-  const d = new Date(iso + "T00:00:00");
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return Math.round((d.getTime() - today.getTime()) / 86_400_000);
-}
-
-// ─── KPI tile ────────────────────────────────────────────────────────────────
-function KpiTile({
-  label, value, sublines, tone,
-}: {
+function KpiTile({ label, value, tone, sublines }: {
   label: string;
   value: string | number;
-  sublines?: Array<{ label: string; value: string | number }>;
   tone?: "info" | "warning" | "danger" | "success" | "neutral";
+  sublines?: Array<{ label: string; value: string | number }>;
 }) {
-  const dotPalette = {
+  const dot = {
     info:    "bg-sky-100 text-sky-600",
     warning: "bg-amber-100 text-amber-600",
     danger:  "bg-rose-100 text-rose-600",
@@ -159,7 +183,7 @@ function KpiTile({
   return (
     <Card className="p-5">
       <div className="flex items-start justify-between gap-3">
-        <div className={cn("grid h-9 w-9 place-items-center rounded-lg", dotPalette)}>
+        <div className={cn("grid h-9 w-9 place-items-center rounded-lg", dot)}>
           <Clock className="h-4 w-4" />
         </div>
         <div className="text-3xl font-semibold tracking-tight tabular-nums">{value}</div>
@@ -179,7 +203,7 @@ function KpiTile({
   );
 }
 
-// ─── Checkpoint drawer — different content per checkpoint kind ──────────────
+// ─── Drawer (per-checkpoint + patient view) ─────────────────────────────────
 function CheckpointDrawer({
   patient, kind, onClose,
 }: {
@@ -188,22 +212,15 @@ function CheckpointDrawer({
   onClose: () => void;
 }) {
   const open = !!patient && !!kind;
-  if (!patient || !kind) {
-    return (
-      <Sheet open={false} onOpenChange={(o) => !o && onClose()}>
-        <SheetContent />
-      </Sheet>
-    );
+  if (!open || !patient || !kind) {
+    return <Sheet open={false} onOpenChange={onClose}><SheetContent /></Sheet>;
   }
-
   const isPatientView = kind === "patient";
-  const checkpoint: Checkpoint | null =
-    kind === "confirmation" ? patient.confirmation :
-    kind === "benefits"     ? patient.benefits :
-    kind === "auth"         ? patient.auth :
-    kind === "lastPaid"     ? patient.lastPaid : null;
-
-  const checkpointTitle = ({
+  const checkpoint: Checkpoint | null = isPatientView ? null : getCheckpoint(patient, kind);
+  const gate = !isPatientView ? CHECKPOINT_GATE[kind as CheckpointKind] : null;
+  const isSoft = gate === "soft";
+  const isFailing = checkpoint && checkpoint.tone !== "ok";
+  const title = ({
     confirmation: "Patient Confirmation",
     benefits:     "Benefits & Eligibility",
     auth:         "Authorization",
@@ -211,49 +228,30 @@ function CheckpointDrawer({
     patient:      "Patient overview",
   } as const)[kind];
 
-  const checkpointKindForGate: CheckpointKind | null =
-    kind === "patient" ? null : kind;
-  const gate = checkpointKindForGate ? CHECKPOINT_GATE[checkpointKindForGate] : null;
-  const isSoft = gate === "soft";
-  const isFailing = checkpoint && checkpoint.tone !== "ok";
-
   return (
-    <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className={cn(isPatientView ? "w-[640px] sm:max-w-[640px]" : "w-[480px] sm:max-w-[480px]")}>
+    <Sheet open={open} onOpenChange={onClose}>
+      <SheetContent className={cn(isPatientView ? "w-[640px] sm:max-w-[640px]" : "w-[480px] sm:max-w-[480px]", "overflow-y-auto")}>
         <SheetHeader>
-          <SheetTitle>{checkpointTitle}</SheetTitle>
+          <SheetTitle>{title}</SheetTitle>
           <SheetDescription>
             {patient.name} · {patient.subscriptionType} · {patient.primaryPayer} · order {fmtDate(patient.nextOrderDate)}
           </SheetDescription>
         </SheetHeader>
 
-        {/* Patient overview drawer */}
-        {isPatientView && (
+        {isPatientView ? (
           <div className="mt-6 space-y-4">
             <div>
               <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Readiness checks</div>
               <div className="space-y-2">
-                {([
-                  ["1. Confirmation",     "confirmation"],
-                  ["2. Benefits active",  "benefits"],
-                  ["3. Auth valid",       "auth"],
-                  ["4. Last order paid",  "lastPaid"],
-                ] as const).map(([name, k]) => {
-                  const c = k === "confirmation" ? patient.confirmation
-                          : k === "benefits"     ? patient.benefits
-                          : k === "auth"         ? patient.auth
-                          : patient.lastPaid;
+                {(["confirmation","benefits","auth","lastPaid"] as const).map((k, idx) => {
+                  const c = getCheckpoint(patient, k);
                   return (
-                    <Card key={name} className="p-3 flex items-center justify-between">
+                    <Card key={k} className="p-3 flex items-center justify-between">
                       <div>
-                        <div className="text-[13px] font-semibold">{name}</div>
-                        {c.detail && (
-                          <div className="text-[11px] text-muted-foreground mt-0.5">{c.detail}</div>
-                        )}
+                        <div className="text-[13px] font-semibold">{`${idx + 1}. ${PHASE_LABELS[k]}`}</div>
+                        {c.detail && <div className="text-[11px] text-muted-foreground mt-0.5">{c.detail}</div>}
                         {c.overrideReason && (
-                          <div className="mt-1 text-[11px] text-slate-600 italic">
-                            override: {c.overrideReason}
-                          </div>
+                          <div className="mt-1 text-[11px] text-slate-600 italic">override: {c.overrideReason}</div>
                         )}
                       </div>
                       <CheckpointCell check={c} />
@@ -262,98 +260,52 @@ function CheckpointDrawer({
                 })}
               </div>
             </div>
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Patient info</div>
-              <Card className="p-3 space-y-1.5 text-[13px]">
-                <div className="flex justify-between"><span className="text-muted-foreground">Phone</span><span>{patient.phone}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Monday ID</span><span className="font-mono text-[11px]">{patient.mondayItemId}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Subscription</span><span>{patient.subscriptionType}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Primary payer</span><span>{patient.primaryPayer}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Next order</span><span>{fmtDate(patient.nextOrderDate)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Run Check</span><RunCheckPill value={patient.runCheck} /></div>
+            {patient.stuckReason && (
+              <Card className="p-3 border-amber-200 bg-amber-50">
+                <div className="text-[11px] uppercase tracking-wide text-amber-700">Why stuck</div>
+                <div className="text-[13px] text-slate-800 mt-1">{patient.stuckReason}</div>
+                <div className="flex gap-3 mt-2 text-[11px] text-muted-foreground">
+                  {patient.blockedBy && <span>Blocked by: <BlockedByPill value={patient.blockedBy} /></span>}
+                  {patient.nextCheckIn && <span>Next check-in: {fmtDate(patient.nextCheckIn)}</span>}
+                </div>
               </Card>
-            </div>
+            )}
+            <Card className="p-3 space-y-1.5 text-[13px]">
+              <div className="flex justify-between"><span className="text-muted-foreground">Phone</span><span>{patient.phone}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Monday ID</span><span className="font-mono text-[11px]">{patient.mondayItemId}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Run Check</span><RunCheckPill value={patient.runCheck} /></div>
+            </Card>
           </div>
-        )}
-
-        {/* Per-checkpoint drawer */}
-        {!isPatientView && checkpoint && (
+        ) : checkpoint && (
           <div className="mt-6 space-y-4">
-            {/* Status header */}
             <Card className="p-4 flex items-center justify-between">
               <div>
                 <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Current status</div>
                 <CheckpointCell check={checkpoint} />
               </div>
-              <div className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
-                    gate === "hard" ? "bg-rose-50 text-rose-600" : "bg-slate-100 text-slate-500",
-                  )}
-                  title={gate === "hard"
-                    ? "Hard constraint — claim denial risk if overridden"
-                    : "Soft constraint — operator can override with logged reason"}
-                >
-                  {gate === "hard" ? <Lock className="h-2.5 w-2.5" /> : <ShieldOff className="h-2.5 w-2.5" />}
-                  {gate}
-                </span>
-              </div>
+              <GateBadge kind={kind as CheckpointKind} />
             </Card>
 
-            {/* Checkpoint-specific content */}
-            {kind === "confirmation" && (
-              <Card className="p-4 space-y-2">
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Reorder form submission</div>
-                <div className="text-[13px]">
-                  {patient.confirmation.tone === "ok"
-                    ? "Patient confirmed the order. Read the change summary below."
-                    : patient.confirmation.tone === "pending"
-                    ? "Awaiting patient response. Use the Resend button or move to next reminder day."
-                    : "Patient flagged changes / hasn't responded. Operator review required."}
+            {patient.stuckReason && (
+              <Card className="p-3 border-amber-200 bg-amber-50">
+                <div className="text-[11px] uppercase tracking-wide text-amber-700">Why stuck</div>
+                <div className="text-[13px] text-slate-800 mt-1">{patient.stuckReason}</div>
+                <div className="flex gap-4 mt-2 text-[11px] text-muted-foreground items-center">
+                  {patient.blockedBy && <span className="flex items-center gap-1">Blocked by: <BlockedByPill value={patient.blockedBy} /></span>}
+                  {patient.nextCheckIn && <span>Check in: {fmtDate(patient.nextCheckIn)}</span>}
                 </div>
-                {patient.confirmation.detail && (
-                  <div className="text-[12px] text-muted-foreground">{patient.confirmation.detail}</div>
-                )}
-              </Card>
-            )}
-            {kind === "benefits" && (
-              <Card className="p-4 space-y-2">
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Latest eligibility (Stedi 271)</div>
-                <div className="grid grid-cols-2 gap-2 text-[12px]">
-                  <div className="text-muted-foreground">Active</div><div className="tabular-nums">{patient.benefits.label}</div>
-                  <div className="text-muted-foreground">Payer</div><div>{patient.primaryPayer}</div>
-                  <div className="text-muted-foreground">Detail</div><div>{patient.benefits.detail ?? "—"}</div>
-                </div>
-              </Card>
-            )}
-            {kind === "auth" && (
-              <Card className="p-4 space-y-2">
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Authorization detail</div>
-                <div className="text-[13px]">{patient.auth.label}</div>
-                {patient.auth.detail && (
-                  <div className="text-[12px] text-muted-foreground">{patient.auth.detail}</div>
-                )}
-                {patient.auth.label === "DVS at order" && (
-                  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-[12px] text-amber-800">
-                    <strong className="block mb-0.5">Medicaid Supplies — DVS exception</strong>
-                    Check 3 fires a DVS submission to ePACES when the order is created.
-                    The DVS response is the auth verdict — no pre-existing auth needed.
-                  </div>
-                )}
-              </Card>
-            )}
-            {kind === "lastPaid" && (
-              <Card className="p-4 space-y-2">
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Prior claim status</div>
-                <div className="text-[13px]">{patient.lastPaid.label}</div>
-                {patient.lastPaid.detail && (
-                  <div className="text-[12px] text-muted-foreground">{patient.lastPaid.detail}</div>
-                )}
               </Card>
             )}
 
-            {/* Override path for soft constraints */}
+            {kind === "auth" && patient.auth.label === "DVS at order" && (
+              <Card className="p-3 border-amber-200 bg-amber-50">
+                <div className="text-[11px] uppercase tracking-wide text-amber-700">Medicaid Supplies — DVS exception</div>
+                <div className="text-[12px] text-slate-700 mt-1">
+                  Check 3 fires a DVS submission to ePACES when the order is created. The DVS response is the auth verdict — no pre-existing auth needed.
+                </div>
+              </Card>
+            )}
+
             {isSoft && isFailing && (
               <Card className="p-4 space-y-3">
                 <div className="text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
@@ -366,13 +318,8 @@ function CheckpointDrawer({
                   </div>
                 ) : (
                   <>
-                    <Textarea
-                      placeholder="Reason for overriding this check (required, will be logged on the patient row)…"
-                      className="min-h-[72px] text-[13px]"
-                    />
-                    <Button size="sm" variant="default" className="w-full">
-                      <Unlock className="mr-2 h-3.5 w-3.5" /> Approve override + log reason
-                    </Button>
+                    <Textarea placeholder="Reason for overriding this check (required, logged on patient row)…" className="min-h-[72px] text-[13px]" />
+                    <Button size="sm" className="w-full"><Unlock className="mr-2 h-3.5 w-3.5" />Approve override + log reason</Button>
                   </>
                 )}
               </Card>
@@ -383,7 +330,7 @@ function CheckpointDrawer({
                   <Lock className="h-4 w-4 mt-0.5 shrink-0" />
                   <div>
                     <div className="font-semibold mb-0.5">Hard constraint — cannot override</div>
-                    The claim will be denied if shipped in this state. Resolve via the workflow below before the order can advance.
+                    Claim will be denied if shipped in this state. Resolve via the workflow before the order can advance.
                   </div>
                 </div>
               </Card>
@@ -392,7 +339,6 @@ function CheckpointDrawer({
         )}
 
         <SheetFooter className="mt-6">
-          {/* Primary action — depends on checkpoint */}
           {!isPatientView && kind === "confirmation" && (
             <div className="flex w-full gap-2">
               <Button variant="outline" className="flex-1"><Send className="mr-2 h-4 w-4" />Resend Reorder Text</Button>
@@ -410,12 +356,8 @@ function CheckpointDrawer({
           )}
           {isPatientView && (
             <Button variant="outline" className="w-full" asChild>
-              <a
-                href={`https://medicallymodern-force.monday.com/boards/18407459988/pulses/${patient.mondayItemId}`}
-                target="_blank" rel="noreferrer"
-              >
-                <ExternalLink className="mr-2 h-4 w-4" />
-                Open in Monday
+              <a href={`https://medicallymodern-force.monday.com/boards/18407459988/pulses/${patient.mondayItemId}`} target="_blank" rel="noreferrer">
+                <ExternalLink className="mr-2 h-4 w-4" />Open in Monday
               </a>
             </Button>
           )}
@@ -427,254 +369,311 @@ function CheckpointDrawer({
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export function SubscriptionBoard() {
-  const [subTab, setSubTab] = useState<SubTab>("prep");
+  const [phase, setPhase] = useState<PhaseTab>("overview");
   const [search, setSearch] = useState("");
   const [payer, setPayer] = useState<string>("All payers");
-  const [stateFilter, setStateFilter] = useState<string>("All states");
+  const [blocked, setBlocked] = useState<string>("Anyone");
   const [activePatient, setActivePatient] = useState<SubscriptionPatient | null>(null);
   const [activeKind, setActiveKind] = useState<CheckpointKind | "patient" | null>(null);
 
-  const prep = ORDER_PREP_PATIENTS;
-  const submit = SUBMIT_ORDER_PATIENTS;
+  const all = ORDER_PREP_PATIENTS;
 
-  const openCell = (p: SubscriptionPatient, kind: CheckpointKind) => {
-    setActivePatient(p); setActiveKind(kind);
-  };
-  const openPatient = (p: SubscriptionPatient) => {
-    setActivePatient(p); setActiveKind("patient");
-  };
+  const counts = useMemo(() => {
+    const c = { overview: 0, confirmation: 0, benefits: 0, auth: 0, lastPaid: 0, ready: 0 };
+    for (const p of all) {
+      c.overview++;
+      c[currentPhase(p)]++;
+    }
+    return c;
+  }, [all]);
+
+  const openCell = (p: SubscriptionPatient, kind: CheckpointKind) => { setActivePatient(p); setActiveKind(kind); };
+  const openPatient = (p: SubscriptionPatient) => { setActivePatient(p); setActiveKind("patient"); };
   const closeDrawer = () => { setActivePatient(null); setActiveKind(null); };
 
-  const kpis = useMemo(() => {
-    const awaiting = prep.filter((p) => p.confirmation.tone === "pending" && p.confirmation.label !== "Not sent").length;
-    const changes  = prep.filter((p) => p.confirmation.label === "Review changes").length;
-    const noResp   = prep.filter((p) => p.confirmation.label === "No response").length;
-    const blocked  = prep.filter((p) => rowAccent(p) === "red").length;
-    const ready    = submit.length;
-    const allOpen  = prep.length + submit.length;
-    return { total: prep.length, awaiting, changes, noResp, blocked, ready, allOpen };
-  }, [prep, submit]);
-
-  const filteredPrep = useMemo(() => {
-    return prep.filter((p) => {
+  // Filter by search + payer + blockedBy
+  const filteredAll = useMemo(() => {
+    return all.filter((p) => {
       if (search) {
         const q = search.trim().toLowerCase();
         const digits = q.replace(/\D/g, "");
         const nameMatch = p.name.toLowerCase().includes(q);
         const idMatch = p.mondayItemId.includes(q);
-        // Only match phone if query contains digits — fixes the empty-digit
-        // match bug where alphabetic queries silently matched every row.
         const phoneMatch = digits.length > 0 && p.phone.replace(/\D/g, "").includes(digits);
         if (!nameMatch && !idMatch && !phoneMatch) return false;
       }
       if (payer !== "All payers" && p.primaryPayer !== payer) return false;
-      if (stateFilter !== "All states") {
-        if (stateFilter === "Awaiting Response" && p.confirmation.tone !== "pending") return false;
-        if (stateFilter === "Review Changes" && p.confirmation.label !== "Review changes") return false;
-        if (stateFilter === "No Response" && p.confirmation.label !== "No response") return false;
-        if (stateFilter === "Delayed" && p.confirmation.label !== "Delayed") return false;
-        if (stateFilter === "Confirmed" && p.confirmation.tone !== "ok") return false;
-        if (stateFilter === "Benefits Inactive" && p.benefits.label !== "Inactive") return false;
-        if (stateFilter === "Benefits Stale" && p.benefits.label !== "Stale") return false;
-        if (stateFilter === "Auth Expiring" && !p.auth.label.startsWith("Renew")) return false;
-        if (stateFilter === "Auth Expired" && p.auth.label !== "Expired") return false;
-        if (stateFilter === "Auth Missing" && p.auth.label !== "Missing") return false;
-        if (stateFilter === "DVS at order (Medicaid)" && p.auth.label !== "DVS at order") return false;
-        if (stateFilter === "Last Claim Unpaid" && p.lastPaid.tone !== "bad") return false;
+      if (blocked !== "Anyone") {
+        const map = { Us: "us", Patient: "patient", Payer: "payer", System: "system" } as const;
+        if (p.blockedBy !== map[blocked as keyof typeof map]) return false;
       }
       return true;
     });
-  }, [prep, search, payer, stateFilter]);
+  }, [all, search, payer, blocked]);
+
+  // Phase-specific filter
+  const rows = useMemo(() => {
+    if (phase === "overview") return filteredAll;
+    return filteredAll.filter((p) => currentPhase(p) === phase);
+  }, [filteredAll, phase]);
+
+  // Phase-specific KPIs
+  const phaseKpis = useMemo(() => {
+    if (phase === "overview") {
+      return [
+        { tone: "info"    as const, label: "Confirmation",     value: counts.confirmation },
+        { tone: "warning" as const, label: "Eligibility",      value: counts.benefits },
+        { tone: "danger"  as const, label: "Authorization",    value: counts.auth },
+        { tone: "warning" as const, label: "Last Order Paid",  value: counts.lastPaid },
+        { tone: "success" as const, label: "Ready to Submit",  value: counts.ready },
+        { tone: "neutral" as const, label: "All Open",         value: counts.overview },
+      ];
+    }
+    // Per-phase: who's blocking?
+    const blockedCount = (party: BlockedParty) =>
+      filteredAll.filter((p) => currentPhase(p) === phase && p.blockedBy === party).length;
+    return [
+      { tone: "neutral" as const, label: `In ${PHASE_LABELS[phase]}`, value: rows.length },
+      { tone: "warning" as const, label: "Blocked by patient",        value: blockedCount("patient") },
+      { tone: "info"    as const, label: "Waiting on payer",          value: blockedCount("payer") },
+      { tone: "danger"  as const, label: "Needs us to act",           value: blockedCount("us") },
+      { tone: "neutral" as const, label: "System-paced",              value: blockedCount("system") },
+      { tone: "success" as const, label: "Overrides applied",
+        value: filteredAll.filter((p) => currentPhase(p) === phase && (p.confirmation.overrideReason || p.benefits.overrideReason || p.auth.overrideReason || p.lastPaid.overrideReason)).length },
+    ];
+  }, [phase, filteredAll, rows, counts]);
+
+  const renderPhaseTab = (k: PhaseTab, label: string, count: number) => (
+    <TabsTrigger value={k} className="gap-1.5">
+      {label}
+      <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-bold tabular-nums">{count}</span>
+    </TabsTrigger>
+  );
 
   return (
     <div className="space-y-4">
-      {/* Sub-tabs + bulk actions */}
+      {/* Phase tabs */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Tabs value={subTab} onValueChange={(v) => setSubTab(v as SubTab)}>
-          <TabsList className="bg-card border">
-            <TabsTrigger value="prep">Order Preparation</TabsTrigger>
-            <TabsTrigger value="submit">Submit Order</TabsTrigger>
+        <Tabs value={phase} onValueChange={(v) => setPhase(v as PhaseTab)}>
+          <TabsList className="bg-card border flex-wrap">
+            {renderPhaseTab("overview",     "Overview",         counts.overview)}
+            {renderPhaseTab("confirmation", "Confirmation",     counts.confirmation)}
+            {renderPhaseTab("benefits",     "Eligibility",      counts.benefits)}
+            {renderPhaseTab("auth",         "Authorization",    counts.auth)}
+            {renderPhaseTab("lastPaid",     "Last Order Paid",  counts.lastPaid)}
+            {renderPhaseTab("ready",        "Submit Order",     counts.ready)}
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
-            <Send className="mr-2 h-4 w-4" /> Send Reorder Text
-          </Button>
-          <Button variant="outline" size="sm">
-            <RefreshCw className="mr-2 h-4 w-4" /> Run Eligibility Batch
-          </Button>
+          {phase === "confirmation" && (
+            <Button variant="outline" size="sm"><Send className="mr-2 h-4 w-4" />Send Reorder Text</Button>
+          )}
+          {phase === "benefits" && (
+            <Button variant="outline" size="sm"><RefreshCw className="mr-2 h-4 w-4" />Run Eligibility Batch</Button>
+          )}
         </div>
       </div>
 
-      {subTab === "prep" ? (
-        <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <KpiTile tone="info"    label="Awaiting Response" value={kpis.awaiting} />
-            <KpiTile tone="warning" label="Changes to Review" value={kpis.changes} />
-            <KpiTile tone="danger"  label="Action Needed"     value={kpis.blocked}
-              sublines={[
-                { label: "auth",        value: prep.filter(p => p.auth.tone === "bad").length },
-                { label: "benefits",    value: prep.filter(p => p.benefits.tone === "bad").length },
-                { label: "prior claim", value: prep.filter(p => p.lastPaid.tone === "bad").length },
-              ]} />
-            <KpiTile tone="neutral" label="Patients in Prep"  value={kpis.total} />
-            <KpiTile tone="success" label="Ready to Submit"   value={kpis.ready} />
-            <KpiTile tone="neutral" label="All Open"          value={kpis.allOpen} />
-          </div>
+      {/* KPI grid */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        {phaseKpis.map((k) => (
+          <KpiTile key={k.label} {...k} />
+        ))}
+      </div>
 
-          {/* Search + filters */}
-          <div className="flex flex-wrap gap-2">
-            <div className="relative flex-1 min-w-[260px]">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search patient, phone, Monday ID"
-                className="pl-9"
-              />
-            </div>
-            <Select value={payer} onValueChange={setPayer}>
-              <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {PAYER_OPTIONS.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Select value={stateFilter} onValueChange={setStateFilter}>
-              <SelectTrigger className="w-[230px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {CHECKPOINT_STATE_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2">
+        <div className="relative flex-1 min-w-[260px]">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search patient, phone, Monday ID" className="pl-9" />
+        </div>
+        <Select value={payer} onValueChange={setPayer}>
+          <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
+          <SelectContent>{PAYER_OPTIONS.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
+        </Select>
+        <Select value={blocked} onValueChange={setBlocked}>
+          <SelectTrigger className="w-[170px]"><SelectValue placeholder="Blocked by" /></SelectTrigger>
+          <SelectContent>{BLOCKED_BY_OPTIONS.map((b) => <SelectItem key={b} value={b}>{b === "Anyone" ? "Blocked by: anyone" : `Blocked by ${b}`}</SelectItem>)}</SelectContent>
+        </Select>
+      </div>
 
-          {/* Order Preparation table */}
-          <Card className="overflow-hidden">
-            <div className="text-[13px]">
-              <div className="grid grid-cols-[210px_120px_140px_180px_64px_140px_140px_140px_140px_150px] gap-3 border-b bg-muted/40 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground items-end">
-                <div>Patient</div>
-                <div>Order Date</div>
-                <div>Subscription</div>
-                <div>Primary Payer</div>
-                <div title="Subscription Board Run Check column">Run Check</div>
-                <div><GateHeader label="Confirmation" kind="confirmation" /></div>
-                <div><GateHeader label="Benefits" kind="benefits" /></div>
-                <div><GateHeader label="Auth" kind="auth" /></div>
-                <div><GateHeader label="Last Paid" kind="lastPaid" /></div>
-                <div>Action</div>
-              </div>
-              {filteredPrep.map((p) => {
-                const accent = rowAccent(p);
-                const action = nextActionLabel(p);
-                const days = daysFromToday(p.nextOrderDate);
-                return (
-                  <div
-                    key={p.id}
-                    className={cn(
-                      "relative grid grid-cols-[210px_120px_140px_180px_64px_140px_140px_140px_140px_150px] gap-3 border-b px-4 py-3 hover:bg-muted/20 items-start",
-                      accent !== "none" && "pl-[20px]",
-                    )}
-                  >
-                    {accent !== "none" && (
-                      <span className={cn(
-                        "absolute left-0 top-0 h-full w-[3px]",
-                        accent === "red" ? "bg-rose-500" : "bg-amber-400",
-                      )} />
-                    )}
-                    <button type="button" onClick={() => openPatient(p)} className="text-left">
-                      <div className="text-[13px] font-semibold text-foreground">{p.name}</div>
-                      <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone} · {p.mondayItemId}</div>
-                    </button>
-                    <div>
-                      <div className="text-[13px] font-medium tabular-nums">{fmtDate(p.nextOrderDate)}</div>
-                      <div className="text-[11px] text-muted-foreground tabular-nums">
-                        {days > 0 ? `in ${days}d` : days === 0 ? "today" : `${-days}d ago`}
-                      </div>
-                    </div>
-                    <div><span className={SUB_TYPE_PILL}>{p.subscriptionType}</span></div>
-                    <div>
-                      <div className="text-[13px]">{p.primaryPayer}</div>
-                      <div className="text-[11px] text-muted-foreground">
-                        {p.benefits.tone === "ok" ? "Active" : p.benefits.label}
-                      </div>
-                    </div>
-                    <div className="pt-0.5"><RunCheckPill value={p.runCheck} /></div>
-                    <CheckpointCell check={p.confirmation} onClick={() => openCell(p, "confirmation")} />
-                    <CheckpointCell check={p.benefits}     onClick={() => openCell(p, "benefits")} />
-                    <CheckpointCell check={p.auth}          onClick={() => openCell(p, "auth")} />
-                    <CheckpointCell check={p.lastPaid}      onClick={() => openCell(p, "lastPaid")} />
-                    <div className="flex items-start">
-                      <Button
-                        size="sm"
-                        variant={action.primary ? "default" : "outline"}
-                        className="h-7 text-[11px]"
-                        onClick={() => action.kind ? openCell(p, action.kind) : openPatient(p)}
-                      >
-                        {action.label}
-                        <ArrowRight className="ml-1.5 h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-              {filteredPrep.length === 0 && (
-                <div className="px-4 py-12 text-center text-sm text-muted-foreground">
-                  No patients match the current filters.
-                </div>
-              )}
-            </div>
-          </Card>
-        </>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <KpiTile tone="success" label="Ready to Submit"    value={submit.length} />
-            <KpiTile tone="success" label="Submitted today"    value={0} />
-            <KpiTile tone="neutral" label="Submitted this week" value={0} />
-            <KpiTile tone="neutral" label="Avg time in queue"  value="< 1d" />
-            <KpiTile tone="neutral" label="Total OOP"          value="$2,890" />
-            <KpiTile tone="neutral" label="Oldest waiting"     value="2d" />
+      {/* Table — different column set per phase */}
+      <Card className="overflow-hidden">
+        {phase === "overview" ? (
+          <OverviewTable rows={rows} onCellClick={openCell} onPatientClick={openPatient} />
+        ) : phase === "ready" ? (
+          <SubmitTable rows={rows} />
+        ) : (
+          <PhaseTable rows={rows} phase={phase} onCellClick={openCell} onPatientClick={openPatient} />
+        )}
+        {rows.length === 0 && (
+          <div className="px-4 py-12 text-center text-sm text-muted-foreground">
+            {phase === "ready" ? "Nothing ready to submit yet." : "No patients in this phase right now."}
           </div>
-
-          <Card className="overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Patient</TableHead>
-                  <TableHead>Order Date</TableHead>
-                  <TableHead>Subscription</TableHead>
-                  <TableHead>Primary Payer</TableHead>
-                  <TableHead>OOP Est</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {submit.map((p) => (
-                  <TableRow key={p.id}>
-                    <TableCell>
-                      <div className="text-[13px] font-semibold">{p.name}</div>
-                      <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="text-[13px] font-medium tabular-nums">{fmtDate(p.nextOrderDate)}</div>
-                      <div className="text-[11px] text-muted-foreground tabular-nums">in {daysFromToday(p.nextOrderDate)}d</div>
-                    </TableCell>
-                    <TableCell><span className={SUB_TYPE_PILL}>{p.subscriptionType}</span></TableCell>
-                    <TableCell>{p.primaryPayer}</TableCell>
-                    <TableCell className="tabular-nums">$0.00</TableCell>
-                    <TableCell className="text-right">
-                      <Button size="sm">
-                        <Send className="mr-1.5 h-3 w-3" /> Submit Order
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Card>
-        </>
-      )}
+        )}
+      </Card>
 
       <CheckpointDrawer patient={activePatient} kind={activeKind} onClose={closeDrawer} />
     </div>
   );
 }
+
+// ─── Tables ──────────────────────────────────────────────────────────────────
+function OverviewTable({
+  rows, onCellClick, onPatientClick,
+}: {
+  rows: SubscriptionPatient[];
+  onCellClick: (p: SubscriptionPatient, k: CheckpointKind) => void;
+  onPatientClick: (p: SubscriptionPatient) => void;
+}) {
+  return (
+    <div className="text-[13px]">
+      <div className="grid grid-cols-[200px_100px_120px_160px_60px_130px_130px_130px_130px_120px] gap-3 border-b bg-muted/40 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground items-end">
+        <div>Patient</div>
+        <div>Order</div>
+        <div>Subscription</div>
+        <div>Primary Payer</div>
+        <div>Run</div>
+        <div className="flex items-center gap-1.5">Confirm <GateBadge kind="confirmation" /></div>
+        <div className="flex items-center gap-1.5">Benefits <GateBadge kind="benefits" /></div>
+        <div className="flex items-center gap-1.5">Auth <GateBadge kind="auth" /></div>
+        <div className="flex items-center gap-1.5">Last Paid <GateBadge kind="lastPaid" /></div>
+        <div>Blocked By</div>
+      </div>
+      {rows.map((p) => {
+        const accent = p.confirmation.tone === "bad" || p.benefits.tone === "bad" || p.auth.tone === "bad" || p.lastPaid.tone === "bad" ? "red"
+          : p.confirmation.tone === "warn" || p.benefits.tone === "warn" || p.auth.tone === "warn" || p.lastPaid.tone === "warn" ? "amber"
+          : "none";
+        return (
+          <div key={p.id} className={cn(
+            "relative grid grid-cols-[200px_100px_120px_160px_60px_130px_130px_130px_130px_120px] gap-3 border-b px-4 py-3 hover:bg-muted/20 items-start",
+            accent !== "none" && "pl-[20px]",
+          )}>
+            {accent !== "none" && (
+              <span className={cn("absolute left-0 top-0 h-full w-[3px]", accent === "red" ? "bg-rose-500" : "bg-amber-400")} />
+            )}
+            <button type="button" onClick={() => onPatientClick(p)} className="text-left">
+              <div className="text-[13px] font-semibold">{p.name}</div>
+              <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
+            </button>
+            <div>
+              <div className="text-[13px] font-medium tabular-nums">{fmtDate(p.nextOrderDate)}</div>
+              <div className="text-[11px] text-muted-foreground tabular-nums">in {daysBetween(p.nextOrderDate)}d</div>
+            </div>
+            <div><span className={SUB_TYPE_PILL}>{p.subscriptionType}</span></div>
+            <div className="text-[12px] truncate">{p.primaryPayer}</div>
+            <div className="pt-0.5"><RunCheckPill value={p.runCheck} /></div>
+            <CheckpointCell check={p.confirmation} onClick={() => onCellClick(p, "confirmation")} />
+            <CheckpointCell check={p.benefits}     onClick={() => onCellClick(p, "benefits")} />
+            <CheckpointCell check={p.auth}          onClick={() => onCellClick(p, "auth")} />
+            <CheckpointCell check={p.lastPaid}      onClick={() => onCellClick(p, "lastPaid")} />
+            <div className="pt-0.5"><BlockedByPill value={p.blockedBy} /></div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PhaseTable({
+  rows, phase, onCellClick, onPatientClick,
+}: {
+  rows: SubscriptionPatient[];
+  phase: CheckpointKind;
+  onCellClick: (p: SubscriptionPatient, k: CheckpointKind) => void;
+  onPatientClick: (p: SubscriptionPatient) => void;
+}) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead className="w-[220px]">Patient</TableHead>
+          <TableHead className="w-[100px]">Order</TableHead>
+          <TableHead className="w-[120px]">Subscription</TableHead>
+          <TableHead className="w-[170px]">Primary Payer</TableHead>
+          <TableHead className="w-[180px]">{PHASE_LABELS[phase]} <GateBadge kind={phase} /></TableHead>
+          <TableHead className="w-[120px]">Blocked By</TableHead>
+          <TableHead className="w-[180px]">Next Check-In</TableHead>
+          <TableHead>Why Stuck</TableHead>
+          <TableHead className="w-[140px] text-right">Action</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((p) => {
+          const c = getCheckpoint(p, phase);
+          const actionLabel = ({
+            confirmation: "Review",
+            benefits:     "Run Eligibility",
+            auth:         "Work Auth",
+            lastPaid:     "Open Claim",
+          })[phase];
+          return (
+            <TableRow key={p.id} className="align-top">
+              <TableCell>
+                <button type="button" onClick={() => onPatientClick(p)} className="text-left">
+                  <div className="text-[13px] font-semibold">{p.name}</div>
+                  <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
+                </button>
+              </TableCell>
+              <TableCell>
+                <div className="text-[13px] font-medium tabular-nums">{fmtDate(p.nextOrderDate)}</div>
+                <div className="text-[11px] text-muted-foreground tabular-nums">in {daysBetween(p.nextOrderDate)}d</div>
+              </TableCell>
+              <TableCell><span className={SUB_TYPE_PILL}>{p.subscriptionType}</span></TableCell>
+              <TableCell className="text-[13px]">{p.primaryPayer}</TableCell>
+              <TableCell><CheckpointCell check={c} onClick={() => onCellClick(p, phase)} /></TableCell>
+              <TableCell><BlockedByPill value={p.blockedBy} /></TableCell>
+              <TableCell><CheckInCell iso={p.nextCheckIn} stuckSince={p.stuckSince} /></TableCell>
+              <TableCell className="text-[12px] text-muted-foreground max-w-[340px]">{p.stuckReason ?? "—"}</TableCell>
+              <TableCell className="text-right">
+                <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => onCellClick(p, phase)}>
+                  {actionLabel}<ArrowRight className="ml-1.5 h-3 w-3" />
+                </Button>
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
+  );
+}
+
+function SubmitTable({ rows }: { rows: SubscriptionPatient[] }) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Patient</TableHead>
+          <TableHead>Order Date</TableHead>
+          <TableHead>Subscription</TableHead>
+          <TableHead>Primary Payer</TableHead>
+          <TableHead>OOP Est</TableHead>
+          <TableHead className="text-right">Action</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((p) => (
+          <TableRow key={p.id}>
+            <TableCell>
+              <div className="text-[13px] font-semibold">{p.name}</div>
+              <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
+            </TableCell>
+            <TableCell>
+              <div className="text-[13px] font-medium tabular-nums">{fmtDate(p.nextOrderDate)}</div>
+              <div className="text-[11px] text-muted-foreground tabular-nums">in {daysBetween(p.nextOrderDate)}d</div>
+            </TableCell>
+            <TableCell><span className={SUB_TYPE_PILL}>{p.subscriptionType}</span></TableCell>
+            <TableCell>{p.primaryPayer}</TableCell>
+            <TableCell className="tabular-nums">$0.00</TableCell>
+            <TableCell className="text-right">
+              <Button size="sm"><Send className="mr-1.5 h-3 w-3" />Submit Order</Button>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+// Suppress unused-icon warnings if any future TabsTrigger doesn't use them
+void Users;
