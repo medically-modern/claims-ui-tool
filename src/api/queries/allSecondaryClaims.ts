@@ -40,12 +40,12 @@ function mapStatus277(label: string): Status277 {
 const COL = {
   DOB: "text_mkp3y5ax",
   SECONDARY_PAYER: "color_mkxq1a2p",
-  // Two "Secondary Member ID" columns exist on this board — text_mm3a7ega is
-  // the renamed one introduced after the schema cleanup. text_mkxwcqfy is
-  // the legacy one inherited from the primary-board duplicate. Prefer the
-  // new column; fall back to the legacy one when it's the only one filled.
+  // Secondary Member ID — consolidated onto text_mm3a7ega on 2026-06-01.
+  // The legacy text_mkxwcqfy column was backfilled (3 rows) and the
+  // backend spawn write was switched to this column too, so there's a
+  // single source of truth now. Legacy column scheduled for deletion
+  // on Monday once the change settles in production.
   SECONDARY_MEMBER_ID: "text_mm3a7ega",
-  SECONDARY_MEMBER_ID_LEGACY: "text_mkxwcqfy",
   PRIMARY_PAYOR: "color_mm3a93ek",
   PRIMARY_MEMBER_ID: "text_mktat89m",
   DOS: "date_mkwr7spz",
@@ -454,11 +454,9 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
   // the ERA arrives. Display it as-is — once the ERA lands, the writeback
   // overwrites this column with the actual payer name.
 
-  // Prefer the renamed Secondary Member ID column when set; fall back to
-  // the legacy duplicated-from-primary column.
-  const secondaryMemberId =
-    txt(item, COL.SECONDARY_MEMBER_ID) ||
-    txt(item, COL.SECONDARY_MEMBER_ID_LEGACY);
+  // Single canonical Secondary Member ID column after 2026-06-01
+  // consolidation. Legacy fallback removed.
+  const secondaryMemberId = txt(item, COL.SECONDARY_MEMBER_ID);
 
   const claimTypeLabel = txt(item, COL.CLAIM_TYPE);
   const claimType: SecClaim["type"] =
