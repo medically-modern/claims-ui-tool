@@ -123,7 +123,7 @@ function groupProductRows<T extends { product: string }>(items: T[]): [T[], T[]]
   return [r0, r1];
 }
 
-type BoardKey = "primary" | "secondary" | "cashflow" | "playbook" | "eft" | "subscription";
+type BoardKey = "primary" | "secondary" | "cashflow" | "playbook" | "eft";
 type ModeKey = "submit" | "review";
 type CategoryKey = "era" | "late" | "denied" | "outstanding" | "paid" | "all";
 
@@ -450,6 +450,7 @@ function compareRows(a: Claim, b: Claim, col: ColumnKey, dir: "asc" | "desc"): n
 
 
 const Claims = () => {
+  const [topLevel, setTopLevel] = useState<"claims" | "subscription">("claims");
   const [board, setBoard] = useState<BoardKey>("primary");
   const [mode, setMode] = useState<ModeKey>("review");
   const [category, setCategory] = useState<CategoryKey>("era");
@@ -945,6 +946,18 @@ const Claims = () => {
       />
 
       <main className="mx-auto max-w-[1920px] px-6 py-6 space-y-6">
+        {/* Top-level: Claims Board (the original product) vs Subscription Board */}
+        <Tabs value={topLevel} onValueChange={(v) => setTopLevel(v as "claims" | "subscription")}>
+          <TabsList className="bg-card border h-10">
+            <TabsTrigger value="claims" className="text-sm font-semibold">Claims Board</TabsTrigger>
+            <TabsTrigger value="subscription" className="text-sm font-semibold">Subscription Board</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        {topLevel === "subscription" ? (
+          <SubscriptionBoard />
+        ) : (
+        <>
         {/* Top app row: Board tabs (left) | Action Items inbox
             (center, persistent across views) | Replay ERA (right).
             The inbox is pinned visible on every board+mode so the
@@ -960,7 +973,6 @@ const Claims = () => {
               <TabsTrigger value="cashflow">Cash Flow</TabsTrigger>
               <TabsTrigger value="playbook">Denial Analysis Playbook</TabsTrigger>
               <TabsTrigger value="eft">EFT Enrollment</TabsTrigger>
-              <TabsTrigger value="subscription">Subscription Board</TabsTrigger>
             </TabsList>
           </Tabs>
           <ActionItemsInbox
@@ -1016,9 +1028,7 @@ const Claims = () => {
           </Tabs>
         )}
 
-        {board === "subscription" ? (
-          <SubscriptionBoard />
-        ) : board === "eft" ? (
+        {board === "eft" ? (
           <EftEnrollmentTable navTo={inboxNavTo} />
         ) : board === "playbook" ? (
           <DenialAnalysisTable />
@@ -1805,6 +1815,8 @@ const Claims = () => {
               </CardContent>
             </Card>
           </>
+        )}
+        </>
         )}
       </main>
 
