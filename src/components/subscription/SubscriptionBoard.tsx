@@ -92,7 +92,7 @@ function circleStateFor(c: Checkpoint): CircleState {
 }
 
 function CheckpointCircle({
-  check, size = 36, onClick, title,
+  check, size = 30, onClick, title,
 }: {
   check: Checkpoint;
   size?: number;
@@ -102,8 +102,8 @@ function CheckpointCircle({
   const state = circleStateFor(check);
   const sizeStyle = { width: size, height: size };
   const inner =
-    state === "green" ? <Check className="h-5 w-5 text-white"  strokeWidth={3} /> :
-    state === "red"   ? <X     className="h-5 w-5 text-white"  strokeWidth={3} /> :
+    state === "green" ? <Check className="h-4 w-4 text-white"  strokeWidth={3} /> :
+    state === "red"   ? <X     className="h-4 w-4 text-white"  strokeWidth={3} /> :
     null;
   const cls =
     state === "green"   ? "bg-emerald-600 ring-emerald-600"
@@ -397,17 +397,22 @@ function PatientDrawer({
 export function SubscriptionBoard() {
   type PrimaryTab = "overview" | "prep" | "order";
   const [primary, setPrimary] = useState<PrimaryTab>("overview");
-  const [prepPhase, setPrepPhase] = useState<CheckpointKind>("confirmation");
+  type PrepPhase = CheckpointKind | "all";
+  const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
   // `phase` is the derived view selection used by the rest of the component.
+  // When prepPhase = "all", we render the overview-style table filtered to
+  // every non-ready patient so the operator sees the whole Order Prep cohort.
   const phase: PhaseTab =
     primary === "overview" ? "overview"
     : primary === "order"  ? "ready"
+    : prepPhase === "all"  ? "overview"
     : prepPhase;
   const setPhase = (next: PhaseTab) => {
     if (next === "overview") setPrimary("overview");
     else if (next === "ready") setPrimary("order");
     else { setPrimary("prep"); setPrepPhase(next); }
   };
+  void setPhase; // currently unused — keeps the helper for future deep-link routing
   const [search, setSearch] = useState("");
   const [payer, setPayer] = useState<string>("All payers");
   const [blocked, setBlocked] = useState<string>("Anyone");
@@ -453,9 +458,17 @@ export function SubscriptionBoard() {
   }, [all, search, payer, blocked, statusFilter, pauseReason]);
 
   const rows = useMemo(() => {
-    if (phase === "overview") return filteredAll;
+    if (phase === "overview") {
+      // Order Prep "All" shows the full overview table filtered to non-ready
+      // patients (everyone the operator still has work to do on). Pure
+      // Overview tab shows the whole cohort.
+      if (primary === "prep" && prepPhase === "all") {
+        return filteredAll.filter((p) => currentPhase(p) !== "ready");
+      }
+      return filteredAll;
+    }
     return filteredAll.filter((p) => currentPhase(p) === phase);
-  }, [filteredAll, phase]);
+  }, [filteredAll, phase, primary, prepPhase]);
 
   const phaseKpis = useMemo(() => {
     if (phase === "overview") {
@@ -522,8 +535,14 @@ export function SubscriptionBoard() {
 
       {/* Sub-nav under Order Prep — the 4 readiness phases */}
       {primary === "prep" && (
-        <Tabs value={prepPhase} onValueChange={(v) => setPrepPhase(v as CheckpointKind)}>
+        <Tabs value={prepPhase} onValueChange={(v) => setPrepPhase(v as PrepPhase)}>
           <TabsList className="bg-card border">
+            <TabsTrigger value="all" className="gap-1.5">
+              All
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
+                {counts.confirmation + counts.benefits + counts.auth + counts.lastPaid}
+              </span>
+            </TabsTrigger>
             {renderPhaseTab("confirmation", "Confirmation",     counts.confirmation)}
             {renderPhaseTab("benefits",     "Eligibility",      counts.benefits)}
             {renderPhaseTab("auth",         "Authorization",    counts.auth)}
