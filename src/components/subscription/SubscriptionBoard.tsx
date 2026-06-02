@@ -68,25 +68,72 @@ function allChecksPass(p: SubscriptionPatient): boolean {
 
 // ─── Atoms ───────────────────────────────────────────────────────────────────
 
-/** Simplified checkpoint icon: ✓ green (ok) / blank (warn or pending) / ✗ red (bad). */
-function CheckpointIcon({ check, onClick, title }: { check: Checkpoint; onClick?: () => void; title?: string }) {
-  const node =
-    check.tone === "ok"  ? <Check className="h-4 w-4 text-emerald-600" /> :
-    check.tone === "bad" ? <X     className="h-4 w-4 text-rose-600" />    :
-    <span className="block h-1.5 w-1.5 rounded-full bg-slate-300" aria-label="not yet" />;
+/**
+ * Checkpoint circle — four visual states per Brandon's spec:
+ *   - Outline (no fill): hasn't entered the active window yet
+ *     (e.g. order is more than 21 days out, eligibility not yet run)
+ *   - Gray filled: in the window, awaiting response
+ *   - Green with check: passed
+ *   - Red with X: failed
+ *
+ * State is derived from `tone` + the "not yet started" labels list.
+ */
+const NOT_YET_LABELS = new Set([
+  "Not sent", "Not run", "Not checked", "Not Serving", "Unknown",
+]);
+
+type CircleState = "outline" | "gray" | "green" | "red";
+
+function circleStateFor(c: Checkpoint): CircleState {
+  if (c.tone === "ok")  return "green";
+  if (c.tone === "bad") return "red";
+  if (NOT_YET_LABELS.has(c.label)) return "outline";
+  return "gray";
+}
+
+function CheckpointCircle({
+  check, size = 28, onClick, title,
+}: {
+  check: Checkpoint;
+  size?: number;
+  onClick?: () => void;
+  title?: string;
+}) {
+  const state = circleStateFor(check);
+  const sizeStyle = { width: size, height: size };
+  const inner =
+    state === "green" ? <Check className="h-4 w-4 text-white"  strokeWidth={3} /> :
+    state === "red"   ? <X     className="h-4 w-4 text-white"  strokeWidth={3} /> :
+    null;
+  const cls =
+    state === "green"   ? "bg-emerald-600 ring-emerald-600"
+    : state === "red"   ? "bg-rose-600 ring-rose-600"
+    : state === "gray"  ? "bg-slate-300 ring-slate-300"
+    : "bg-transparent ring-slate-300";
   return (
     <button
       type="button"
       onClick={onClick}
       title={title ?? `${check.label}${check.detail ? " — " + check.detail : ""}`}
-      className="flex h-7 w-7 items-center justify-center rounded hover:bg-muted"
+      className="relative inline-flex items-center justify-center"
+      style={sizeStyle}
     >
-      {node}
+      <span
+        className={cn("inline-flex items-center justify-center rounded-full ring-2", cls)}
+        style={sizeStyle}
+      >
+        {inner}
+      </span>
       {check.overrideReason && (
-        <Unlock className="absolute h-2.5 w-2.5 translate-x-3 -translate-y-3 text-slate-400" aria-label="override" />
+        <Unlock className="absolute -top-1 -right-1 h-3 w-3 text-slate-500 bg-white rounded-full" aria-label="override" />
       )}
     </button>
   );
+}
+
+/** Backwards-compatible alias used inside the drawer for compact display. */
+function CheckpointIcon({ check, onClick, title }: { check: Checkpoint; onClick?: () => void; title?: string }) {
+  return <CheckpointCircle check={check} size={24} onClick={onClick} title={title} />;
 }
 
 const SUB_TYPE_PILLS: Record<SubscriptionType, string> = {
@@ -519,7 +566,7 @@ export function SubscriptionBoard() {
 
 // ─── Tables ──────────────────────────────────────────────────────────────────
 
-const OVERVIEW_GRID = "grid grid-cols-[220px_100px_140px_180px_32px_32px_32px_32px_220px] gap-3";
+const OVERVIEW_GRID = "grid grid-cols-[200px_90px_130px_170px_minmax(64px,1fr)_minmax(64px,1fr)_minmax(64px,1fr)_minmax(64px,1fr)_240px] gap-3";
 
 function OverviewTable({
   rows, onCellClick, onPatientClick, onSubmit,
@@ -554,10 +601,10 @@ function OverviewTable({
           </div>
           <div><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></div>
           <div className="text-[13px] truncate">{p.primaryPayer}</div>
-          <div className="flex justify-center"><CheckpointIcon check={p.confirmation} onClick={() => onCellClick(p, "confirmation")} /></div>
-          <div className="flex justify-center"><CheckpointIcon check={p.benefits}     onClick={() => onCellClick(p, "benefits")} /></div>
-          <div className="flex justify-center"><CheckpointIcon check={p.auth}          onClick={() => onCellClick(p, "auth")} /></div>
-          <div className="flex justify-center"><CheckpointIcon check={p.lastPaid}      onClick={() => onCellClick(p, "lastPaid")} /></div>
+          <div className="flex justify-center"><CheckpointCircle check={p.confirmation} onClick={() => onCellClick(p, "confirmation")} /></div>
+          <div className="flex justify-center"><CheckpointCircle check={p.benefits}     onClick={() => onCellClick(p, "benefits")} /></div>
+          <div className="flex justify-center"><CheckpointCircle check={p.auth}          onClick={() => onCellClick(p, "auth")} /></div>
+          <div className="flex justify-center"><CheckpointCircle check={p.lastPaid}      onClick={() => onCellClick(p, "lastPaid")} /></div>
           <ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} />
         </div>
       ))}
@@ -606,7 +653,7 @@ function PhaseTable({
               </TableCell>
               <TableCell><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></TableCell>
               <TableCell className="text-[13px]">{p.primaryPayer}</TableCell>
-              <TableCell><div className="flex justify-center"><CheckpointIcon check={c} onClick={() => onCellClick(p, phase)} /></div></TableCell>
+              <TableCell><div className="flex justify-center"><CheckpointCircle check={c} onClick={() => onCellClick(p, phase)} /></div></TableCell>
               <TableCell><BlockedByPill value={p.blockedBy} /></TableCell>
               <TableCell><CheckInCell iso={p.nextCheckIn} stuckSince={p.stuckSince} /></TableCell>
               <TableCell className="text-[12px] text-muted-foreground max-w-[340px]">{p.stuckReason ?? "—"}</TableCell>
