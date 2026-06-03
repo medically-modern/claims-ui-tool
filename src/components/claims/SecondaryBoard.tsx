@@ -143,6 +143,16 @@ export interface SecClaim {
    * will see before flipping Send Invoice → Done. Empty string /
    * undefined means no link generated yet; button renders disabled. */
   payLinkUrl?: string;
+  /**
+   * True only when the operator explicitly clicked Send Invoice in
+   * our UI — fireSendInvoiceTrigger writes "Done" to color_mm3x6qe6,
+   * which lights this flag at read time. Used by bucketOf to decide
+   * Outstanding Invoices vs Submit > Patient: Josh's
+   * coins-form-payment webhook prematurely sets Monday's Secondary
+   * Status to "Sent to Patient" the moment a pay link is generated
+   * (before the operator has actually sent the invoice), so we
+   * can't trust Secondary Status alone. */
+  sendInvoiceTriggered?: boolean;
   patientName: string;
   primaryPayor: string;
   secondaryPayer: string | null;     // null = patient bucket with no secondary; "Other" = custom
@@ -565,9 +575,18 @@ function bucketOf(c: SecClaim): AnyBucket | null {
   // Submit board anymore" actually work — pre-split, every patient row
   // sat in Submit > Patient regardless of stage.
   if (c.status === "Sent to Patient") {
-    const raw = (c.rawSecondaryStatus ?? "Submit").trim();
-    if (raw === "" || raw === "Submit") return "patient";
-    return "outstandingInvoices";
+    // Use OUR Send Invoice trigger (color_mm3x6qe6 → "Done") as the
+    // authoritative "operator actually sent the invoice" signal —
+    // NOT Monday's Secondary Status. Josh's coins-form-payment
+    // webhook prematurely writes Secondary Status = "Sent to Patient"
+    // when a payment link is generated, well before the operator
+    // clicks our Send Invoice button. Trusting Secondary Status alone
+    // inflated Outstanding Invoices with 16 patients who had never
+    // actually been invoiced (2026-06-03 audit). The trigger column
+    // is only ever written by our own UI, so it's the trustworthy
+    // signal.
+    if (c.sendInvoiceTriggered) return "outstandingInvoices";
+    return "patient";
   }
   // Patient marked the invoice paid. Land them in Invoice Review for
   // the operator to verify the full amount cleared before declaring
