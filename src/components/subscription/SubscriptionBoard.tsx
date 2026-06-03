@@ -27,6 +27,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
+  Popover, PopoverContent, PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
@@ -69,6 +72,37 @@ function allChecksPass(p: SubscriptionPatient): boolean {
 
 // ─── Atoms ───────────────────────────────────────────────────────────────────
 
+
+/**
+ * "Changes" pill — shows next to the circle when the patient flagged
+ * something different on their reorder form (new infusion set, address,
+ * date, or insurance). Hover shows the list of changes.
+ */
+function ChangesPill({ check }: { check: Checkpoint }) {
+  if (!check.changes || check.changes.length === 0) return null;
+  return (
+    <span
+      className="ml-2 inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-tight text-orange-700"
+      title={check.changes.join(" • ")}
+    >
+      Changes
+    </span>
+  );
+}
+
+/** Soft metadata pill (e.g. auth expiry date). Sits to the right of the circle. */
+function MetaPill({ check }: { check: Checkpoint }) {
+  if (!check.pill) return null;
+  return (
+    <span
+      className="ml-2 inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 tabular-nums whitespace-nowrap"
+      title={check.pill}
+    >
+      {check.pill}
+    </span>
+  );
+}
+
 /**
  * Checkpoint circle — four visual states per Brandon's spec:
  *   - Outline (no fill): hasn't entered the active window yet
@@ -83,11 +117,12 @@ const NOT_YET_LABELS = new Set([
   "Not sent", "Not run", "Not checked", "Not Serving", "Unknown",
 ]);
 
-type CircleState = "outline" | "gray" | "green" | "red";
+type CircleState = "outline" | "gray" | "green" | "yellow" | "red";
 
 function circleStateFor(c: Checkpoint): CircleState {
-  if (c.tone === "ok")  return "green";
-  if (c.tone === "bad") return "red";
+  if (c.tone === "ok")   return "green";
+  if (c.tone === "bad")  return "red";
+  if (c.tone === "warn") return "yellow";
   if (NOT_YET_LABELS.has(c.label)) return "outline";
   return "gray";
 }
@@ -105,11 +140,13 @@ function CheckpointCircle({
   const inner =
     state === "green" ? <Check className="h-4 w-4 text-white"  strokeWidth={3} /> :
     state === "red"   ? <X     className="h-4 w-4 text-white"  strokeWidth={3} /> :
+    state === "yellow" ? <span className="text-white font-bold text-[14px] leading-none">!</span> :
     null;
   const cls =
-    state === "green"   ? "bg-emerald-600 ring-emerald-600"
-    : state === "red"   ? "bg-rose-600 ring-rose-600"
-    : state === "gray"  ? "bg-slate-300 ring-slate-300"
+    state === "green"  ? "bg-emerald-600 ring-emerald-600"
+    : state === "red"  ? "bg-rose-600 ring-rose-600"
+    : state === "yellow" ? "bg-amber-400 ring-amber-400"
+    : state === "gray" ? "bg-slate-300 ring-slate-300"
     : "bg-transparent ring-slate-300";
   return (
     <button
@@ -129,6 +166,184 @@ function CheckpointCircle({
         <Unlock className="absolute -top-1 -right-1 h-3 w-3 text-slate-500 bg-white rounded-full" aria-label="override" />
       )}
     </button>
+  );
+}
+
+
+
+// ─── Lightweight popover for changing a circle's state ──────────────────────
+
+type EditableState = "outline" | "gray" | "green" | "yellow" | "red";
+
+const STATE_OPTIONS: Record<EditableState, { label: string; cls: string; icon: JSX.Element }> = {
+  outline: { label: "Not started",  cls: "bg-transparent ring-slate-300",
+             icon: <span className="block h-2 w-2 rounded-full" /> },
+  gray:    { label: "Awaiting",     cls: "bg-slate-300 ring-slate-300",
+             icon: <span /> },
+  green:   { label: "Pass",         cls: "bg-emerald-600 ring-emerald-600",
+             icon: <Check className="h-4 w-4 text-white" strokeWidth={3} /> },
+  yellow:  { label: "Tentative",    cls: "bg-amber-400 ring-amber-400",
+             icon: <span className="text-white font-bold text-[14px] leading-none">!</span> },
+  red:     { label: "Fail",         cls: "bg-rose-600 ring-rose-600",
+             icon: <X className="h-4 w-4 text-white" strokeWidth={3} /> },
+};
+
+const CONFIRM_PAUSE_REASONS = [
+  "Collect new insurance",
+  "Need new auth",
+  "Has enough supplies",
+  "Still owes last invoice",
+  "Other supplier has auth",
+  "Last claim denied",
+  "Not using currently",
+  "Hasn't received pump yet",
+  "OOP too expensive",
+  "Hospital/SNF",
+];
+
+const CONFIRM_CANCEL_REASONS = [
+  "Stopped using",
+  "Out-of-network insurance",
+  "Switched supplier",
+  "Patient declined",
+];
+
+function CircleEditPopover({
+  check, kind, patient, onSave, children,
+}: {
+  check: Checkpoint;
+  kind: CheckpointKind;
+  patient: SubscriptionPatient;
+  onSave?: (next: Partial<Checkpoint>, kind: CheckpointKind) => void;
+  children: React.ReactNode;
+}) {
+  const [target, setTarget] = useState<EditableState | null>(null);
+  const [note, setNote] = useState("");
+  // Confirmation-red flow: pause vs cancel + reason
+  const [pauseOrCancel, setPauseOrCancel] = useState<"pause" | "cancel" | null>(null);
+  const [reason, setReason] = useState<string>("");
+  const [customReason, setCustomReason] = useState("");
+  const reasons = pauseOrCancel === "cancel" ? CONFIRM_CANCEL_REASONS : CONFIRM_PAUSE_REASONS;
+
+  const currentState = circleStateFor(check);
+
+  const handleSave = () => {
+    const next: Partial<Checkpoint> = {};
+    // Stub — in a real backend wire this writes to Monday.
+    if (target === "green") next.tone = "ok";
+    if (target === "red")   next.tone = "bad";
+    if (target === "yellow") next.tone = "warn";
+    if (target === "outline" || target === "gray") next.tone = "pending";
+    const reasonStr = customReason.trim() || reason;
+    if (reasonStr || note) {
+      next.overrideReason = [pauseOrCancel ? `${pauseOrCancel}: ${reasonStr}` : reasonStr, note].filter(Boolean).join(" — ");
+    }
+    onSave?.(next, kind);
+    setTarget(null); setNote(""); setPauseOrCancel(null); setReason(""); setCustomReason("");
+  };
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverContent align="start" className="w-[320px] p-4">
+        <div className="space-y-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              {PHASE_LABELS[kind]} — {patient.name}
+            </div>
+            <div className="text-[13px] font-semibold mt-0.5">
+              Current: {check.label}{check.detail ? ` — ${check.detail}` : ""}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Change to</div>
+            <div className="grid grid-cols-5 gap-1.5">
+              {(Object.entries(STATE_OPTIONS) as Array<[EditableState, typeof STATE_OPTIONS[EditableState]]>).map(([key, opt]) => {
+                const selected = target === key;
+                const isCurrent = currentState === key && !target;
+                return (
+                  <button
+                    type="button"
+                    key={key}
+                    onClick={() => setTarget(key)}
+                    className={cn(
+                      "flex flex-col items-center gap-1 rounded p-1.5 transition-colors",
+                      selected ? "bg-sky-100 ring-2 ring-sky-500" :
+                      isCurrent ? "bg-muted" : "hover:bg-muted",
+                    )}
+                  >
+                    <span
+                      className={cn("inline-flex h-7 w-7 items-center justify-center rounded-full ring-2", opt.cls)}
+                    >
+                      {opt.icon}
+                    </span>
+                    <span className="text-[10px] font-medium text-center leading-tight">{opt.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Confirmation red flow: pause or cancel */}
+          {kind === "confirmation" && target === "red" && (
+            <div className="space-y-2 rounded-md bg-rose-50 p-3 border border-rose-200">
+              <div className="text-[12px] font-semibold text-rose-700">Pausing or cancelling this order?</div>
+              <div className="flex gap-2">
+                {(["pause", "cancel"] as const).map((kind) => (
+                  <Button
+                    key={kind}
+                    type="button"
+                    size="sm"
+                    variant={pauseOrCancel === kind ? "default" : "outline"}
+                    className="flex-1 capitalize"
+                    onClick={() => setPauseOrCancel(kind)}
+                  >
+                    {kind}
+                  </Button>
+                ))}
+              </div>
+              {pauseOrCancel && (
+                <>
+                  <Select value={reason} onValueChange={setReason}>
+                    <SelectTrigger className="text-[12px] h-8"><SelectValue placeholder="Pick a reason…" /></SelectTrigger>
+                    <SelectContent>{reasons.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Input
+                    value={customReason}
+                    onChange={(e) => setCustomReason(e.target.value)}
+                    placeholder="Or type a reason of your own…"
+                    className="text-[12px] h-8"
+                  />
+                </>
+              )}
+            </div>
+          )}
+
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Note (optional)</div>
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Anything worth logging on the patient row…"
+              className="min-h-[60px] text-[12px]"
+            />
+          </div>
+
+          <div className="flex gap-2 justify-end">
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleSave}
+              disabled={!target && !note}
+              className="bg-emerald-700 hover:bg-emerald-800"
+            >
+              Save change
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -659,10 +874,29 @@ function OverviewTable({
           </div>
           <div><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></div>
           <div className="text-[14px] truncate">{p.primaryPayer}</div>
-          <div className="flex justify-center"><CheckpointCircle check={p.confirmation} onClick={() => onCellClick(p, "confirmation")} /></div>
-          <div className="flex justify-center"><CheckpointCircle check={p.benefits}     onClick={() => onCellClick(p, "benefits")} /></div>
-          <div className="flex justify-center"><CheckpointCircle check={p.auth}          onClick={() => onCellClick(p, "auth")} /></div>
-          <div className="flex justify-center"><CheckpointCircle check={p.lastPaid}      onClick={() => onCellClick(p, "lastPaid")} /></div>
+          <div className="flex items-center justify-center">
+            <CircleEditPopover check={p.confirmation} kind="confirmation" patient={p}>
+              <CheckpointCircle check={p.confirmation} />
+            </CircleEditPopover>
+            <ChangesPill check={p.confirmation} />
+          </div>
+          <div className="flex items-center justify-center">
+            <CircleEditPopover check={p.benefits} kind="benefits" patient={p}>
+              <CheckpointCircle check={p.benefits} />
+            </CircleEditPopover>
+            <ChangesPill check={p.benefits} />
+          </div>
+          <div className="flex items-center justify-center">
+            <CircleEditPopover check={p.auth} kind="auth" patient={p}>
+              <CheckpointCircle check={p.auth} />
+            </CircleEditPopover>
+            <MetaPill check={p.auth} />
+          </div>
+          <div className="flex items-center justify-center">
+            <CircleEditPopover check={p.lastPaid} kind="lastPaid" patient={p}>
+              <CheckpointCircle check={p.lastPaid} />
+            </CircleEditPopover>
+          </div>
           <ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} />
         </div>
       ))}
@@ -711,7 +945,12 @@ function PhaseTable({
               </TableCell>
               <TableCell><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></TableCell>
               <TableCell className="text-[13px]">{p.primaryPayer}</TableCell>
-              <TableCell><div className="flex justify-center"><CheckpointCircle check={c} onClick={() => onCellClick(p, phase)} /></div></TableCell>
+              <TableCell><div className="flex items-center justify-center">
+                <CircleEditPopover check={c} kind={phase} patient={p}>
+                  <CheckpointCircle check={c} />
+                </CircleEditPopover>
+                {phase === "auth" ? <MetaPill check={c} /> : <ChangesPill check={c} />}
+              </div></TableCell>
               <TableCell><BlockedByPill value={p.blockedBy} /></TableCell>
               <TableCell><CheckInCell iso={p.nextCheckIn} stuckSince={p.stuckSince} /></TableCell>
               <TableCell className="text-[12px] text-muted-foreground max-w-[340px]">{p.stuckReason ?? "—"}</TableCell>
