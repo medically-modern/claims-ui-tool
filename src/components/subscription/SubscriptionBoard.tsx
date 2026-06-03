@@ -37,6 +37,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
+import { Financials } from "./Financials";
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
   currentPhase, ORDER_PREP_PATIENTS, PATIENT_STATUS_OPTIONS, PAUSE_REASON_OPTIONS,
@@ -395,7 +396,7 @@ function PatientDrawer({
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export function SubscriptionBoard() {
-  type PrimaryTab = "overview" | "prep" | "order";
+  type PrimaryTab = "overview" | "prep" | "order" | "financials";
   const [primary, setPrimary] = useState<PrimaryTab>("overview");
   type PrepPhase = CheckpointKind | "all";
   const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
@@ -521,6 +522,9 @@ export function SubscriptionBoard() {
               Order
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.ready}</span>
             </TabsTrigger>
+            <TabsTrigger value="financials" className="text-[15px] font-semibold px-4">
+              Financials
+            </TabsTrigger>
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
@@ -551,6 +555,10 @@ export function SubscriptionBoard() {
         </Tabs>
       )}
 
+      {primary === "financials" ? (
+        <Financials />
+      ) : (
+        <>
       {/* KPI grid */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {phaseKpis.map((k) => (<KpiTile key={k.label} {...k} />))}
@@ -607,6 +615,8 @@ export function SubscriptionBoard() {
         )}
       </Card>
 
+        </>
+      )}
       <PatientDrawer patient={activePatient} kind={activeKind} onClose={closeDrawer} />
     </div>
   );
