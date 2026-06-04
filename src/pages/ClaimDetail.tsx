@@ -752,6 +752,13 @@ const ClaimDetail = () => {
                 }`
               : "Written off — claim closed.",
       });
+      // Invalidate the claims query so /claims refetches fresh data
+      // instead of serving the cached snapshot that still has this row
+      // tagged as Denied. Without this, Bad Debt / Outstanding / Submit
+      // Claim flips look broken — the Monday write succeeded but the
+      // bucket filter on /claims sees the stale primaryStatus until the
+      // persisted cache eventually expires (24h gcTime).
+      void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
       navigate("/claims");
     } catch (e) {
       toast.error("Couldn't update Monday", {
