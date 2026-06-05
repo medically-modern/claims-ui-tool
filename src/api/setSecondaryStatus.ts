@@ -97,6 +97,36 @@ export async function setSecondaryStatusAndMove(
 // bulk-send tool that just stamps Send Invoice across many rows).
 const SEND_INVOICE_TRIGGER_COL = "color_mm3x6qe6";
 
+// Secondary Payor — color_mkxq1a2p. Status column with labels like
+// "NY Medicaid", "Medicaid", "AARP Supplement", etc. Edited from the
+// Secondary Payor dropdown on the Submit Insurance row body. Without
+// a Monday write, the dropdown only updates local React state and
+// resets to whatever Monday has on the next refetch.
+const SECONDARY_PAYER_COL = "color_mkxq1a2p";
+
+const SECONDARY_PAYER_MUT = `
+  mutation SetSecondaryPayor($itemId: ID!, $boardId: ID!, $value: JSON!) {
+    change_column_value(
+      item_id: $itemId,
+      board_id: $boardId,
+      column_id: "${SECONDARY_PAYER_COL}",
+      value: $value
+    ) { id }
+  }
+`;
+
+/** Write the Secondary Payor label (e.g. "NY Medicaid") to Monday. */
+export async function setSecondaryPayer(
+  mondayItemId: string,
+  label: string | null,
+): Promise<void> {
+  await mondayQuery(SECONDARY_PAYER_MUT, {
+    itemId: mondayItemId,
+    boardId: String(SECONDARY_BOARD_ID),
+    value: JSON.stringify(label ? { label } : {}),
+  });
+}
+
 // Patient Question Answered — color_mm41rxvr. Set to "Answered" when
 // the operator clicks Mark Answered on a Patient Questions row. Read by
 // allSecondaryClaims so the bucket filter can hide answered questions

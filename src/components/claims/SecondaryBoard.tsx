@@ -25,6 +25,7 @@ import {
   setSecondaryStatusAndMove,
   fireSendInvoiceTrigger,
   fireSendFollowUpTrigger,
+  setSecondaryPayer,
   fireQuestionAnswered,
 } from "@/api/setSecondaryStatus";
 import {
@@ -2150,10 +2151,26 @@ function SubmitSecondaryBody({
   const claimDed = c.claimLevelDeductible ?? 0;
 
   const handleSelect = (v: string) => {
+    // Local update first so the UI flips immediately. Fire-and-forget
+    // the Monday write — failures get a toast but the local state stays
+    // so the operator isn\'t blocked. Refetch will overwrite either way.
     if (v === OTHER_PAYER) {
       onUpdate({ secondaryPayer: OTHER_PAYER });
     } else {
       onUpdate({ secondaryPayer: v, secondaryPayerOther: null });
+    }
+    if (c.mondayItemId) {
+      // For "Other" we leave Monday's status column empty — the
+      // operator types the custom name into Secondary Payor Raw Name
+      // (separate text column), which is what backend reads.
+      const label = v === OTHER_PAYER ? null : v;
+      setSecondaryPayer(c.mondayItemId, label).catch((e) => {
+        toast({
+          title: `Couldn\'t save Secondary Payor: ${c.patientName}`,
+          description: (e as Error).message,
+          duration: 8_000,
+        });
+      });
     }
   };
 
