@@ -169,6 +169,12 @@ export interface SecClaim {
    *  Questions bucket filter to hide already-answered questions while
    *  preserving the question text on the row. */
   patientQuestionAnswered?: boolean;
+  /** SMS delivery state from the patient invoice text — read from
+   *  color_mm41nfw4. Populated by the Monday/Twilio automation chain
+   *  after Send Invoice fires the SMS. Values: 'Queued' | 'Sent' |
+   *  'Delivered' | 'Failed'. Surfaced as a badge on Outstanding
+   *  Invoices rows. */
+  smsStatus?: string;
   patientName: string;
   primaryPayor: string;
   secondaryPayer: string | null;     // null = patient bucket with no secondary; "Other" = custom
@@ -894,6 +900,15 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
     [claims],
   );
 
+  // Quick burst of refetches after an action that triggers a Monday
+  // automation we want to see the result of (e.g. Twilio SMS Status
+  // updates after Send Invoice). 3 staggered refetches over ~18s.
+  function schedulePollingRefetches() {
+    for (const delay of [3000, 8000, 18000]) {
+      window.setTimeout(() => { void refetchSecondary(); }, delay);
+    }
+  }
+
   const updateClaim = (id: string, patch: Partial<SecClaim>) =>
     setClaims((arr) => arr.map((c) => (c.id === id ? { ...c, ...patch } : c)));
 
@@ -1037,6 +1052,10 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
         title: `Invoice sent: ${c.patientName}`,
         description: `Patient owes ${$(c.remaining)}. Status → Outstanding. SMS automation fired.`,
       });
+      // Twilio webhook -> Monday usually lands within seconds. Three
+      // staggered refetches pick up the Queued -> Sent -> Delivered
+      // transitions without operator action.
+      schedulePollingRefetches();
     } catch (e) {
       toast({
         title: `Status saved but SMS trigger failed: ${c.patientName}`,
@@ -2678,6 +2697,9 @@ function SendToPatientBody({
           // paid). Clears color_mm3x6qe6 then writes "Follow-up" so
           // Monday fires a fresh automation event with different copy.
           <>
+            {bucket === "outstandingInvoices" && c.smsStatus && (
+              <SmsStatusBadge status={c.smsStatus} />
+            )}
             {bucket === "outstandingInvoices" && (
               <SendFollowUpButton onClick={onSendFollowUp} disabled={!c.mondayItemId} />
             )}
@@ -3275,5 +3297,27 @@ function SendFollowUpButton({ onClick, disabled }: {
         <><Send className="mr-1 h-3.5 w-3.5" /> Send Follow-Up</>
       )}
     </Button>
+  );
+}
+
+// SmsStatusBadge — surfaces color_mm41nfw4 next to the Stage-2 action
+// buttons on Outstanding Invoices rows so ops can see whether the
+// patient actually got the SMS. Driven by the Monday/Twilio automation.
+function SmsStatusBadge({ status }: { status: string }) {
+  const cfg: Record<string, { cls: string; icon: string; label: string }> = {
+    Queued:    { cls: "bg-slate-100 text-slate-700 border-slate-200",      icon: "•",  label: "Queued"    },
+    Sent:      { cls: "bg-blue-50 text-blue-700 border-blue-200",          icon: "✓",  label: "Sent"      },
+    Delivered: { cls: "bg-emerald-50 text-emerald-700 border-emerald-200", icon: "✓✓", label: "Delivered" },
+    Failed:    { cls: "bg-red-50 text-red-700 border-red-200",             icon: "⚠",  label: "Failed"    },
+  };
+  const c = cfg[status];
+  if (!c) return null;
+  return (
+    <span
+      title={`SMS: ${c.label}`}
+      className={`inline-flex h-8 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold ${c.cls}`}
+    >
+      {c.icon} {c.label}
+    </span>
   );
 }
