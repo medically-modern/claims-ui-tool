@@ -140,6 +140,11 @@ const COL = {
   // drops out of the Patient Questions bucket but its question text
   // stays on the row for future reference.
   PATIENT_QUESTION_ANSWERED: "color_mm41rxvr",
+  // SMS Status — color_mm41nfw4. Set by the Monday/Twilio automation
+  // chain after Send Invoice fires the SMS. Labels: Queued / Sent /
+  // Delivered / Failed. Used by the UI to surface SMS delivery state
+  // next to the Mark Paid button on Outstanding Invoices rows.
+  SMS_STATUS: "color_mm41nfw4",
 } as const;
 
 // ---------- subitem column ids (secondary subitem board) ----------
@@ -585,6 +590,7 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
     patientQuestion: txt(item, COL.PATIENT_QUESTION).trim() || undefined,
     patientQuestionAnswered:
       txt(item, COL.PATIENT_QUESTION_ANSWERED).trim() === "Answered",
+    smsStatus: txt(item, COL.SMS_STATUS).trim() || undefined,
     secondaryAdj: hasSecondaryEra
       ? Math.max(remaining - secondaryPaidAmount, 0)
       : undefined,
