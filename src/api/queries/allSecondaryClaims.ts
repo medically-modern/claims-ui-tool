@@ -130,6 +130,11 @@ const COL = {
   // column, Outstanding Invoices would balloon with rows that just
   // have a pay link generated.
   SEND_INVOICE_TRIGGER: "color_mm3x6qe6",
+  // Patient Question — long_text column the patient writes into via the
+  // pay link form when they need clarification. Surfaced as its own
+  // bucket on the Review tab so ops can text/call back without scanning
+  // every Outstanding row's notes.
+  PATIENT_QUESTION: "long_text_mm3yqgyt",
 } as const;
 
 // ---------- subitem column ids (secondary subitem board) ----------
@@ -551,6 +556,7 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
     // coins-form-payment webhook.
     sendInvoiceTriggered:
       txt(item, COL.SEND_INVOICE_TRIGGER).trim() === "Done",
+    patientQuestion: txt(item, COL.PATIENT_QUESTION).trim() || undefined,
     secondaryAdj: hasSecondaryEra
       ? Math.max(remaining - secondaryPaidAmount, 0)
       : undefined,

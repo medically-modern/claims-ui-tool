@@ -40,7 +40,7 @@ import {
 import {
   ArrowUpDown, Search, Send, ChevronDown, ChevronRight,
   ExternalLink, FileText, CheckCircle2, Clock, FileSearch, UserRound, Info,
-  Loader2, Ban,
+  Loader2, Ban, MessageCircleQuestion
 } from "lucide-react";
 
 export type SecondaryMode = "submit" | "review";
@@ -78,6 +78,7 @@ type SubmitBucket = "confirm" | "insurance" | "patient" | "awaiting";
 //                        Patient stage 2 lands them here).
 //   paid               - terminal Paid And Closed.
 type ReviewBucket =
+  | "patientQuestions"
   | "outstandingClaims"
   | "outstandingInvoices"
   | "eraReview"
@@ -153,6 +154,12 @@ export interface SecClaim {
    * (before the operator has actually sent the invoice), so we
    * can't trust Secondary Status alone. */
   sendInvoiceTriggered?: boolean;
+  /**
+   * Free-text question the patient typed into the pay-link form
+   * (long_text_mm3yqgyt). Surfaces in the Review > Patient Questions
+   * bucket so ops can text/call them back.
+   */
+  patientQuestion?: string;
   patientName: string;
   primaryPayor: string;
   secondaryPayer: string | null;     // null = patient bucket with no secondary; "Other" = custom
@@ -629,6 +636,12 @@ const BUCKET_META: Record<AnyBucket, { label: string; icon: React.ReactNode; ton
     tone: "text-info-soft-foreground",
     description: "Submitted to the secondary payer (via Stedi) but no 'Payer Accepted' 277 yet. Stays here until the payer acknowledges, then graduates to Outstanding Claims.",
   },
+  patientQuestions: {
+    label: "Patient Questions",
+    icon: <MessageCircleQuestion className="h-4 w-4" />,
+    tone: "text-warning-soft-foreground",
+    description: "Patient wrote a question on the pay-link form. Text or call back to answer.",
+  },
   outstandingClaims: {
     label: "Outstanding Claims",
     icon: <Clock className="h-4 w-4" />,
@@ -667,6 +680,7 @@ const MODE_BUCKETS: Record<SecondaryMode, AnyBucket[]> = {
   // Review remains the insurance side; Invoice Review is the patient
   // side equivalent.
   review: [
+    "patientQuestions",
     "outstandingClaims",
     "outstandingInvoices",
     "eraReview",
@@ -755,11 +769,15 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
     const out: Record<AnyBucket, number> = {
       confirm: 0, insurance: 0, patient: 0, awaiting: 0,
       outstandingClaims: 0, outstandingInvoices: 0,
+      patientQuestions: 0,
       eraReview: 0, invoiceReview: 0, paid: 0,
     };
     for (const c of claims) {
       const b = bucketOf(c);
       if (b) out[b] += 1;
+      // patientQuestions is additive — count any claim with a non-empty
+      // patient question regardless of its routing bucket
+      if (c.patientQuestion && c.patientQuestion.trim()) out.patientQuestions += 1;
     }
     return out;
   }, [claims]);
@@ -791,7 +809,9 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
 
   const visible = useMemo(() => {
     return claims
-      .filter((c) => bucketOf(c) === bucket)
+      .filter((c) => bucket === "patientQuestions"
+        ? !!(c.patientQuestion && c.patientQuestion.trim())
+        : bucketOf(c) === bucket)
       .filter((c) => payerFilter === "all" || c.primaryPayor === payerFilter || c.secondaryPayer === payerFilter)
       .filter((c) => {
         if (!search) return true;
@@ -1207,6 +1227,8 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
             <p className="text-base font-medium">Nothing in this bucket.</p>
             <p className="text-sm text-muted-foreground">All caught up.</p>
           </Card>
+        ) : bucket === "patientQuestions" ? (
+          <PatientQuestionsList rows={visible} />
         ) : bucket === "eraReview" || bucket === "outstandingClaims" || bucket === "paid" ? (
           // ERA Review + Outstanding Claims + Paid all render as a
           // primary-style table. ERA Review (showActions=true): Status
@@ -3001,6 +3023,59 @@ function LineTable({ headers, rows }: { headers: string[]; rows: React.ReactNode
         >
           {r.map((cell, j) => <div key={j} className="min-w-0 truncate">{cell}</div>)}
         </div>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Patient Questions list — additive bucket surfaced on the Review tab.
+// Each row shows the patient's question text alongside enough context
+// (claim id, payor, balance) for an operator to text/call back without
+// opening the claim. No bucket routing — same claim still appears in
+// its real bucket (eraReview, outstandingClaims, etc.).
+// ─────────────────────────────────────────────────────────────────────────────
+function PatientQuestionsList({ rows }: { rows: SecClaim[] }) {
+  return (
+    <div className="space-y-3">
+      {rows.map((c) => (
+        <Card key={c.id} className="p-4">
+          <div className="flex items-start gap-4">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-medium">{c.patientName}</span>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {c.id.slice(-8)}
+                </span>
+                <span className="text-xs text-muted-foreground">·</span>
+                <span className="text-xs text-muted-foreground">
+                  {c.secondaryPayer ?? c.primaryPayor}
+                </span>
+                {typeof c.patientResp === "number" && c.patientResp > 0 && (
+                  <>
+                    <span className="text-xs text-muted-foreground">·</span>
+                    <span className="text-xs font-medium tabular-nums">
+                      ${c.patientResp.toFixed(2)} due
+                    </span>
+                  </>
+                )}
+              </div>
+              <blockquote className="mt-2 border-l-2 border-warning-soft-foreground/30 bg-warning-soft/30 px-3 py-2 text-sm italic">
+                {c.patientQuestion}
+              </blockquote>
+            </div>
+            <div className="flex flex-col items-stretch gap-2 min-w-[140px]">
+              <Button size="sm" variant="outline" asChild>
+                <a href={`tel:${(c as unknown as { patientPhone?: string }).patientPhone ?? ""}`}>
+                  Text / Call
+                </a>
+              </Button>
+              <Button size="sm" variant="ghost">
+                Mark answered
+              </Button>
+            </div>
+          </div>
+        </Card>
       ))}
     </div>
   );
