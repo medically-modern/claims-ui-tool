@@ -1,23 +1,35 @@
 /**
  * PatientProfile.tsx — Updating Patient Profile workflow.
  *
- * Captures any patient profile change captured outside the reorder
- * form (operator-driven phone/text updates). Date/product/address can
- * also sync automatically from the reorder tool — that path doesn't
- * land here.
+ * Main view: table of all patients (8 basic columns) + filters.
+ * Click a row → detail view with 9 grouped sections, all editable.
  *
- * For now the form is a stub:
- *   - Patient search (name, phone, Monday ID)
- *   - Picked patient → editable fields grouped by section
- *   - Save writes locally (no Monday wire yet)
+ * Sections (top → bottom):
+ *   1. Demographics
+ *   2. Order / Subscription
+ *   3. Insurance + Run Eligibility Check button
+ *   4. Doctor
+ *   5. Status & flags (Status / Pause Reason / Dead Reason)
+ *   6. Clinical / Medical Records (also surfaced in MR workflow)
+ *   7. Authorizations (also surfaced in Auth workflow)
+ *   8. Eligibility / Coverage (read-only — populated by the check)
+ *   9. Billing context (read-only)
+ *
+ * Saves are local (in-memory overrides). The Run Eligibility Check
+ * button flips Run Check → "Run" on Monday and lets the existing
+ * webhook handle the actual eligibility run — stubbed here with a
+ * toast and a local state update.
  */
 
 import { useMemo, useState } from "react";
-import { Search, Save, X } from "lucide-react";
+import { Search, Save, X, ArrowLeft, RefreshCw, Upload, FileText } from "lucide-react";
+import { toast } from "sonner";
+
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -25,190 +37,379 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { ORDER_PREP_PATIENTS, PAYER_OPTIONS, SubscriptionPatient } from "./mockData";
 
+import {
+  ORDER_PREP_PATIENTS, PAYER_OPTIONS, PAUSE_REASON_OPTIONS,
+  PATIENT_STATUS_OPTIONS, SubscriptionPatient,
+} from "./mockData";
+
+// ─── Field shape ─────────────────────────────────────────────────────────────
 type EditableProfile = {
-  name: string; phone: string; email: string; dob: string; gender: string;
-  shippingAddress: string;
-  primaryPayer: string; primaryMemberId: string;
-  secondaryPayer: string; secondaryMemberId: string;
-  doctorName: string; doctorNpi: string; doctorPhone: string; doctorFax: string;
-  doctorEmail: string; parachuteClinic: string;
-  diagnosis: string; mnExpiry: string;
-  subscriptionType: string; nextOrderDate: string; orderingCycle: string;
-  notes: string;
+  // Demographics
+  name: string; dob: string; gender: string;
+  phone: string; email: string; address: string; patientUid: string;
+  // Order / Subscription
+  subscriptionType: string; nextOrderDate: string;
+  sensorsType: string; suppliesType: string;
+  infusionSet1: string; infusionSet1Qty: string;
+  infusionSet2: string; infusionSet2Qty: string;
+  // Insurance
+  primaryInsurance: string; memberId1: string;
+  secondaryInsurance: string; memberId2: string;
+  insuranceCardName: string;
+  // Doctor
+  doctorName: string; doctorNpi: string; doctorAddress: string;
+  doctorPhone: string; doctorFax: string; clinicalsMethod: string;
+  // Status & flags
+  status: string; pauseReason: string; deadReason: string;
+  // Clinical / MR
+  diagnosis: string; mnExpiry: string; mnDocsName: string;
+  // Authorizations
+  sensorsAuthStatus: string; sensorsAuthId: string;
+  sensorsAuthStart: string; sensorsAuthEnd: string; sensorsAuthUnits: string;
+  suppliesAuthStatus: string; suppliesAuthId: string;
+  suppliesAuthStart: string; suppliesAuthEnd: string; suppliesAuthUnits: string;
+  priorAuthReq: string; triggerDvs: string;
 };
 
-function blankFromPatient(p: SubscriptionPatient): EditableProfile {
+// ─── Mock data helpers (deterministic per-patient defaults) ──────────────────
+function hash(s: string): number {
+  let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+function pick<T>(arr: readonly T[], h: number): T { return arr[h % arr.length]; }
+
+const SENSORS_TYPES   = ["Dexcom G7", "Dexcom G6", "FreeStyle Libre 3", "FreeStyle Libre 2"];
+const SUPPLIES_TYPES  = ["Tandem t:slim X2", "Omnipod 5", "Medtronic 780G", "Tandem Mobi"];
+const INFUSION_SETS   = ["AutoSoft 90 9 mm 23\"", "TruSteel 6 mm 23\"", "VariSoft 6 mm 23\"", "Contact Detach 8 mm 23\""];
+const DOCTORS         = ["Jason Sloane", "Rachel Goldstein", "Maria Hernandez", "Sam Patel", "Andrew Wu"];
+const AUTH_STATUSES   = ["Not Checked", "No Auth Needed", "Auth Valid", "Submitted", "Expiring", "Expired", "Mismatch", "Denied", "Required"];
+const CLINICALS_METHODS = ["Fax", "Parachute"];
+const GENDERS         = ["Male", "Female"];
+const DEAD_REASONS    = ["No reason on file", "Switched supplier", "Deceased", "Insurance dropped", "Patient request"];
+const SECONDARY_PAYERS = ["None", "Medicare A&B", "Medicaid", "United Medicaid", "Cigna", "Anthem BCBS Commercial"];
+
+function defaultsFromPatient(p: SubscriptionPatient): EditableProfile {
+  const h = hash(p.id);
+  const dobY = 1955 + (h % 35);
+  const dobM = String((h % 12) + 1).padStart(2, "0");
+  const dobD = String((h % 28) + 1).padStart(2, "0");
   return {
-    name: p.name, phone: p.phone, email: "", dob: "", gender: "",
-    shippingAddress: "",
-    primaryPayer: p.primaryPayer, primaryMemberId: "",
-    secondaryPayer: "", secondaryMemberId: "",
-    doctorName: "", doctorNpi: "", doctorPhone: "", doctorFax: "",
-    doctorEmail: "", parachuteClinic: "",
-    diagnosis: "", mnExpiry: "",
-    subscriptionType: p.subscriptionType, nextOrderDate: p.nextOrderDate,
-    orderingCycle: p.orderingCycle ?? "", notes: "",
+    name: p.name,
+    dob: `${dobY}-${dobM}-${dobD}`,
+    gender: pick(GENDERS, h),
+    phone: p.phone,
+    email: `${p.name.split(" ")[0].toLowerCase()}.${p.name.split(" ").pop()?.toLowerCase() ?? "test"}@example.com`,
+    address: `${629 + (h % 800)} Chatham Street, Rome, NY 13440`,
+    patientUid: p.mondayItemId,
+
+    subscriptionType: p.subscriptionType,
+    nextOrderDate: p.nextOrderDate,
+    sensorsType: p.subscriptionType !== "Supplies" ? pick(SENSORS_TYPES, h) : "",
+    suppliesType: p.subscriptionType !== "Sensors" ? pick(SUPPLIES_TYPES, h >> 1) : "",
+    infusionSet1: p.subscriptionType !== "Sensors" ? pick(INFUSION_SETS, h) : "",
+    infusionSet1Qty: p.subscriptionType !== "Sensors" ? "1" : "",
+    infusionSet2: p.subscriptionType !== "Sensors" && h % 4 === 0 ? pick(INFUSION_SETS, h >> 2) : "",
+    infusionSet2Qty: p.subscriptionType !== "Sensors" && h % 4 === 0 ? "1" : "",
+
+    primaryInsurance: p.primaryPayer,
+    memberId1: `74${(10000000 + (h % 90000000))}`,
+    secondaryInsurance: pick(SECONDARY_PAYERS, h),
+    memberId2: pick(SECONDARY_PAYERS, h) === "None" ? "" : `FP${(10000 + (h % 90000))}T`,
+    insuranceCardName: "",
+
+    doctorName: `Dr. ${pick(DOCTORS, h)}`,
+    doctorNpi: String(1000000000 + (h % 999999999)).slice(0, 10),
+    doctorAddress: `${100 + (h % 900)} Medical Plaza, Syracuse, NY 13202`,
+    doctorPhone: `(315) ${String(500 + (h % 400))}-${String(1000 + (h * 11) % 9000).padStart(4, "0")}`,
+    doctorFax: `(315) ${String(900 + (h % 99))}-${String(1000 + (h * 7) % 9000).padStart(4, "0")}`,
+    clinicalsMethod: pick(CLINICALS_METHODS, h),
+
+    status: p.patientStatus,
+    pauseReason: p.pauseReason ?? "",
+    deadReason: p.deadReason ?? "",
+
+    diagnosis: "E11.65 — Type 2 diabetes with hyperglycemia",
+    mnExpiry: "",
+    mnDocsName: "",
+
+    sensorsAuthStatus: p.subscriptionType !== "Supplies" ? pick(AUTH_STATUSES, h) : "Not Checked",
+    sensorsAuthId: "",
+    sensorsAuthStart: "",
+    sensorsAuthEnd: "",
+    sensorsAuthUnits: p.subscriptionType !== "Supplies" ? "3" : "",
+    suppliesAuthStatus: p.subscriptionType !== "Sensors" ? pick(AUTH_STATUSES, h >> 2) : "Not Checked",
+    suppliesAuthId: "",
+    suppliesAuthStart: "",
+    suppliesAuthEnd: "",
+    suppliesAuthUnits: p.subscriptionType !== "Sensors" ? "30" : "",
+    priorAuthReq: "Evaluate",
+    triggerDvs: p.primaryPayer.toLowerCase().includes("medicaid") && p.subscriptionType !== "Sensors" ? "Yes" : "No",
   };
 }
 
+// ─── Component ───────────────────────────────────────────────────────────────
 export function PatientProfile() {
   const [search, setSearch] = useState("");
-  const [picked, setPicked] = useState<SubscriptionPatient | null>(null);
-  const [draft, setDraft] = useState<EditableProfile | null>(null);
-  const [dirty, setDirty] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<string>("All");
+  const [payerFilter, setPayerFilter] = useState<string>("All payers");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, EditableProfile>>({});
+  const [dirtyMap, setDirtyMap] = useState<Record<string, boolean>>({});
 
-  const matches = useMemo(() => {
+  const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (q.length < 2) return [];
-    return ORDER_PREP_PATIENTS.filter((p) =>
-      p.name.toLowerCase().includes(q)
-      || p.phone.includes(q)
-      || p.mondayItemId.includes(q),
-    ).slice(0, 8);
-  }, [search]);
+    return ORDER_PREP_PATIENTS.filter((p) => {
+      if (statusFilter !== "All" && p.patientStatus !== statusFilter) return false;
+      if (payerFilter !== "All payers" && p.primaryPayer !== payerFilter) return false;
+      if (q && !(p.name.toLowerCase().includes(q) || p.phone.includes(q) || p.mondayItemId.includes(q))) return false;
+      return true;
+    });
+  }, [search, statusFilter, payerFilter]);
 
-  function pick(p: SubscriptionPatient) {
-    setPicked(p); setDraft(blankFromPatient(p));
-    setDirty(false); setSearch("");
+  function openPatient(p: SubscriptionPatient) {
+    setOpenId(p.id);
+    setDrafts((d) => d[p.id] ? d : { ...d, [p.id]: defaultsFromPatient(p) });
   }
   function update<K extends keyof EditableProfile>(k: K, v: EditableProfile[K]) {
-    if (!draft) return;
-    setDraft({ ...draft, [k]: v });
-    setDirty(true);
+    if (!openId) return;
+    setDrafts((d) => ({ ...d, [openId]: { ...d[openId], [k]: v } }));
+    setDirtyMap((m) => ({ ...m, [openId]: true }));
+  }
+  function save() {
+    if (!openId) return;
+    setDirtyMap((m) => ({ ...m, [openId]: false }));
+    toast.success("Saved — would write to Monday on production");
   }
   function discard() {
-    if (!picked) return;
-    setDraft(blankFromPatient(picked));
-    setDirty(false);
+    if (!openId) return;
+    const p = ORDER_PREP_PATIENTS.find((x) => x.id === openId);
+    if (!p) return;
+    setDrafts((d) => ({ ...d, [openId]: defaultsFromPatient(p) }));
+    setDirtyMap((m) => ({ ...m, [openId]: false }));
+  }
+  function runEligibility() {
+    if (!openId) return;
+    toast.success("Run Check flipped to \"Run\" on Monday — webhook will fire the eligibility check");
   }
 
-  if (!picked || !draft) {
+  const opened = openId ? ORDER_PREP_PATIENTS.find((p) => p.id === openId) : null;
+  const draft  = openId ? drafts[openId] : null;
+  const dirty  = openId ? !!dirtyMap[openId] : false;
+
+  // ─── Detail view ─────────────────────────────────────────────────────────
+  if (opened && draft) {
     return (
       <div className="space-y-4">
-        <Card className="p-6">
-          <div className="text-sm text-muted-foreground mb-2">
-            Search for a patient by name, phone, or Monday item ID to edit their profile.
+        {/* Sticky-ish header */}
+        <Card className="p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" size="sm" onClick={() => setOpenId(null)}>
+                <ArrowLeft className="mr-2 h-4 w-4" />Back to patients
+              </Button>
+              <div>
+                <div className="text-lg font-semibold">{opened.name}</div>
+                <div className="text-xs text-muted-foreground tabular-nums">
+                  UID {opened.mondayItemId} · {opened.primaryPayer} · {opened.subscriptionType}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {dirty && <Button variant="outline" size="sm" onClick={discard}>Discard</Button>}
+              <Button size="sm" disabled={!dirty} onClick={save}>
+                <Save className="mr-2 h-4 w-4" />Save changes
+              </Button>
+            </div>
           </div>
-          <div className="relative max-w-xl">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input autoFocus value={search} onChange={(e) => setSearch(e.target.value)}
-              placeholder="Patient name, phone, or Monday ID" className="pl-9" />
-          </div>
-          {matches.length > 0 && (
-            <Table className="mt-4">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Patient</TableHead><TableHead>Phone</TableHead>
-                  <TableHead>Payer</TableHead><TableHead>Monday ID</TableHead>
-                  <TableHead className="w-[80px]"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {matches.map((p) => (
-                  <TableRow key={p.id} className="cursor-pointer hover:bg-muted/50" onClick={() => pick(p)}>
-                    <TableCell className="font-medium">{p.name}</TableCell>
-                    <TableCell className="text-muted-foreground">{p.phone}</TableCell>
-                    <TableCell className="text-muted-foreground">{p.primaryPayer}</TableCell>
-                    <TableCell className="text-muted-foreground tabular-nums text-xs">{p.mondayItemId}</TableCell>
-                    <TableCell><Button size="sm" variant="outline">Edit</Button></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {search.length >= 2 && matches.length === 0 && (
-            <div className="text-sm text-muted-foreground mt-4">No matches.</div>
-          )}
         </Card>
-        <Card className="p-6 text-sm text-muted-foreground">
-          <strong className="text-foreground">What gets edited here:</strong> any
-          profile change that isn't captured by the reorder form. The reorder form
-          handles Date / Product / Address automatically (and writes back to Monday
-          on submit), and captures Insurance changes for ops follow-up. This page
-          is the catch-all — doctor info, new diagnosis, contact changes, and
-          manual edits to anything captured above.
-        </Card>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <FormSection title="Demographics">
+            <Field label="Name" value={draft.name} onChange={(v) => update("name", v)} />
+            <Field label="DOB" value={draft.dob} onChange={(v) => update("dob", v)} type="date" />
+            <SelectField label="Gender" value={draft.gender} onChange={(v) => update("gender", v)} options={GENDERS} />
+            <ReadOnlyField label="Patient UID" value={draft.patientUid} />
+            <Field label="Phone" value={draft.phone} onChange={(v) => update("phone", v)} />
+            <Field label="Email" value={draft.email} onChange={(v) => update("email", v)} />
+            <Field label="Address" value={draft.address} onChange={(v) => update("address", v)} fullWidth />
+          </FormSection>
+
+          <FormSection title="Order / Subscription">
+            <SelectField label="Subscription type" value={draft.subscriptionType} onChange={(v) => update("subscriptionType", v)} options={["Sensors", "Supplies", "Sensors & Supplies"]} />
+            <Field label="Next Order date" value={draft.nextOrderDate} onChange={(v) => update("nextOrderDate", v)} type="date" />
+            <SelectField label="Sensors type" value={draft.sensorsType || "—"} onChange={(v) => update("sensorsType", v === "—" ? "" : v)} options={["—", ...SENSORS_TYPES]} />
+            <SelectField label="Supplies type" value={draft.suppliesType || "—"} onChange={(v) => update("suppliesType", v === "—" ? "" : v)} options={["—", ...SUPPLIES_TYPES]} />
+            <SelectField label="Infusion Set 1" value={draft.infusionSet1 || "—"} onChange={(v) => update("infusionSet1", v === "—" ? "" : v)} options={["—", ...INFUSION_SETS]} />
+            <Field label="Inf. Qty 1" value={draft.infusionSet1Qty} onChange={(v) => update("infusionSet1Qty", v)} type="number" />
+            <SelectField label="Infusion Set 2" value={draft.infusionSet2 || "—"} onChange={(v) => update("infusionSet2", v === "—" ? "" : v)} options={["—", ...INFUSION_SETS]} />
+            <Field label="Inf. Qty 2" value={draft.infusionSet2Qty} onChange={(v) => update("infusionSet2Qty", v)} type="number" />
+          </FormSection>
+
+          <FormSection title="Insurance" action={
+            <Button size="sm" variant="outline" onClick={runEligibility}>
+              <RefreshCw className="mr-2 h-3.5 w-3.5" />Run Eligibility Check
+            </Button>
+          }>
+            <SelectField label="Primary insurance" value={draft.primaryInsurance} onChange={(v) => update("primaryInsurance", v)} options={PAYER_OPTIONS.filter((p) => p !== "All payers")} />
+            <Field label="Member ID 1" value={draft.memberId1} onChange={(v) => update("memberId1", v)} />
+            <SelectField label="Secondary insurance" value={draft.secondaryInsurance} onChange={(v) => update("secondaryInsurance", v)} options={SECONDARY_PAYERS} />
+            <Field label="Member ID 2" value={draft.memberId2} onChange={(v) => update("memberId2", v)} />
+            <FileField label="Insurance Card" value={draft.insuranceCardName} onChange={(v) => update("insuranceCardName", v)} fullWidth />
+          </FormSection>
+
+          <FormSection title="Doctor">
+            <Field label="Doctor name" value={draft.doctorName} onChange={(v) => update("doctorName", v)} />
+            <Field label="NPI" value={draft.doctorNpi} onChange={(v) => update("doctorNpi", v)} />
+            <Field label="Doctor address" value={draft.doctorAddress} onChange={(v) => update("doctorAddress", v)} fullWidth />
+            <Field label="Doctor phone" value={draft.doctorPhone} onChange={(v) => update("doctorPhone", v)} />
+            <Field label="Doctor fax" value={draft.doctorFax} onChange={(v) => update("doctorFax", v)} />
+            <SelectField label="Fax / Parachute" value={draft.clinicalsMethod} onChange={(v) => update("clinicalsMethod", v)} options={CLINICALS_METHODS} />
+          </FormSection>
+
+          <FormSection title="Status & flags">
+            <SelectField label="Status" value={draft.status} onChange={(v) => update("status", v)} options={PATIENT_STATUS_OPTIONS.filter((s) => s !== "All")} />
+            <SelectField label="Pause reason" value={draft.pauseReason || "—"} onChange={(v) => update("pauseReason", v === "—" ? "" : v)} options={["—", ...PAUSE_REASON_OPTIONS.filter((p) => p !== "Any pause reason")]} />
+            <SelectField label="Dead reason" value={draft.deadReason || "—"} onChange={(v) => update("deadReason", v === "—" ? "" : v)} options={["—", ...DEAD_REASONS]} />
+          </FormSection>
+
+          <FormSection title="Clinical / Medical Records" subtitle="Editable here; managed primarily in the Medical Records workflow">
+            <Field label="Diagnosis" value={draft.diagnosis} onChange={(v) => update("diagnosis", v)} fullWidth />
+            <Field label="MN Expiry" value={draft.mnExpiry} onChange={(v) => update("mnExpiry", v)} type="date" />
+            <FileField label="MN Docs" value={draft.mnDocsName} onChange={(v) => update("mnDocsName", v)} />
+          </FormSection>
+
+          <FormSection title="Authorizations" subtitle="Editable here; managed primarily in the Authorizations workflow" fullWidth>
+            <div className="col-span-2 grid grid-cols-2 gap-3 mb-2">
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-2">Sensors</div>
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-2">Supplies</div>
+            </div>
+            <SelectField label="Auth status (Sensors)" value={draft.sensorsAuthStatus} onChange={(v) => update("sensorsAuthStatus", v)} options={AUTH_STATUSES} />
+            <SelectField label="Auth status (Supplies)" value={draft.suppliesAuthStatus} onChange={(v) => update("suppliesAuthStatus", v)} options={AUTH_STATUSES} />
+            <Field label="Auth ID (Sensors)" value={draft.sensorsAuthId} onChange={(v) => update("sensorsAuthId", v)} />
+            <Field label="Auth ID (Supplies)" value={draft.suppliesAuthId} onChange={(v) => update("suppliesAuthId", v)} />
+            <Field label="Auth start (Sensors)" value={draft.sensorsAuthStart} onChange={(v) => update("sensorsAuthStart", v)} type="date" />
+            <Field label="Auth start (Supplies)" value={draft.suppliesAuthStart} onChange={(v) => update("suppliesAuthStart", v)} type="date" />
+            <Field label="Auth end (Sensors)" value={draft.sensorsAuthEnd} onChange={(v) => update("sensorsAuthEnd", v)} type="date" />
+            <Field label="Auth end (Supplies)" value={draft.suppliesAuthEnd} onChange={(v) => update("suppliesAuthEnd", v)} type="date" />
+            <Field label="Units (Sensors)" value={draft.sensorsAuthUnits} onChange={(v) => update("sensorsAuthUnits", v)} type="number" />
+            <Field label="Units (Supplies)" value={draft.suppliesAuthUnits} onChange={(v) => update("suppliesAuthUnits", v)} type="number" />
+            <SelectField label="Prior Auth Req?" value={draft.priorAuthReq} onChange={(v) => update("priorAuthReq", v)} options={["Yes", "No", "Evaluate"]} />
+            <SelectField label="Trigger DVS" value={draft.triggerDvs} onChange={(v) => update("triggerDvs", v)} options={["Yes", "No"]} />
+          </FormSection>
+
+          <ReadOnlyContextSection title="Eligibility / Coverage (read-only)" subtitle="Populated by Run Eligibility Check" entries={[
+            ["Active?", "Active"],
+            ["Stedi Payer Name", "Fidelis Care New York"],
+            ["Stedi Plan Name", "Child Health Plus"],
+            ["Stedi Member ID", draft.memberId1],
+            ["Date Plan Begin", "2025-12-01"],
+            ["Deductible", "$0.00"],
+            ["Ded. Remaining", "$0.00"],
+            ["Coinsurance %", "20%"],
+            ["OOP Max", "$3,500"],
+            ["OOP Max Remaining", "$2,750"],
+          ]} />
+
+          <ReadOnlyContextSection title="Billing context (read-only)" subtitle="From the Claims Board" entries={[
+            ["Primary Claim Paid?", "Yes"],
+            ["Secondary Claim Paid?", "—"],
+          ]} />
+        </div>
       </div>
     );
   }
 
+  // ─── Main table view ─────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
       <Card className="p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-lg font-semibold">{picked.name}</div>
-            <div className="text-xs text-muted-foreground tabular-nums">
-              Monday ID {picked.mondayItemId} · {picked.primaryPayer} · {picked.subscriptionType}
-            </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[260px]">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search patient, phone, Monday ID" className="pl-9" />
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setPicked(null)}>
-              <X className="mr-1 h-4 w-4" />Close
-            </Button>
-            {dirty && (<Button variant="outline" size="sm" onClick={discard}>Discard</Button>)}
-            <Button size="sm" disabled={!dirty}>
-              <Save className="mr-2 h-4 w-4" />Save changes
-            </Button>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
+            <SelectContent>{PATIENT_STATUS_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s === "All" ? "All statuses" : s}</SelectItem>)}</SelectContent>
+          </Select>
+          <Select value={payerFilter} onValueChange={setPayerFilter}>
+            <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
+            <SelectContent>{PAYER_OPTIONS.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
+          </Select>
+          <div className="text-xs text-muted-foreground tabular-nums">
+            {filtered.length} of {ORDER_PREP_PATIENTS.length} patients
           </div>
         </div>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <FormSection title="Contact & shipping">
-          <Field label="Name" value={draft.name} onChange={(v) => update("name", v)} />
-          <Field label="Phone" value={draft.phone} onChange={(v) => update("phone", v)} />
-          <Field label="Email" value={draft.email} onChange={(v) => update("email", v)} />
-          <Field label="DOB" value={draft.dob} onChange={(v) => update("dob", v)} type="date" />
-          <Field label="Gender" value={draft.gender} onChange={(v) => update("gender", v)} />
-          <Field label="Shipping address" value={draft.shippingAddress} onChange={(v) => update("shippingAddress", v)} fullWidth />
-        </FormSection>
-
-        <FormSection title="Insurance">
-          <SelectField label="Primary payer" value={draft.primaryPayer} onChange={(v) => update("primaryPayer", v)} options={PAYER_OPTIONS.filter((p) => p !== "All payers")} />
-          <Field label="Primary member ID" value={draft.primaryMemberId} onChange={(v) => update("primaryMemberId", v)} />
-          <SelectField label="Secondary payer" value={draft.secondaryPayer} onChange={(v) => update("secondaryPayer", v)} options={["None", ...PAYER_OPTIONS.filter((p) => p !== "All payers")]} />
-          <Field label="Secondary member ID" value={draft.secondaryMemberId} onChange={(v) => update("secondaryMemberId", v)} />
-        </FormSection>
-
-        <FormSection title="Doctor">
-          <Field label="Doctor name" value={draft.doctorName} onChange={(v) => update("doctorName", v)} />
-          <Field label="NPI" value={draft.doctorNpi} onChange={(v) => update("doctorNpi", v)} />
-          <Field label="Office phone" value={draft.doctorPhone} onChange={(v) => update("doctorPhone", v)} />
-          <Field label="Office fax" value={draft.doctorFax} onChange={(v) => update("doctorFax", v)} />
-          <Field label="Office email" value={draft.doctorEmail} onChange={(v) => update("doctorEmail", v)} />
-          <Field label="Parachute clinic" value={draft.parachuteClinic} onChange={(v) => update("parachuteClinic", v)} />
-        </FormSection>
-
-        <FormSection title="Clinical">
-          <Field label="Diagnosis" value={draft.diagnosis} onChange={(v) => update("diagnosis", v)} fullWidth />
-          <Field label="MN expiry" value={draft.mnExpiry} onChange={(v) => update("mnExpiry", v)} type="date" />
-        </FormSection>
-
-        <FormSection title="Subscription">
-          <SelectField label="Subscription type" value={draft.subscriptionType} onChange={(v) => update("subscriptionType", v)} options={["Sensors", "Supplies", "Sensors & Supplies"]} />
-          <Field label="Next order date" value={draft.nextOrderDate} onChange={(v) => update("nextOrderDate", v)} type="date" />
-          <Field label="Ordering cycle" value={draft.orderingCycle} onChange={(v) => update("orderingCycle", v)} />
-        </FormSection>
-
-        <FormSection title="Notes">
-          <TextareaField label="Notes" value={draft.notes} onChange={(v) => update("notes", v)} />
-        </FormSection>
-      </div>
+      <Card className="overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Patient</TableHead>
+              <TableHead>Phone</TableHead>
+              <TableHead>DOB</TableHead>
+              <TableHead>Primary Insurance</TableHead>
+              <TableHead>Subscription</TableHead>
+              <TableHead>Next Order</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Doctor</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtered.map((p) => {
+              const h = hash(p.id);
+              const dob = `${1955 + (h % 35)}-${String((h % 12) + 1).padStart(2, "0")}-${String((h % 28) + 1).padStart(2, "0")}`;
+              const doctor = `Dr. ${pick(DOCTORS, h)}`;
+              return (
+                <TableRow key={p.id} className="cursor-pointer hover:bg-muted/40" onClick={() => openPatient(p)}>
+                  <TableCell className="font-medium">{p.name}</TableCell>
+                  <TableCell className="text-muted-foreground tabular-nums text-xs">{p.phone}</TableCell>
+                  <TableCell className="tabular-nums text-xs">{dob}</TableCell>
+                  <TableCell>{p.primaryPayer}</TableCell>
+                  <TableCell><Badge variant="outline">{p.subscriptionType}</Badge></TableCell>
+                  <TableCell className="tabular-nums">{p.nextOrderDate}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={
+                      p.patientStatus === "Active" ? "bg-green-50 text-green-700 border-green-200" :
+                      p.patientStatus === "Paused" ? "bg-yellow-50 text-yellow-700 border-yellow-200" :
+                                                     "bg-red-50 text-red-700 border-red-200"
+                    }>{p.patientStatus}</Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{doctor}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+        {filtered.length === 0 && (
+          <div className="px-4 py-12 text-center text-sm text-muted-foreground">No patients match.</div>
+        )}
+      </Card>
     </div>
   );
 }
 
-function FormSection({ title, children }: { title: string; children: React.ReactNode }) {
+// ─── Form atoms ──────────────────────────────────────────────────────────────
+function FormSection({ title, subtitle, action, fullWidth, children }: {
+  title: string; subtitle?: string; action?: React.ReactNode; fullWidth?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <Card className="p-4">
-      <div className="text-xs uppercase tracking-wide font-semibold text-muted-foreground mb-3">{title}</div>
+    <Card className={`p-4 ${fullWidth ? "lg:col-span-2" : ""}`}>
+      <div className="flex items-start justify-between mb-3">
+        <div>
+          <div className="text-xs uppercase tracking-wide font-semibold text-muted-foreground">{title}</div>
+          {subtitle && <div className="text-[11px] text-muted-foreground mt-0.5">{subtitle}</div>}
+        </div>
+        {action}
+      </div>
       <div className="grid grid-cols-2 gap-3">{children}</div>
     </Card>
   );
 }
+
 function Field({ label, value, onChange, type = "text", fullWidth }: {
   label: string; value: string; onChange: (v: string) => void; type?: string; fullWidth?: boolean;
 }) {
@@ -219,22 +420,70 @@ function Field({ label, value, onChange, type = "text", fullWidth }: {
     </div>
   );
 }
-function TextareaField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+
+function SelectField({ label, value, onChange, options, fullWidth }: {
+  label: string; value: string; onChange: (v: string) => void;
+  options: readonly string[] | string[]; fullWidth?: boolean;
+}) {
   return (
-    <div className="col-span-2">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      <Textarea value={value} onChange={(e) => onChange(e.target.value)} className="mt-1" rows={3} />
-    </div>
-  );
-}
-function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: readonly string[] | string[] }) {
-  return (
-    <div>
+    <div className={fullWidth ? "col-span-2" : ""}>
       <Label className="text-xs text-muted-foreground">{label}</Label>
       <Select value={value} onValueChange={onChange}>
         <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
         <SelectContent>{options.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
       </Select>
     </div>
+  );
+}
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <div className="mt-1 px-3 py-2 text-sm bg-muted/40 rounded-md tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function FileField({ label, value, onChange, fullWidth }: {
+  label: string; value: string; onChange: (v: string) => void; fullWidth?: boolean;
+}) {
+  return (
+    <div className={fullWidth ? "col-span-2" : ""}>
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <div className="mt-1 flex items-center gap-2">
+        {value ? (
+          <>
+            <div className="flex-1 px-3 py-2 text-sm bg-muted/40 rounded-md flex items-center gap-2">
+              <FileText className="h-3.5 w-3.5 text-muted-foreground" />{value}
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => onChange("")}><X className="h-3.5 w-3.5" /></Button>
+          </>
+        ) : (
+          <Button variant="outline" size="sm" className="w-full" onClick={() => onChange("uploaded_file.pdf")}>
+            <Upload className="mr-2 h-3.5 w-3.5" />Upload file
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReadOnlyContextSection({ title, subtitle, entries }: {
+  title: string; subtitle?: string; entries: [string, string][];
+}) {
+  return (
+    <Card className="p-4 lg:col-span-2 bg-muted/30">
+      <div className="text-xs uppercase tracking-wide font-semibold text-muted-foreground mb-1">{title}</div>
+      {subtitle && <div className="text-[11px] text-muted-foreground mb-3">{subtitle}</div>}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+        {entries.map(([k, v]) => (
+          <div key={k}>
+            <div className="text-[11px] text-muted-foreground">{k}</div>
+            <div className="text-sm font-medium tabular-nums">{v}</div>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
