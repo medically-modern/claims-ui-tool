@@ -635,9 +635,12 @@ export async function fetchAllSecondaryClaims(opts?: {
 
   if (opts?.includeAll) return all;
 
+  // 'Patient Paid' isn't really terminal — it's the verify step the
+  // Invoice Review bucket exists for. Filtering it out here means
+  // patient-paid rows never reach bucketOf and the operator can't see
+  // them to verify. 'Secondary Paid' and 'Bad Debt' stay terminal.
   const terminal = new Set<SecondaryStatus>([
     "Secondary Paid",
-    "Patient Paid",
     "Bad Debt",
   ]);
   return all.filter((c) => !terminal.has(c.status));
