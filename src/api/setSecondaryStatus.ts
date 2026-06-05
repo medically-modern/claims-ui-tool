@@ -37,6 +37,26 @@ const MOVE_GROUP_MUT = `
   }
 `;
 
+/**
+ * Move a Secondary Claims Board item to a specific group, WITHOUT
+ * touching Secondary Status. Used after the auto-submit path where
+ * the backend already wrote Status=Submitted on Monday and we just
+ * need the visual group to follow.
+ *
+ * Failures are surfaced to the caller (unlike
+ * setSecondaryStatusAndMove which swallows them) so the caller can
+ * decide whether to retry or toast.
+ */
+export async function moveSecondaryToGroup(
+  mondayItemId: string,
+  groupId: string,
+): Promise<void> {
+  await mondayQuery(MOVE_GROUP_MUT, {
+    itemId: mondayItemId,
+    groupId,
+  });
+}
+
 export async function setSecondaryStatus(
   mondayItemId: string,
   label: string,

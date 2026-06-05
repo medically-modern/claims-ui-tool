@@ -26,6 +26,7 @@ import {
   fireSendInvoiceTrigger,
   fireSendFollowUpTrigger,
   setSecondaryPayer,
+  moveSecondaryToGroup,
   fireQuestionAnswered,
 } from "@/api/setSecondaryStatus";
 import {
@@ -953,6 +954,17 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
       const result = await apiSubmitSecondary(c.mondayItemId);
       // Backend already wrote Claim ID/PCN/Sent Date/Status to Monday on
       // success. Refetch picks those up — no need to mutate locally.
+      // BUT the backend doesn\'t move the Monday group, so the row visually
+      // sticks in Submit Claim. Move it to Insurance Outstanding here.
+      // Best-effort: a group-move failure doesn\'t un-submit the 837.
+      try {
+        await moveSecondaryToGroup(c.mondayItemId, "group_mm332zns");
+      } catch (moveErr) {
+        console.warn(
+          "[submitSecondary] move to Insurance Outstanding failed:",
+          moveErr,
+        );
+      }
       toast({
         title: `Secondary submitted: ${c.patientName}`,
         description:
