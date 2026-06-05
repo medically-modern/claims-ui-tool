@@ -163,8 +163,11 @@ function CheckpointCircle({
       >
         {inner}
       </span>
-      {check.overrideReason && (
-        <Unlock className="absolute -top-1 -right-1 h-3 w-3 text-slate-500 bg-white rounded-full" aria-label="override" />
+      {check.overrideReason && check.tone === "ok" && (
+        <Unlock
+          className="absolute -top-1.5 -right-1.5 h-3.5 w-3.5 text-emerald-700 bg-white rounded-full p-[1px] ring-1 ring-emerald-300"
+          aria-label="override"
+        />
       )}
       {check.changes && check.changes.length > 0 && (
         <Pencil
