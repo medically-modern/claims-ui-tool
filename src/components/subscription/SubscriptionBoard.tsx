@@ -16,7 +16,7 @@
 
 import { useMemo, useState } from "react";
 import {
-  ArrowRight, Building2, Check, ClipboardCheck, ExternalLink, Heart,
+  ArrowRight, Building2, Check, ClipboardCheck, ExternalLink, Heart, Pencil,
   RefreshCw, Search, Send, Server, Shield, UserCog, Unlock, UserCircle, X,
 } from "lucide-react";
 
@@ -81,17 +81,10 @@ function allChecksPass(p: SubscriptionPatient): boolean {
  * something different on their reorder form (new infusion set, address,
  * date, or insurance). Hover shows the list of changes.
  */
-function ChangesPill({ check }: { check: Checkpoint }) {
-  if (!check.changes || check.changes.length === 0) return null;
-  return (
-    <span
-      className="ml-2 inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-tight text-orange-700"
-      title={check.changes.join(" • ")}
-    >
-      Changes
-    </span>
-  );
-}
+// ChangesPill is replaced by the Pencil overlay on CheckpointCircle so
+// the circles stay centre-aligned across rows. Kept as a no-op for any
+// stale callers — safe to delete once the codebase has migrated.
+function ChangesPill(_props: { check: Checkpoint }) { return null; }
 
 /** Soft metadata pill (e.g. auth expiry date). Sits to the right of the circle. */
 function MetaPill({ check }: { check: Checkpoint }) {
@@ -155,7 +148,12 @@ function CheckpointCircle({
     <button
       type="button"
       onClick={onClick}
-      title={title ?? `${check.label}${check.detail ? " — " + check.detail : ""}`}
+      title={
+        title ?? [
+          `${check.label}${check.detail ? " — " + check.detail : ""}`,
+          check.changes?.length ? `Changes: ${check.changes.join(" • ")}` : null,
+        ].filter(Boolean).join("\n")
+      }
       className="relative inline-flex items-center justify-center"
       style={sizeStyle}
     >
@@ -167,6 +165,12 @@ function CheckpointCircle({
       </span>
       {check.overrideReason && (
         <Unlock className="absolute -top-1 -right-1 h-3 w-3 text-slate-500 bg-white rounded-full" aria-label="override" />
+      )}
+      {check.changes && check.changes.length > 0 && (
+        <Pencil
+          className="absolute -bottom-1 -right-1 h-3 w-3 text-orange-600 bg-white rounded-full p-[1px] ring-1 ring-orange-200"
+          aria-label="changes"
+        />
       )}
     </button>
   );
@@ -874,13 +878,11 @@ function OverviewTable({
             <CircleEditPopover check={p.confirmation} kind="confirmation" patient={p}>
               <CheckpointCircle check={p.confirmation} />
             </CircleEditPopover>
-            <ChangesPill check={p.confirmation} />
           </div>
           <div className="flex items-center justify-center">
             <CircleEditPopover check={p.benefits} kind="benefits" patient={p}>
               <CheckpointCircle check={p.benefits} />
             </CircleEditPopover>
-            <ChangesPill check={p.benefits} />
           </div>
           <div className="flex items-center justify-center">
             <CircleEditPopover check={p.auth} kind="auth" patient={p}>
@@ -945,7 +947,7 @@ function PhaseTable({
                 <CircleEditPopover check={c} kind={phase} patient={p}>
                   <CheckpointCircle check={c} />
                 </CircleEditPopover>
-                {phase === "auth" ? <MetaPill check={c} /> : <ChangesPill check={c} />}
+                {phase === "auth" && <MetaPill check={c} />}
               </div></TableCell>
               <TableCell><BlockedByPill value={p.blockedBy} /></TableCell>
               <TableCell><CheckInCell iso={p.nextCheckIn} stuckSince={p.stuckSince} /></TableCell>
