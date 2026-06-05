@@ -614,8 +614,8 @@ function PatientDrawer({
 
 // ─── Component ───────────────────────────────────────────────────────────────
 function OrderCycleWorkflow() {
-  type PrimaryTab = "overview" | "prep" | "order" | "financials";
-  const [primary, setPrimary] = useState<PrimaryTab>("overview");
+  type PrimaryTab = "prep" | "order" | "overview";
+  const [primary, setPrimary] = useState<PrimaryTab>("prep");
   type PrepPhase = CheckpointKind | "all";
   const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
   // `phase` is the derived view selection used by the rest of the component.
@@ -724,14 +724,10 @@ function OrderCycleWorkflow() {
 
   return (
     <div className="space-y-4">
-      {/* Primary nav: Overview | Order Prep | Order */}
+      {/* Primary nav: Order Prep | Order | Overview */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs value={primary} onValueChange={(v) => setPrimary(v as PrimaryTab)}>
           <TabsList className="bg-card border h-11 p-1">
-            <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
-              Overview
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.overview}</span>
-            </TabsTrigger>
             <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4">
               Order Prep
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.confirmation + counts.benefits + counts.auth + counts.lastPaid}</span>
@@ -740,8 +736,9 @@ function OrderCycleWorkflow() {
               Order
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.ready}</span>
             </TabsTrigger>
-            <TabsTrigger value="financials" className="text-[15px] font-semibold px-4">
-              Financials
+            <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
+              Overview
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.overview}</span>
             </TabsTrigger>
           </TabsList>
         </Tabs>
@@ -773,10 +770,7 @@ function OrderCycleWorkflow() {
         </Tabs>
       )}
 
-      {primary === "financials" ? (
-        <Financials />
-      ) : (
-        <>
+      <>
       {/* KPI grid */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {phaseKpis.map((k) => (<KpiTile key={k.label} {...k} />))}
@@ -834,7 +828,6 @@ function OrderCycleWorkflow() {
       </Card>
 
         </>
-      )}
       <PatientDrawer patient={activePatient} kind={activeKind} onClose={closeDrawer} />
     </div>
   );
