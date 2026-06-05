@@ -2172,7 +2172,14 @@ function SubmitSecondaryBody({
   const totalPrimaryPaid = sum((l) => l.primaryPaid);
   const totalCoins = sum((l) => l.coinsuranceCopay ?? 0);
   const totalDed = sum((l) => l.deductible ?? 0) + (c.claimLevelDeductible ?? 0);
-  const totalExpected = totalCoins + totalDed;
+  // Fallback: when neither coinsurance nor deductible is captured at
+  // the line level (common for Medicare crossover claims where the
+  // primary ERA didn't itemize PR-1/PR-2/PR-3 per subitem), use the
+  // parent claim's remaining balance. For Medicare -> Medicaid the
+  // remaining IS the patient responsibility the secondary covers.
+  const rawExpected = totalCoins + totalDed;
+  const totalExpected = rawExpected > 0 ? rawExpected : (c.remaining ?? 0);
+  const expectedIsFallback = rawExpected === 0 && (c.remaining ?? 0) > 0;
   const claimDed = c.claimLevelDeductible ?? 0;
 
   const handleSelect = (v: string) => {
@@ -2392,7 +2399,9 @@ function SubmitSecondaryBody({
             </div>
             <div className="mt-1 text-3xl font-semibold tabular-nums text-foreground">{$(totalExpected)}</div>
             <div className="mt-0.5 text-[11px] text-muted-foreground">
-              Sum of patient responsibility the primary left for {displaySecondary(c)}.
+              {expectedIsFallback
+                ? <>Remaining balance after primary paid — {displaySecondary(c)} typically covers this as patient responsibility. Line-level PR breakdown wasn't itemized from the primary ERA.</>
+                : <>Sum of patient responsibility the primary left for {displaySecondary(c)}.</>}
             </div>
           </div>
           <div className="grid grid-cols-2 divide-x rounded-md border bg-muted/30">
