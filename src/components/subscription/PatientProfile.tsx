@@ -63,13 +63,16 @@ type EditableProfile = {
   // Status & flags
   status: string; pauseReason: string; deadReason: string;
   // Clinical / MR
-  diagnosis: string; mnExpiry: string; mnDocsName: string;
+  diagnosis: string; mnExpiry: string;
   // Authorizations
   sensorsAuthStatus: string; sensorsAuthId: string;
   sensorsAuthStart: string; sensorsAuthEnd: string; sensorsAuthUnits: string;
-  suppliesAuthStatus: string; suppliesAuthId: string;
+  suppliesAuthStatus: string;
+  infusionAuthId: string; cartridgeAuthId: string;
   suppliesAuthStart: string; suppliesAuthEnd: string; suppliesAuthUnits: string;
-  priorAuthReq: string; triggerDvs: string;
+  priorAuthReqSensors: string; priorAuthReqSupplies: string;
+  triggerDvs: string;
+  mnDocs: { id: string; name: string; url: string; uploadedAt: string }[];
 };
 
 // ─── Mock data helpers (deterministic per-patient defaults) ──────────────────
@@ -145,7 +148,6 @@ function defaultsFromPatient(p: SubscriptionPatient): EditableProfile {
 
     diagnosis: "E11.65 — Type 2 diabetes with hyperglycemia",
     mnExpiry: "",
-    mnDocsName: "",
 
     sensorsAuthStatus: p.subscriptionType !== "Supplies" ? pick(AUTH_STATUSES, h) : "Not Checked",
     sensorsAuthId: "",
@@ -153,12 +155,25 @@ function defaultsFromPatient(p: SubscriptionPatient): EditableProfile {
     sensorsAuthEnd: "",
     sensorsAuthUnits: p.subscriptionType !== "Supplies" ? "3" : "",
     suppliesAuthStatus: p.subscriptionType !== "Sensors" ? pick(AUTH_STATUSES, h >> 2) : "Not Checked",
-    suppliesAuthId: "",
+    infusionAuthId: "",
+    cartridgeAuthId: "",
     suppliesAuthStart: "",
     suppliesAuthEnd: "",
     suppliesAuthUnits: p.subscriptionType !== "Sensors" ? "30" : "",
-    priorAuthReq: "Evaluate",
+    priorAuthReqSensors: "Evaluate",
+    priorAuthReqSupplies: "Evaluate",
     triggerDvs: p.primaryPayer.toLowerCase().includes("medicaid") && p.subscriptionType !== "Sensors" ? "Yes" : "No",
+    // Deterministic mock MN docs — 1-3 saved files per patient
+    mnDocs: (() => {
+      const n = (h % 3) + 1;
+      const titles = ["MN Letter 2026-05.pdf", "Office Visit Note 2026-04.pdf", "Prescription Refill 2026-03.pdf", "Labs A1C 2026-02.pdf"];
+      return Array.from({ length: n }).map((_, i) => ({
+        id: `doc-${p.id}-${i}`,
+        name: titles[(h + i) % titles.length],
+        url: "#",
+        uploadedAt: `2026-${String(((h + i) % 5) + 2).padStart(2, "0")}-${String(((h * 3 + i * 7) % 27) + 1).padStart(2, "0")}`,
+      }));
+    })(),
   };
 }
 
@@ -290,7 +305,13 @@ export function PatientProfile() {
           <FormSection title="Clinical / Medical Records" subtitle="Editable here; managed primarily in the Medical Records workflow">
             <Field label="Diagnosis" value={draft.diagnosis} onChange={(v) => update("diagnosis", v)} fullWidth />
             <Field label="MN Expiry" value={draft.mnExpiry} onChange={(v) => update("mnExpiry", v)} type="date" />
-            <FileField label="MN Docs" value={draft.mnDocsName} onChange={(v) => update("mnDocsName", v)} />
+            <div className="col-span-1" />
+            <FileList
+              label="MN Docs"
+              files={draft.mnDocs}
+              onRemove={(id) => update("mnDocs", draft.mnDocs.filter((f) => f.id !== id))}
+              onAdd={(name) => update("mnDocs", [...draft.mnDocs, { id: `doc-${Date.now()}`, name, url: "#", uploadedAt: new Date().toISOString().slice(0, 10) }])}
+            />
           </FormSection>
 
           <FormSection title="Authorizations" subtitle="Editable here; managed primarily in the Authorizations workflow" fullWidth>
@@ -298,18 +319,26 @@ export function PatientProfile() {
               <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-2">Sensors</div>
               <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-2">Supplies</div>
             </div>
-            <SelectField label="Auth status (Sensors)" value={draft.sensorsAuthStatus} onChange={(v) => update("sensorsAuthStatus", v)} options={AUTH_STATUSES} />
-            <SelectField label="Auth status (Supplies)" value={draft.suppliesAuthStatus} onChange={(v) => update("suppliesAuthStatus", v)} options={AUTH_STATUSES} />
-            <Field label="Auth ID (Sensors)" value={draft.sensorsAuthId} onChange={(v) => update("sensorsAuthId", v)} />
-            <Field label="Auth ID (Supplies)" value={draft.suppliesAuthId} onChange={(v) => update("suppliesAuthId", v)} />
-            <Field label="Auth start (Sensors)" value={draft.sensorsAuthStart} onChange={(v) => update("sensorsAuthStart", v)} type="date" />
-            <Field label="Auth start (Supplies)" value={draft.suppliesAuthStart} onChange={(v) => update("suppliesAuthStart", v)} type="date" />
-            <Field label="Auth end (Sensors)" value={draft.sensorsAuthEnd} onChange={(v) => update("sensorsAuthEnd", v)} type="date" />
-            <Field label="Auth end (Supplies)" value={draft.suppliesAuthEnd} onChange={(v) => update("suppliesAuthEnd", v)} type="date" />
-            <Field label="Units (Sensors)" value={draft.sensorsAuthUnits} onChange={(v) => update("sensorsAuthUnits", v)} type="number" />
-            <Field label="Units (Supplies)" value={draft.suppliesAuthUnits} onChange={(v) => update("suppliesAuthUnits", v)} type="number" />
-            <SelectField label="Prior Auth Req?" value={draft.priorAuthReq} onChange={(v) => update("priorAuthReq", v)} options={["Yes", "No", "Evaluate"]} />
-            <SelectField label="Trigger DVS" value={draft.triggerDvs} onChange={(v) => update("triggerDvs", v)} options={["Yes", "No"]} />
+            <SelectField label="Auth status" value={draft.sensorsAuthStatus} onChange={(v) => update("sensorsAuthStatus", v)} options={AUTH_STATUSES} />
+            <SelectField label="Auth status" value={draft.suppliesAuthStatus} onChange={(v) => update("suppliesAuthStatus", v)} options={AUTH_STATUSES} />
+            <Field label="Auth ID" value={draft.sensorsAuthId} onChange={(v) => update("sensorsAuthId", v)} />
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Inf. Set Auth ID" value={draft.infusionAuthId} onChange={(v) => update("infusionAuthId", v)} />
+              <Field label="Cartridge Auth ID" value={draft.cartridgeAuthId} onChange={(v) => update("cartridgeAuthId", v)} />
+            </div>
+            <Field label="Auth start" value={draft.sensorsAuthStart} onChange={(v) => update("sensorsAuthStart", v)} type="date" />
+            <Field label="Auth start" value={draft.suppliesAuthStart} onChange={(v) => update("suppliesAuthStart", v)} type="date" />
+            <Field label="Auth end" value={draft.sensorsAuthEnd} onChange={(v) => update("sensorsAuthEnd", v)} type="date" />
+            <Field label="Auth end" value={draft.suppliesAuthEnd} onChange={(v) => update("suppliesAuthEnd", v)} type="date" />
+            <Field label="Units" value={draft.sensorsAuthUnits} onChange={(v) => update("sensorsAuthUnits", v)} type="number" />
+            <Field label="Units" value={draft.suppliesAuthUnits} onChange={(v) => update("suppliesAuthUnits", v)} type="number" />
+            <SelectField label="Prior Auth Req?" value={draft.priorAuthReqSensors} onChange={(v) => update("priorAuthReqSensors", v)} options={["Yes", "No", "Evaluate"]} />
+            <SelectField label="Prior Auth Req?" value={draft.priorAuthReqSupplies} onChange={(v) => update("priorAuthReqSupplies", v)} options={["Yes", "No", "Evaluate"]} />
+            <div className="col-span-2 border-t pt-3 mt-1">
+              <div className="grid grid-cols-2 gap-3">
+                <SelectField label="Trigger DVS" value={draft.triggerDvs} onChange={(v) => update("triggerDvs", v)} options={["Yes", "No"]} />
+              </div>
+            </div>
           </FormSection>
 
           <ReadOnlyContextSection title="Eligibility / Coverage (read-only)" subtitle="Populated by Run Eligibility Check" entries={[
@@ -500,5 +529,42 @@ function ReadOnlyContextSection({ title, subtitle, entries }: {
         ))}
       </div>
     </Card>
+  );
+}
+
+function FileList({ label, files, onRemove, onAdd }: {
+  label: string;
+  files: { id: string; name: string; url: string; uploadedAt: string }[];
+  onRemove: (id: string) => void;
+  onAdd: (name: string) => void;
+}) {
+  return (
+    <div className="col-span-2">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <div className="mt-1 space-y-1.5">
+        {files.length === 0 && (
+          <div className="text-xs text-muted-foreground italic px-3 py-2">No files saved yet.</div>
+        )}
+        {files.map((f) => (
+          <div key={f.id} className="flex items-center gap-2 px-3 py-2 text-sm bg-muted/40 rounded-md">
+            <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+            <div className="flex-1 truncate">{f.name}</div>
+            <span className="text-[11px] text-muted-foreground tabular-nums">{f.uploadedAt}</span>
+            <Button variant="ghost" size="sm" className="h-7 px-2" asChild>
+              <a href={f.url} target="_blank" rel="noreferrer" onClick={(e) => { if (f.url === "#") e.preventDefault(); }}>View</a>
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 px-2" asChild>
+              <a href={f.url} download onClick={(e) => { if (f.url === "#") e.preventDefault(); }}>Download</a>
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => onRemove(f.id)}>
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        ))}
+        <Button variant="outline" size="sm" className="w-full" onClick={() => onAdd(`Upload ${new Date().toISOString().slice(0,10)}.pdf`)}>
+          <Upload className="mr-2 h-3.5 w-3.5" />Add file
+        </Button>
+      </div>
+    </div>
   );
 }
