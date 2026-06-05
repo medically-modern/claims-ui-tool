@@ -109,7 +109,7 @@ const SEND_INVOICE_TRIGGER_MUT = `
 `;
 
 /**
- * Fire the Send Invoice trigger by writing "Done" to color_mm3x6qe6.
+ * Fire the Send Invoice trigger by writing "Sent" to color_mm3x6qe6.
  * Drives the Monday automation that sends the patient an SMS with their
  * invoice link. Idempotent — flipping to Done when already Done is a
  * no-op on Monday's side.
@@ -120,6 +120,6 @@ export async function fireSendInvoiceTrigger(
   await mondayQuery(SEND_INVOICE_TRIGGER_MUT, {
     itemId: mondayItemId,
     boardId: String(SECONDARY_BOARD_ID),
-    value: JSON.stringify({ label: "Done" }),
+    value: JSON.stringify({ label: "Sent" }),
   });
 }

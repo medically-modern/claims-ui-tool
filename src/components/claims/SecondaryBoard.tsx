@@ -146,7 +146,7 @@ export interface SecClaim {
   payLinkUrl?: string;
   /**
    * True only when the operator explicitly clicked Send Invoice in
-   * our UI — fireSendInvoiceTrigger writes "Done" to color_mm3x6qe6,
+   * our UI — fireSendInvoiceTrigger writes "Sent" to color_mm3x6qe6,
    * which lights this flag at read time. Used by bucketOf to decide
    * Outstanding Invoices vs Submit > Patient: Josh's
    * coins-form-payment webhook prematurely sets Monday's Secondary
@@ -582,7 +582,7 @@ function bucketOf(c: SecClaim): AnyBucket | null {
   // Submit board anymore" actually work — pre-split, every patient row
   // sat in Submit > Patient regardless of stage.
   if (c.status === "Sent to Patient") {
-    // Use OUR Send Invoice trigger (color_mm3x6qe6 → "Done") as the
+    // Use OUR Send Invoice trigger (color_mm3x6qe6 → "Sent") as the
     // authoritative "operator actually sent the invoice" signal —
     // NOT Monday's Secondary Status. Josh's coins-form-payment
     // webhook prematurely writes Secondary Status = "Sent to Patient"
@@ -957,7 +957,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
     // group into Patient Responsibility Outstanding, status flips to
     // Outstanding so the two-stage body switches to the Mark Paid button.
     //
-    // ALSO fire the Send Invoice trigger column (color_mm3x6qe6 → "Done").
+    // ALSO fire the Send Invoice trigger column (color_mm3x6qe6 → "Sent").
     // A Monday automation listens for that flip and texts the patient the
     // invoice link. The trigger is decoupled from the status / group move
     // so the SMS still fires even if a future caller wants to flip Send
