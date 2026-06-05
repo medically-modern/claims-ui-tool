@@ -1136,17 +1136,28 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
    */
   async function markPatientPaid(c: SecClaim) {
     if (!c.mondayItemId) return;
-    // Patient flow stage 2 — patient paid. Move to Paid And Closed.
-    updateClaim(c.id, { status: "Patient Paid" });
+    // Patient flow Mark Paid — the verify step inside Invoice Review (or
+    // direct payment confirmation from Outstanding Invoices). We flip
+    // Monday's Secondary Status to 'Paid' (the terminal label) so
+    // bucketOf routes to the Paid bucket instead of looping back to
+    // invoiceReview, and move the row visually to Paid And Closed.
+    //
+    // Note: this does NOT call the backend Mark Posted endpoint, so the
+    // Subscription Board 'Secondary Claim Paid?' write doesn't fire —
+    // patient-side payment is recorded as terminal Paid on the Secondary
+    // Board only. ERA-driven mark-paid is the path that propagates.
+    updateClaim(c.id, { status: "Secondary Paid" });
     try {
       await setSecondaryStatusAndMove(
         c.mondayItemId,
-        "Patient Paid",
+        "Paid",
         "group_mkxsng4r",  // Paid And Closed
       );
-      toast({ title: `Marked paid: ${c.patientName}` });
+      toast({ title: `Marked paid: ${c.patientName}`, description: "Row moved to Paid." });
       void refetchSecondary();
     } catch (e) {
+      // Roll back optimistic flip so the operator can retry
+      updateClaim(c.id, { status: "Patient Paid" });
       toast({ title: "Couldn't update Monday", description: (e as Error).message });
     }
   }
@@ -1385,7 +1396,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
               onSubmitSecondary={(manual) => submitSecondary(c, manual)}
               onGenerateStatement={() => sendInvoice(c)}
               onSendFollowUp={() => sendFollowUp(c)}
-              onMarkPatientPaid={() => void markPatientPaid(c)}
+              onMarkPatientPaid={() => markPatientPaid(c)}
               onMarkPosted={() => markPosted(c)}
               onConfirmPayor={(dest) => void confirmPayor(c, dest)}
             />
@@ -1412,7 +1423,7 @@ function SecondaryRow({
   onSubmitSecondary: (manual?: boolean) => void;
   onGenerateStatement: () => Promise<void> | void;
   onSendFollowUp: () => Promise<void>;
-  onMarkPatientPaid: () => void;
+  onMarkPatientPaid: () => Promise<void> | void;
   onMarkPosted: () => void;
   onConfirmPayor: (dest: "Insurance" | "Patient" | "Waived") => void;
 }) {
@@ -2572,7 +2583,7 @@ function SendToPatientBody({
   onUpdate: (p: Partial<SecClaim>) => void;
   onGenerate: () => void;
   onSendFollowUp: () => Promise<void>;
-  onMarkPaid: () => void;
+  onMarkPaid: () => Promise<void> | void;
   bucket: AnyBucket | null;
 }) {
   const allowed = c.primaryPaid + c.remaining;
@@ -2730,13 +2741,7 @@ function SendToPatientBody({
              *     Mark Paid normally
              */}
             {(c.status !== "Sent to Patient" || c.smsStatus === "Delivered") && (
-              <Button
-                size="sm"
-                onClick={onMarkPaid}
-                className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
-              >
-                <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
-              </Button>
+              <MarkPaidButton onClick={async () => { await onMarkPaid(); }} />
             )}
             {c.status === "Sent to Patient" && c.smsStatus !== "Delivered" && (
               <span
@@ -3381,6 +3386,46 @@ function SendInvoiceButton({ onClick }: { onClick: () => Promise<void> }) {
         <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Sending…</>
       ) : (
         <><FileText className="mr-1 h-3.5 w-3.5" /> Send Invoice</>
+      )}
+    </Button>
+  );
+}
+
+// MarkPaidButton — local loading state (Marking… / Marked ✓) so the
+// operator sees the click register while Monday writes round-trip,
+// plus a brief success flash before the row drops out of the bucket.
+function MarkPaidButton({ onClick }: { onClick: () => Promise<void> }) {
+  const [state, setState] = useState<"idle" | "marking" | "marked">("idle");
+  async function handleClick() {
+    if (state !== "idle") return;
+    setState("marking");
+    try {
+      await onClick();
+      setState("marked");
+      // Stay in marked state — by the time the refetch lands the row
+      // will have left the bucket entirely so this component unmounts.
+    } catch {
+      setState("idle");
+    }
+  }
+  return (
+    <Button
+      size="sm"
+      onClick={handleClick}
+      disabled={state !== "idle"}
+      className={cn(
+        "h-8 transition-colors",
+        state === "marked"
+          ? "bg-emerald-600 text-white hover:bg-emerald-600"
+          : "bg-emerald-700 text-white hover:bg-emerald-800",
+      )}
+    >
+      {state === "marking" ? (
+        <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Marking…</>
+      ) : state === "marked" ? (
+        <><CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Marked Paid</>
+      ) : (
+        <><CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid</>
       )}
     </Button>
   );
