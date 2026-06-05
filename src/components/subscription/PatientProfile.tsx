@@ -79,6 +79,20 @@ function hash(s: string): number {
 }
 function pick<T>(arr: readonly T[], h: number): T { return arr[h % arr.length]; }
 
+/** Format an ISO YYYY-MM-DD into MM/DD/YYYY. Returns empty if invalid. */
+function fmtDobUS(iso: string): string {
+  if (!iso) return "";
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return iso;
+  return `${m[2]}/${m[3]}/${m[1]}`;
+}
+
+const SUB_TYPE_PILLS: Record<string, string> = {
+  "Sensors":            "inline-flex items-center whitespace-nowrap rounded-full bg-sky-100 px-3 py-1 text-[12px] font-semibold text-sky-700",
+  "Supplies":           "inline-flex items-center whitespace-nowrap rounded-full bg-violet-100 px-3 py-1 text-[12px] font-semibold text-violet-700",
+  "Sensors & Supplies": "inline-flex items-center whitespace-nowrap rounded-full bg-orange-100 px-3 py-1 text-[12px] font-semibold text-orange-700",
+};
+
 const SENSORS_TYPES   = ["Dexcom G7", "Dexcom G6", "FreeStyle Libre 3", "FreeStyle Libre 2"];
 const SUPPLIES_TYPES  = ["Tandem t:slim X2", "Omnipod 5", "Medtronic 780G", "Tandem Mobi"];
 const INFUSION_SETS   = ["AutoSoft 90 9 mm 23\"", "TruSteel 6 mm 23\"", "VariSoft 6 mm 23\"", "Contact Detach 8 mm 23\""];
@@ -360,7 +374,8 @@ export function PatientProfile() {
           <TableBody>
             {filtered.map((p) => {
               const h = hash(p.id);
-              const dob = `${1955 + (h % 35)}-${String((h % 12) + 1).padStart(2, "0")}-${String((h % 28) + 1).padStart(2, "0")}`;
+              const dobIso = `${1955 + (h % 35)}-${String((h % 12) + 1).padStart(2, "0")}-${String((h % 28) + 1).padStart(2, "0")}`;
+              const dob = fmtDobUS(dobIso);
               const doctor = `Dr. ${pick(DOCTORS, h)}`;
               return (
                 <TableRow key={p.id} className="cursor-pointer hover:bg-muted/40" onClick={() => openPatient(p)}>
@@ -368,7 +383,7 @@ export function PatientProfile() {
                   <TableCell className="text-muted-foreground tabular-nums text-xs">{p.phone}</TableCell>
                   <TableCell className="tabular-nums text-xs">{dob}</TableCell>
                   <TableCell>{p.primaryPayer}</TableCell>
-                  <TableCell><Badge variant="outline">{p.subscriptionType}</Badge></TableCell>
+                  <TableCell><span className={SUB_TYPE_PILLS[p.subscriptionType] ?? SUB_TYPE_PILLS["Sensors"]}>{p.subscriptionType}</span></TableCell>
                   <TableCell className="tabular-nums">{p.nextOrderDate}</TableCell>
                   <TableCell>
                     <Badge variant="outline" className={
