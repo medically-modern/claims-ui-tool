@@ -337,8 +337,22 @@ function deriveStatus(
       return "Patient Paid";
     case "Bad Debt":
       return "Bad Debt";
+    case "Review":
+      // Josh's coins-form-payment webhook flips Secondary Status to
+      // 'Review' when the patient pays the invoice — same operator-
+      // verification step as 'Patient Paid'. Without this branch
+      // Review-status rows fell into the default-case below and got
+      // routed back to 'Sent to Patient' / Outstanding Invoices,
+      // which is where they sat before payment.
+      //
+      // Non-Patient submission types shouldn't normally hit Review
+      // on Monday (Insurance/Forwarded go Submitted -> Paid), but if
+      // they do we fall through to the type-based default below.
+      if (submissionType === "Patient") return "Patient Paid";
+      // intentional fallthrough
+      break;
     default:
-      // status is "Submit", "Outstanding", "Late", "Review" — route
+      // status is "Submit", "Outstanding", "Late" — route
       // by Submission Type. Insurance + Patient types spawn at "Submit"
       // because they need operator review before any action; Forwarded
       // never lands here anymore (the case above catches it first).
