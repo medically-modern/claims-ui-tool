@@ -2184,14 +2184,16 @@ function SubmitSecondaryBody({
   const totalPrimaryPaid = sum((l) => l.primaryPaid);
   const totalCoins = sum((l) => l.coinsuranceCopay ?? 0);
   const totalDed = sum((l) => l.deductible ?? 0) + (c.claimLevelDeductible ?? 0);
-  // Fallback: when neither coinsurance nor deductible is captured at
-  // the line level (common for Medicare crossover claims where the
-  // primary ERA didn't itemize PR-1/PR-2/PR-3 per subitem), use the
-  // parent claim's remaining balance. For Medicare -> Medicaid the
-  // remaining IS the patient responsibility the secondary covers.
-  const rawExpected = totalCoins + totalDed;
-  const totalExpected = rawExpected > 0 ? rawExpected : (c.remaining ?? 0);
-  const expectedIsFallback = rawExpected === 0 && (c.remaining ?? 0) > 0;
+  // Always read the parent's Primary PR Amount (numeric_mm3ak2za)
+  // as the authoritative total — c.remaining already wraps it with a
+  // line-level-sum fallback in allSecondaryClaims.ts. The line-level
+  // sum (totalCoins + totalDed) can under-count when the primary ERA
+  // applied claim-level CAS adjustments (e.g. Medicare global
+  // deductible at CLP loop) that never made it to per-subitem
+  // Parsed Coinsurance / Deductible columns.
+  const lineSum = totalCoins + totalDed;
+  const totalExpected = c.remaining ?? 0;
+  const expectedIsFallback = totalExpected > lineSum && lineSum === 0;
   const claimDed = c.claimLevelDeductible ?? 0;
 
   const handleSelect = (v: string) => {
