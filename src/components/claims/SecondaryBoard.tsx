@@ -2679,23 +2679,25 @@ function SendToPatientBody({
         </Button>
 
         {(c.rawSecondaryStatus ?? "Submit") === "Submit" ? (
-          // Stage 1 — invoice not yet sent. Send Invoice flips
-          // Secondary Status to Outstanding AND fires the SMS
-          // automation trigger column (color_mm3x6qe6 → Done).
-          <Button
-            size="sm"
-            onClick={onGenerate}
-            className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
-          >
-            <FileText className="mr-1 h-3.5 w-3.5" /> Send Invoice
-          </Button>
+          // Stage 1 — invoice not yet sent. Send Invoice flips Secondary
+          // Status to Outstanding AND fires the SMS trigger column. The
+          // button manages its own loading state (spinner + Sending…)
+          // until the Monday writes round-trip so the operator gets
+          // immediate feedback. Once the parent flips
+          // rawSecondaryStatus to Outstanding the row transitions to
+          // Stage 2 and the SmsStatusBadge takes over the visual story.
+          <SendInvoiceButton onClick={async () => { await onGenerate(); }} />
         ) : (
-          // Stage 2 — invoice sent, awaiting payment.
-          // Send Follow-Up only in Outstanding Invoices (the operator
-          // shouldn't be sending a follow-up SMS to a row that's
-          // already in Invoice Review with the patient having declared
-          // paid). Clears color_mm3x6qe6 then writes "Follow-up" so
-          // Monday fires a fresh automation event with different copy.
+          // Stage 2 — invoice sent, awaiting SMS delivery + payment.
+          // Mark Paid is gated on smsStatus on Outstanding Invoices:
+          //   Queued / Sent   → SmsStatusBadge + Send Follow-Up only
+          //   Delivered       → badge + Send Follow-Up + Mark Paid
+          //   Failed          → red badge + Send Follow-Up only
+          //   undefined       → legacy fallback (Mark Paid visible
+          //                     for rows that predate the SMS Status
+          //                     column on Monday)
+          // Outside Outstanding Invoices (e.g. Invoice Review) Mark
+          // Paid renders normally regardless of smsStatus.
           <>
             {bucket === "outstandingInvoices" && c.smsStatus && (
               <SmsStatusBadge status={c.smsStatus} />
@@ -2703,13 +2705,17 @@ function SendToPatientBody({
             {bucket === "outstandingInvoices" && (
               <SendFollowUpButton onClick={onSendFollowUp} disabled={!c.mondayItemId} />
             )}
-            <Button
-              size="sm"
-              onClick={onMarkPaid}
-              className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
-            >
-              <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
-            </Button>
+            {(bucket !== "outstandingInvoices"
+              || c.smsStatus === "Delivered"
+              || c.smsStatus === undefined) && (
+              <Button
+                size="sm"
+                onClick={onMarkPaid}
+                className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
+              >
+                <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
+              </Button>
+            )}
           </>
         )}
       </div>
@@ -3319,5 +3325,31 @@ function SmsStatusBadge({ status }: { status: string }) {
     >
       {c.icon} {c.label}
     </span>
+  );
+}
+
+// SendInvoiceButton — local loading state so the operator sees the
+// click register and doesn't double-fire while the Monday writes
+// (Secondary Status + group move + SMS trigger column) round-trip.
+function SendInvoiceButton({ onClick }: { onClick: () => Promise<void> }) {
+  const [sending, setSending] = useState(false);
+  async function handleClick() {
+    if (sending) return;
+    setSending(true);
+    try { await onClick(); } finally { setSending(false); }
+  }
+  return (
+    <Button
+      size="sm"
+      onClick={handleClick}
+      disabled={sending}
+      className="h-8 bg-emerald-700 text-white hover:bg-emerald-800 transition-colors"
+    >
+      {sending ? (
+        <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Sending…</>
+      ) : (
+        <><FileText className="mr-1 h-3.5 w-3.5" /> Send Invoice</>
+      )}
+    </Button>
   );
 }
