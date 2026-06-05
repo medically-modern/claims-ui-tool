@@ -234,7 +234,32 @@ export interface SecClaim {
   lines: SecLine[];
 }
 
-const SECONDARY_PAYER_OPTIONS = ["NY Medicaid", "AARP Supplement", "BCBS Supplement", "Tricare", "None"];
+// Mirrors the labels configured on Monday's Secondary Payor column
+// (color_mkxq1a2p). Keep in sync — labels we surface here that don't
+// exist on Monday end up auto-created (if create_labels_if_missing
+// is on) or silently no-op'd.
+const SECONDARY_PAYER_OPTIONS = [
+  "Second to Secondary",
+  "Patient",
+  "NY Medicaid",
+  "Medicare Suppl.",
+  "Bad Debt",
+  "No Patient Responsibility",
+  "Horizon BCBS NJ",
+  "Cigna",
+  "Molina",
+  "Emblem Health",
+  "None",
+];
+
+// Auto-fill PR Payor ID (Stedi trading partner) when a Secondary Payor
+// with a known ID is selected. Operators can still override the field
+// manually. Only includes payors we have confirmed Stedi IDs for —
+// others leave the field blank for the operator to fill in.
+const SECONDARY_PAYER_TO_STEDI_ID: Record<string, string> = {
+  "NY Medicaid":   "MCDNY",
+  "Emblem Health": "ZTXQE",
+};
 const OTHER_PAYER = "Other";
 const DIAGNOSIS_OPTIONS = ["E10.65", "E11.9", "E10.9", "E11.65"];
 
@@ -2151,11 +2176,14 @@ function SubmitSecondaryBody({
   const claimDed = c.claimLevelDeductible ?? 0;
 
   const handleSelect = (v: string) => {
-    // Local update first so the UI flips immediately. Fire-and-forget
-    // the Monday write — failures get a toast but the local state stays
-    // so the operator isn\'t blocked. Refetch will overwrite either way.
+    // Auto-fill PR Payor ID when the new Secondary Payor has a known
+    // Stedi trading partner (e.g. NY Medicaid -> MCDNY). Skipped for
+    // "Other" and for payors not in the map.
+    const autoStediId = SECONDARY_PAYER_TO_STEDI_ID[v];
     if (v === OTHER_PAYER) {
       onUpdate({ secondaryPayer: OTHER_PAYER });
+    } else if (autoStediId) {
+      onUpdate({ secondaryPayer: v, secondaryPayerOther: null, payorId: autoStediId });
     } else {
       onUpdate({ secondaryPayer: v, secondaryPayerOther: null });
     }
@@ -2171,6 +2199,16 @@ function SubmitSecondaryBody({
           duration: 8_000,
         });
       });
+      if (autoStediId) {
+        setSecondaryText(c.mondayItemId, SECONDARY_PARENT_COL.payor_id, autoStediId)
+          .catch((e) => {
+            toast({
+              title: `Couldn\'t auto-save PR Payor ID: ${c.patientName}`,
+              description: (e as Error).message,
+              duration: 8_000,
+            });
+          });
+      }
     }
   };
 
