@@ -2705,9 +2705,7 @@ function SendToPatientBody({
             {bucket === "outstandingInvoices" && (
               <SendFollowUpButton onClick={onSendFollowUp} disabled={!c.mondayItemId} />
             )}
-            {(bucket !== "outstandingInvoices"
-              || c.smsStatus === "Delivered"
-              || c.smsStatus === undefined) && (
+            {(bucket !== "outstandingInvoices" || c.smsStatus === "Delivered") && (
               <Button
                 size="sm"
                 onClick={onMarkPaid}
@@ -2715,6 +2713,14 @@ function SendToPatientBody({
               >
                 <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
               </Button>
+            )}
+            {bucket === "outstandingInvoices" && !c.smsStatus && (
+              <span
+                title="Waiting for the Twilio -> Monday SMS Status webhook. Mark Paid unlocks once the column reads Delivered."
+                className="inline-flex h-8 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 text-[11px] font-semibold text-amber-700"
+              >
+                <Loader2 className="h-3 w-3 animate-spin" /> Waiting on SMS status
+              </span>
             )}
           </>
         )}
