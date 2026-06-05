@@ -1027,9 +1027,18 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
     // we await it separately and surface a distinct error if it fails —
     // the status write is the authoritative "we billed them" record; the
     // trigger is the side-effect.
+    // Clear stale smsStatus immediately so the Stage 2 transition
+    // doesn't show Mark Paid based on a prior 'Delivered' label from
+    // an earlier send. Re-send overwrites Monday's column to '{}',
+    // then the Twilio -> Monday automation re-stamps Queued -> Sent
+    // -> Delivered as the new SMS goes out.
     updateClaim(c.id, {
       status: "Sent to Patient",
       rawSecondaryStatus: "Outstanding",
+      smsStatus: undefined,
+    });
+    void clearSmsStatus(c.mondayItemId).catch((e) => {
+      console.warn("[sendInvoice] clearSmsStatus failed (non-fatal):", e);
     });
     try {
       await setSecondaryStatusAndMove(

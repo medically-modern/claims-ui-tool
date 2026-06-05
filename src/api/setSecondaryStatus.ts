@@ -117,6 +117,29 @@ export async function setSecondaryStatusAndMove(
 // bulk-send tool that just stamps Send Invoice across many rows).
 const SEND_INVOICE_TRIGGER_COL = "color_mm3x6qe6";
 
+// SMS Status — color_mm41nfw4. Cleared when Send Invoice fires so
+// stale Delivered/Failed labels from prior automation runs don't
+// gate Mark Paid prematurely.
+const SMS_STATUS_COL = "color_mm41nfw4";
+
+const SMS_STATUS_CLEAR_MUT = `
+  mutation ClearSmsStatus($itemId: ID!, $boardId: ID!) {
+    change_column_value(
+      item_id: $itemId,
+      board_id: $boardId,
+      column_id: "${SMS_STATUS_COL}",
+      value: "{}"
+    ) { id }
+  }
+`;
+
+export async function clearSmsStatus(mondayItemId: string): Promise<void> {
+  await mondayQuery(SMS_STATUS_CLEAR_MUT, {
+    itemId: mondayItemId,
+    boardId: String(SECONDARY_BOARD_ID),
+  });
+}
+
 // Secondary Payor — color_mkxq1a2p. Status column with labels like
 // "NY Medicaid", "Medicaid", "AARP Supplement", etc. Edited from the
 // Secondary Payor dropdown on the Submit Insurance row body. Without
