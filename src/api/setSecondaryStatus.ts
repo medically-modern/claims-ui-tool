@@ -123,3 +123,35 @@ export async function fireSendInvoiceTrigger(
     value: JSON.stringify({ label: "Sent" }),
   });
 }
+
+/**
+ * Fire the Send Follow-Up trigger by clearing color_mm3x6qe6 then
+ * writing "Follow-up". The clear-then-set sequence guarantees Monday
+ * fires a fresh "changed to Follow-up" event even if the column was
+ * already set to a non-blank label from a prior Send Invoice / Send
+ * Follow-Up. Drives a Monday automation that texts the patient the
+ * follow-up SMS (different copy than the initial Send Invoice text).
+ *
+ * Errors on the clear step are swallowed (best-effort) — if Monday
+ * can't clear (e.g. column already empty), the follow-up label write
+ * still runs and the automation still fires. Errors on the Follow-up
+ * write propagate.
+ */
+export async function fireSendFollowUpTrigger(
+  mondayItemId: string,
+): Promise<void> {
+  try {
+    await mondayQuery(SEND_INVOICE_TRIGGER_MUT, {
+      itemId: mondayItemId,
+      boardId: String(SECONDARY_BOARD_ID),
+      value: JSON.stringify({}),
+    });
+  } catch {
+    // Best-effort clear — fall through to the Follow-up write either way.
+  }
+  await mondayQuery(SEND_INVOICE_TRIGGER_MUT, {
+    itemId: mondayItemId,
+    boardId: String(SECONDARY_BOARD_ID),
+    value: JSON.stringify({ label: "Follow-up" }),
+  });
+}

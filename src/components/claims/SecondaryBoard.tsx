@@ -24,6 +24,7 @@ import {
   setSecondaryStatus,
   setSecondaryStatusAndMove,
   fireSendInvoiceTrigger,
+  fireSendFollowUpTrigger,
 } from "@/api/setSecondaryStatus";
 import {
   markSecondaryPaid as apiMarkSecondaryPaid,
@@ -1003,6 +1004,31 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
   }
 
   /**
+   * Outstanding Invoices — Send Follow-Up. Fires a second SMS using
+   * the "Follow-up" label on the Send Invoice trigger column. Clears
+   * the column first so Monday fires a fresh state-change event even
+   * when the column was already "Sent". Does NOT touch Secondary
+   * Status or the group — the row stays in Outstanding Invoices.
+   */
+  async function sendFollowUp(c: SecClaim) {
+    if (!c.mondayItemId) return;
+    try {
+      await fireSendFollowUpTrigger(c.mondayItemId);
+      toast({
+        title: `Follow-up sent: ${c.patientName}`,
+        description: `SMS follow-up automation fired on Monday.`,
+      });
+    } catch (e) {
+      toast({
+        title: `Follow-up failed: ${c.patientName}`,
+        description: `Couldn't fire the Follow-up trigger column. Reason: ${(e as Error).message}`,
+        duration: 12_000,
+      });
+    }
+    void refetchSecondary();
+  }
+
+  /**
    * Patient bucket — stage 2: Mark as Paid. Patient has paid; flip the
    * secondary's Monday status to Patient Paid. Doesn't fire the
    * Subscription Board "Secondary Claim Paid? = Fully Paid" write —
@@ -1260,6 +1286,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
               onUpdate={(patch) => updateClaim(c.id, patch)}
               onSubmitSecondary={(manual) => submitSecondary(c, manual)}
               onGenerateStatement={() => void sendInvoice(c)}
+              onSendFollowUp={() => void sendFollowUp(c)}
               onMarkPatientPaid={() => void markPatientPaid(c)}
               onMarkPosted={() => markPosted(c)}
               onConfirmPayor={(dest) => void confirmPayor(c, dest)}
@@ -1277,7 +1304,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
 
 function SecondaryRow({
   c, expanded, onToggle, onUpdate,
-  onSubmitSecondary, onGenerateStatement, onMarkPatientPaid, onMarkPosted,
+  onSubmitSecondary, onGenerateStatement, onSendFollowUp, onMarkPatientPaid, onMarkPosted,
   onConfirmPayor,
 }: {
   c: SecClaim;
@@ -1286,6 +1313,7 @@ function SecondaryRow({
   onUpdate: (p: Partial<SecClaim>) => void;
   onSubmitSecondary: (manual?: boolean) => void;
   onGenerateStatement: () => void;
+  onSendFollowUp: () => void;
   onMarkPatientPaid: () => void;
   onMarkPosted: () => void;
   onConfirmPayor: (dest: "Insurance" | "Patient" | "Waived") => void;
@@ -1376,7 +1404,9 @@ function SecondaryRow({
               c={c}
               onUpdate={onUpdate}
               onGenerate={onGenerateStatement}
+              onSendFollowUp={onSendFollowUp}
               onMarkPaid={onMarkPatientPaid}
+              bucket={b}
             />
           )}
           {b === "awaiting" && (
@@ -2398,12 +2428,14 @@ function SectionDivider({ label }: { label: string }) {
 const PR_REASONS: PrReason[] = ["Deductible", "Coinsurance", "Copay", "Non-covered service", "Bad debt (write off)"];
 
 function SendToPatientBody({
-  c, onGenerate, onMarkPaid,
+  c, onGenerate, onSendFollowUp, onMarkPaid, bucket,
 }: {
   c: SecClaim;
   onUpdate: (p: Partial<SecClaim>) => void;
   onGenerate: () => void;
+  onSendFollowUp: () => void;
   onMarkPaid: () => void;
+  bucket: AnyBucket | null;
 }) {
   const allowed = c.primaryPaid + c.remaining;
   const insurancePaid = c.primaryPaid;
@@ -2530,14 +2562,35 @@ function SendToPatientBody({
             <FileText className="mr-1 h-3.5 w-3.5" /> Send Invoice
           </Button>
         ) : (
-          // Stage 2 — patient paid? mark it.
-          <Button
-            size="sm"
-            onClick={onMarkPaid}
-            className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
-          >
-            <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
-          </Button>
+          // Stage 2 — invoice sent, awaiting payment.
+          // Send Follow-Up only in Outstanding Invoices (the operator
+          // shouldn't be sending a follow-up SMS to a row that's
+          // already in Invoice Review with the patient having declared
+          // paid). Clears color_mm3x6qe6 then writes "Follow-up" so
+          // Monday fires a fresh automation event with different copy.
+          <>
+            {bucket === "outstandingInvoices" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onSendFollowUp}
+                disabled={!c.mondayItemId}
+                title={c.mondayItemId
+                  ? "Resend the invoice SMS with follow-up copy (clears + sets Send Invoice → Follow-up)"
+                  : "No Monday item id on this row — can\'t fire the follow-up."}
+                className="h-8"
+              >
+                <Send className="mr-1 h-3.5 w-3.5" /> Send Follow-Up
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={onMarkPaid}
+              className="h-8 bg-emerald-700 text-white hover:bg-emerald-800"
+            >
+              <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
+            </Button>
+          </>
         )}
       </div>
     </div>
