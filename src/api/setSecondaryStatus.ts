@@ -97,6 +97,38 @@ export async function setSecondaryStatusAndMove(
 // bulk-send tool that just stamps Send Invoice across many rows).
 const SEND_INVOICE_TRIGGER_COL = "color_mm3x6qe6";
 
+// Patient Question Answered — color_mm41rxvr. Set to "Answered" when
+// the operator clicks Mark Answered on a Patient Questions row. Read by
+// allSecondaryClaims so the bucket filter can hide answered questions
+// without erasing the question text.
+const PATIENT_QUESTION_ANSWERED_COL = "color_mm41rxvr";
+
+const PATIENT_QUESTION_ANSWERED_MUT = `
+  mutation MarkQuestionAnswered($itemId: ID!, $boardId: ID!, $value: JSON!) {
+    change_column_value(
+      item_id: $itemId,
+      board_id: $boardId,
+      column_id: "${PATIENT_QUESTION_ANSWERED_COL}",
+      value: $value
+    ) { id }
+  }
+`;
+
+/**
+ * Mark the patient's question answered. Writes "Answered" to
+ * color_mm41rxvr; on the next refetch the row drops out of the
+ * Patient Questions bucket while its question text stays on the row.
+ */
+export async function fireQuestionAnswered(
+  mondayItemId: string,
+): Promise<void> {
+  await mondayQuery(PATIENT_QUESTION_ANSWERED_MUT, {
+    itemId: mondayItemId,
+    boardId: String(SECONDARY_BOARD_ID),
+    value: JSON.stringify({ label: "Answered" }),
+  });
+}
+
 // Latest Follow-up date — stamped to today each time Send Follow-Up
 // fires. Separate from the original Send Invoice date (date_mm3q88et)
 // so the first-sent timestamp is preserved while the follow-up cadence

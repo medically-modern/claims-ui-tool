@@ -135,6 +135,11 @@ const COL = {
   // bucket on the Review tab so ops can text/call back without scanning
   // every Outstanding row's notes.
   PATIENT_QUESTION: "long_text_mm3yqgyt",
+  // Patient question answered status — color_mm41rxvr ("Answered" label).
+  // Set by the Mark Answered button. When this is "Answered", the row
+  // drops out of the Patient Questions bucket but its question text
+  // stays on the row for future reference.
+  PATIENT_QUESTION_ANSWERED: "color_mm41rxvr",
 } as const;
 
 // ---------- subitem column ids (secondary subitem board) ----------
@@ -564,6 +569,8 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
       return v === "Sent" || v === "Follow-up";
     })(),
     patientQuestion: txt(item, COL.PATIENT_QUESTION).trim() || undefined,
+    patientQuestionAnswered:
+      txt(item, COL.PATIENT_QUESTION_ANSWERED).trim() === "Answered",
     secondaryAdj: hasSecondaryEra
       ? Math.max(remaining - secondaryPaidAmount, 0)
       : undefined,

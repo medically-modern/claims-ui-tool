@@ -25,6 +25,7 @@ import {
   setSecondaryStatusAndMove,
   fireSendInvoiceTrigger,
   fireSendFollowUpTrigger,
+  fireQuestionAnswered,
 } from "@/api/setSecondaryStatus";
 import {
   markSecondaryPaid as apiMarkSecondaryPaid,
@@ -161,6 +162,11 @@ export interface SecClaim {
    * bucket so ops can text/call them back.
    */
   patientQuestion?: string;
+  /** True once the Mark Answered button has been clicked
+   *  (color_mm41rxvr === "Answered" on Monday). Used by the Patient
+   *  Questions bucket filter to hide already-answered questions while
+   *  preserving the question text on the row. */
+  patientQuestionAnswered?: boolean;
   patientName: string;
   primaryPayor: string;
   secondaryPayer: string | null;     // null = patient bucket with no secondary; "Other" = custom
@@ -778,7 +784,9 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
       if (b) out[b] += 1;
       // patientQuestions is additive — count any claim with a non-empty
       // patient question regardless of its routing bucket
-      if (c.patientQuestion && c.patientQuestion.trim()) out.patientQuestions += 1;
+      if (c.patientQuestion && c.patientQuestion.trim() && !c.patientQuestionAnswered) {
+        out.patientQuestions += 1;
+      }
     }
     return out;
   }, [claims]);
@@ -811,7 +819,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
   const visible = useMemo(() => {
     return claims
       .filter((c) => bucket === "patientQuestions"
-        ? !!(c.patientQuestion && c.patientQuestion.trim())
+        ? !!(c.patientQuestion && c.patientQuestion.trim() && !c.patientQuestionAnswered)
         : bucketOf(c) === bucket)
       .filter((c) => payerFilter === "all" || c.primaryPayor === payerFilter || c.secondaryPayer === payerFilter)
       .filter((c) => {
@@ -1010,6 +1018,29 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
    * when the column was already "Sent". Does NOT touch Secondary
    * Status or the group — the row stays in Outstanding Invoices.
    */
+  async function markQuestionAnswered(c: SecClaim) {
+    if (!c.mondayItemId) return;
+    // Optimistic local update so the row vanishes from the bucket
+    // immediately; refetch reconciles state from Monday's truth.
+    updateClaim(c.id, { patientQuestionAnswered: true });
+    try {
+      await fireQuestionAnswered(c.mondayItemId);
+      toast({
+        title: `Marked answered: ${c.patientName}`,
+        description: `Question on Monday flagged as Answered. Question text stays on the row.`,
+      });
+    } catch (e) {
+      // Roll back optimistic flip so the operator can retry
+      updateClaim(c.id, { patientQuestionAnswered: false });
+      toast({
+        title: `Mark answered failed: ${c.patientName}`,
+        description: (e as Error).message,
+        duration: 8_000,
+      });
+    }
+    void refetchSecondary();
+  }
+
   async function sendFollowUp(c: SecClaim) {
     if (!c.mondayItemId) return;
     try {
@@ -1254,7 +1285,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
             <p className="text-sm text-muted-foreground">All caught up.</p>
           </Card>
         ) : bucket === "patientQuestions" ? (
-          <PatientQuestionsList rows={visible} />
+          <PatientQuestionsList rows={visible} onMarkAnswered={(c) => void markQuestionAnswered(c)} />
         ) : bucket === "eraReview" || bucket === "outstandingClaims" || bucket === "paid" ? (
           // ERA Review + Outstanding Claims + Paid all render as a
           // primary-style table. ERA Review (showActions=true): Status
@@ -3088,7 +3119,7 @@ function LineTable({ headers, rows }: { headers: string[]; rows: React.ReactNode
 // opening the claim. No bucket routing — same claim still appears in
 // its real bucket (eraReview, outstandingClaims, etc.).
 // ─────────────────────────────────────────────────────────────────────────────
-function PatientQuestionsList({ rows }: { rows: SecClaim[] }) {
+function PatientQuestionsList({ rows, onMarkAnswered }: { rows: SecClaim[]; onMarkAnswered: (c: SecClaim) => void }) {
   return (
     <div className="space-y-3">
       {rows.map((c) => (
@@ -3123,7 +3154,7 @@ function PatientQuestionsList({ rows }: { rows: SecClaim[] }) {
                   Text / Call
                 </a>
               </Button>
-              <Button size="sm" variant="ghost">
+              <Button size="sm" variant="ghost" onClick={() => onMarkAnswered(c)} disabled={!c.mondayItemId}>
                 Mark answered
               </Button>
             </div>

@@ -69,6 +69,7 @@ interface NavTo {
     | "insurance"
     | "patient"
     | "awaiting"
+    | "patientQuestions"
     | "outstandingClaims"
     | "outstandingInvoices"
     | "eraReview"
@@ -88,6 +89,7 @@ const BUCKETS: Bucket[] = [
   { id: "s-insurance", label: "Submit Secondary",    fullLabel: "Submit Secondary · Insurance",               section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "insurance" } },
   { id: "s-patient",   label: "Send Secondary",      fullLabel: "Send Secondary · Patient",                   section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "patient" } },
   { id: "s-rejected",  label: "Rejected Secondary",  fullLabel: "Rejected Secondary · Awaiting Acceptance",   section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "awaiting" } },
+  { id: "s-questions", label: "Patient Questions",   fullLabel: "Review Secondary · Patient Questions",       section: "Secondary", navTo: { board: "secondary", mode: "review", secondaryBucket: "patientQuestions" } },
   { id: "s-era",       label: "Review Secondary",    fullLabel: "Review Secondary · ERA Review",              section: "Secondary", navTo: { board: "secondary", mode: "review", secondaryBucket: "eraReview" } },
   { id: "eft-todo",    label: "EFT Enrollment",      fullLabel: "EFT Enrollment · Not Started",               section: "EFT",       navTo: { board: "eft",       eftStatus: "not-started" } },
 ];
@@ -234,6 +236,15 @@ export function ActionItemsInbox({ onNavigate, className }: ActionItemsInboxProp
         oldestIso: ageOldestFromDates(rejected.map((c) => c.dos)) };
       out["s-era"]       = { count: era.length,
         oldestIso: ageOldestFromDates(era.map((c) => c.dos)) };
+
+      // Patient Questions — additive bucket over the whole Secondary
+      // panel: count any claim with a non-empty question that hasn't
+      // been Marked Answered yet (mirror SecondaryBoard.visible).
+      const questions = secondaryClaims.filter((c) =>
+        !!(c.patientQuestion && c.patientQuestion.trim() && !c.patientQuestionAnswered),
+      );
+      out["s-questions"] = { count: questions.length,
+        oldestIso: ageOldestFromDates(questions.map((c) => c.dos)) };
     }
 
     // ── EFT ───────────────────────────────────────────────────────
