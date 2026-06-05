@@ -97,6 +97,23 @@ export async function setSecondaryStatusAndMove(
 // bulk-send tool that just stamps Send Invoice across many rows).
 const SEND_INVOICE_TRIGGER_COL = "color_mm3x6qe6";
 
+// Latest Follow-up date — stamped to today each time Send Follow-Up
+// fires. Separate from the original Send Invoice date (date_mm3q88et)
+// so the first-sent timestamp is preserved while the follow-up cadence
+// counter resets per click.
+const LATEST_FOLLOW_UP_DATE_COL = "date_mm41rs0q";
+
+const SET_DATE_MUT = `
+  mutation SetDate($itemId: ID!, $boardId: ID!, $columnId: String!, $value: JSON!) {
+    change_column_value(
+      item_id: $itemId,
+      board_id: $boardId,
+      column_id: $columnId,
+      value: $value
+    ) { id }
+  }
+`;
+
 const SEND_INVOICE_TRIGGER_MUT = `
   mutation FireSendInvoice($itemId: ID!, $boardId: ID!, $value: JSON!) {
     change_column_value(
@@ -154,4 +171,20 @@ export async function fireSendFollowUpTrigger(
     boardId: String(SECONDARY_BOARD_ID),
     value: JSON.stringify({ label: "Follow-up" }),
   });
+  // Stamp Latest Follow-up date with today's ISO date (YYYY-MM-DD —
+  // Monday date columns accept this directly). Best-effort: if the
+  // date write fails the follow-up SMS still went out.
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    await mondayQuery(SET_DATE_MUT, {
+      itemId: mondayItemId,
+      boardId: String(SECONDARY_BOARD_ID),
+      columnId: LATEST_FOLLOW_UP_DATE_COL,
+      value: JSON.stringify({ date: today }),
+    });
+  } catch {
+    // Surfaced separately to the operator via the calling toast if
+    // they care, but we don't want a date-write hiccup to look like
+    // the SMS didn't fire.
+  }
 }
