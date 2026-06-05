@@ -16,8 +16,8 @@
 
 import { useMemo, useState } from "react";
 import {
-  ArrowRight, Building2, Check, ExternalLink, Heart, RefreshCw, Search,
-  Send, Server, UserCog, Unlock, X,
+  ArrowRight, Building2, Check, ClipboardCheck, ExternalLink, Heart,
+  RefreshCw, Search, Send, Server, Shield, UserCog, Unlock, UserCircle, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 import { Financials } from "./Financials";
+import { PatientProfile } from "./PatientProfile";
+import { Authorizations } from "./Authorizations";
+import { MedicalRecords } from "./MedicalRecords";
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
   currentPhase, ORDER_PREP_PATIENTS, PATIENT_STATUS_OPTIONS, PAUSE_REASON_OPTIONS,
@@ -610,7 +613,7 @@ function PatientDrawer({
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export function SubscriptionBoard() {
+function OrderCycleWorkflow() {
   type PrimaryTab = "overview" | "prep" | "order" | "financials";
   const [primary, setPrimary] = useState<PrimaryTab>("overview");
   type PrepPhase = CheckpointKind | "all";
@@ -999,5 +1002,45 @@ function SubmitTable({
         ))}
       </TableBody>
     </Table>
+  );
+}
+
+// ─── Top-level SubscriptionBoard: 5 workflow tabs ────────────────────────────
+type WorkflowTab = "order-cycle" | "patient-profile" | "authorizations" | "medical-records" | "financials";
+
+const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof RefreshCw }[] = [
+  { id: "order-cycle",     label: "Order Cycle",     icon: RefreshCw },
+  { id: "patient-profile", label: "Patient Profile", icon: UserCircle },
+  { id: "authorizations",  label: "Authorizations",  icon: Shield },
+  { id: "medical-records", label: "Medical Records", icon: ClipboardCheck },
+  { id: "financials",      label: "Financials",      icon: Building2 },
+];
+
+export function SubscriptionBoard() {
+  const [workflow, setWorkflow] = useState<WorkflowTab>("order-cycle");
+
+  return (
+    <div className="space-y-4">
+      {/* Workflow tab nav — sits above the Order Cycle\'s own Overview/Prep/Order nav */}
+      <Tabs value={workflow} onValueChange={(v) => setWorkflow(v as WorkflowTab)}>
+        <TabsList className="bg-card border h-12 p-1">
+          {WORKFLOW_TABS.map((t) => {
+            const Icon = t.icon;
+            return (
+              <TabsTrigger key={t.id} value={t.id} className="text-[15px] font-semibold gap-2 px-4">
+                <Icon className="h-4 w-4" />
+                {t.label}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
+      </Tabs>
+
+      {workflow === "order-cycle"     && <OrderCycleWorkflow />}
+      {workflow === "patient-profile" && <PatientProfile />}
+      {workflow === "authorizations"  && <Authorizations />}
+      {workflow === "medical-records" && <MedicalRecords />}
+      {workflow === "financials"      && <Financials />}
+    </div>
   );
 }
