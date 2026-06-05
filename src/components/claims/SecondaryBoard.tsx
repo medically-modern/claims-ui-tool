@@ -1373,7 +1373,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
               onToggle={() => setExpanded((p) => ({ ...p, [c.id]: !p[c.id] }))}
               onUpdate={(patch) => updateClaim(c.id, patch)}
               onSubmitSecondary={(manual) => submitSecondary(c, manual)}
-              onGenerateStatement={() => void sendInvoice(c)}
+              onGenerateStatement={() => sendInvoice(c)}
               onSendFollowUp={() => sendFollowUp(c)}
               onMarkPatientPaid={() => void markPatientPaid(c)}
               onMarkPosted={() => markPosted(c)}
@@ -1400,7 +1400,7 @@ function SecondaryRow({
   onToggle: () => void;
   onUpdate: (p: Partial<SecClaim>) => void;
   onSubmitSecondary: (manual?: boolean) => void;
-  onGenerateStatement: () => void;
+  onGenerateStatement: () => Promise<void> | void;
   onSendFollowUp: () => Promise<void>;
   onMarkPatientPaid: () => void;
   onMarkPosted: () => void;
