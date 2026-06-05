@@ -28,6 +28,7 @@ import {
   setSecondaryPayer,
   moveSecondaryToGroup,
   fireQuestionAnswered,
+  clearSmsStatus,
 } from "@/api/setSecondaryStatus";
 import {
   markSecondaryPaid as apiMarkSecondaryPaid,
