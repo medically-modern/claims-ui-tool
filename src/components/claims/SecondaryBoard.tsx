@@ -1317,7 +1317,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
               onUpdate={(patch) => updateClaim(c.id, patch)}
               onSubmitSecondary={(manual) => submitSecondary(c, manual)}
               onGenerateStatement={() => void sendInvoice(c)}
-              onSendFollowUp={() => void sendFollowUp(c)}
+              onSendFollowUp={() => sendFollowUp(c)}
               onMarkPatientPaid={() => void markPatientPaid(c)}
               onMarkPosted={() => markPosted(c)}
               onConfirmPayor={(dest) => void confirmPayor(c, dest)}
@@ -1344,7 +1344,7 @@ function SecondaryRow({
   onUpdate: (p: Partial<SecClaim>) => void;
   onSubmitSecondary: (manual?: boolean) => void;
   onGenerateStatement: () => void;
-  onSendFollowUp: () => void;
+  onSendFollowUp: () => Promise<void>;
   onMarkPatientPaid: () => void;
   onMarkPosted: () => void;
   onConfirmPayor: (dest: "Insurance" | "Patient" | "Waived") => void;
@@ -2464,7 +2464,7 @@ function SendToPatientBody({
   c: SecClaim;
   onUpdate: (p: Partial<SecClaim>) => void;
   onGenerate: () => void;
-  onSendFollowUp: () => void;
+  onSendFollowUp: () => Promise<void>;
   onMarkPaid: () => void;
   bucket: AnyBucket | null;
 }) {
@@ -2601,18 +2601,7 @@ function SendToPatientBody({
           // Monday fires a fresh automation event with different copy.
           <>
             {bucket === "outstandingInvoices" && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={onSendFollowUp}
-                disabled={!c.mondayItemId}
-                title={c.mondayItemId
-                  ? "Resend the invoice SMS with follow-up copy (clears + sets Send Invoice → Follow-up)"
-                  : "No Monday item id on this row — can\'t fire the follow-up."}
-                className="h-8"
-              >
-                <Send className="mr-1 h-3.5 w-3.5" /> Send Follow-Up
-              </Button>
+              <SendFollowUpButton onClick={onSendFollowUp} disabled={!c.mondayItemId} />
             )}
             <Button
               size="sm"
@@ -3162,5 +3151,51 @@ function PatientQuestionsList({ rows, onMarkAnswered }: { rows: SecClaim[]; onMa
         </Card>
       ))}
     </div>
+  );
+}
+
+// SendFollowUpButton — local loading state so the operator gets
+// immediate visual feedback on click (button disables, shows spinner +
+// 'Sending…'), then briefly flashes a success state before returning
+// to idle. The async Monday write can take 1-2s; without this it looks
+// like the click did nothing.
+function SendFollowUpButton({ onClick, disabled }: {
+  onClick: () => Promise<void>;
+  disabled: boolean;
+}) {
+  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
+  async function handleClick() {
+    if (state !== "idle") return;
+    setState("sending");
+    try {
+      await onClick();
+      setState("sent");
+      window.setTimeout(() => setState("idle"), 2200);
+    } catch {
+      setState("idle");
+    }
+  }
+  return (
+    <Button
+      size="sm"
+      variant={state === "sent" ? "default" : "outline"}
+      onClick={handleClick}
+      disabled={disabled || state === "sending"}
+      title={disabled
+        ? "No Monday item id on this row — can\'t fire the follow-up."
+        : "Resend the invoice SMS with follow-up copy (clears + sets Send Invoice → Follow-up)"}
+      className={cn(
+        "h-8 transition-colors",
+        state === "sent" && "bg-emerald-600 text-white hover:bg-emerald-600",
+      )}
+    >
+      {state === "sending" ? (
+        <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Sending…</>
+      ) : state === "sent" ? (
+        <><CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Sent</>
+      ) : (
+        <><Send className="mr-1 h-3.5 w-3.5" /> Send Follow-Up</>
+      )}
+    </Button>
   );
 }
