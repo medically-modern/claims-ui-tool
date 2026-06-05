@@ -234,7 +234,7 @@ export interface SecClaim {
   lines: SecLine[];
 }
 
-const SECONDARY_PAYER_OPTIONS = ["NY Medicaid", "Medicaid", "AARP Supplement", "BCBS Supplement", "Tricare", "None"];
+const SECONDARY_PAYER_OPTIONS = ["NY Medicaid", "AARP Supplement", "BCBS Supplement", "Tricare", "None"];
 const OTHER_PAYER = "Other";
 const DIAGNOSIS_OPTIONS = ["E10.65", "E11.9", "E10.9", "E11.65"];
 
