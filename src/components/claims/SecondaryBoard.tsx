@@ -1451,17 +1451,35 @@ function AwaitingAcceptanceBody({ c }: { c: SecClaim }) {
 }
 
 function StatusPill({ status, bucket }: { status: SecondaryStatus; bucket: AnyBucket | null }) {
+  // In the Submit > Patient bucket, Monday's Secondary Status is
+  // misleading: Josh's coins-form-payment webhook writes "Sent to
+  // Patient" the moment a pay link is generated — well before the
+  // operator clicks our Send Invoice button. The row is still in
+  // Stage 1 (review-before-send), so showing "Sent to Patient" on
+  // the pill contradicts the bucket label. Override the display
+  // here. The bucket filter already uses our authoritative
+  // sendInvoiceTriggered flag to decide patient vs outstandingInvoices
+  // (see bucketOf), so when bucket === "patient" we KNOW the
+  // operator hasn't actually sent yet.
+  const displayStatus =
+    bucket === "patient" && status === "Sent to Patient"
+      ? "Needs Invoice"
+      : status === "Primary Paid - Forwarded"
+        ? "Awaiting Crossover ERA"
+        : status;
+
   const tone: "info" | "warning" | "success" | "neutral" | "danger" =
     status === "Secondary Paid" || status === "Patient Paid" ? "success" :
     status === "Secondary ERA Received" ? "info" :
     status === "Primary Paid - Forwarded" ? "info" :
     status === "Bad Debt" ? "neutral" :
+    bucket === "patient" && status === "Sent to Patient" ? "info" :
     status === "Sent to Patient" ? "warning" :
     "warning";
   return (
     <StatusBadge tone={tone} className={cn(bucket === "outstandingClaims" && "animate-pulse")}>
 
-      {status === "Primary Paid - Forwarded" ? "Awaiting Crossover ERA" : status}
+      {displayStatus}
     </StatusBadge>
   );
 }
