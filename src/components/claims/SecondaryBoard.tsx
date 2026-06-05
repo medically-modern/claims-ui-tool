@@ -2715,7 +2715,21 @@ function SendToPatientBody({
             {bucket === "outstandingInvoices" && (
               <SendFollowUpButton onClick={onSendFollowUp} disabled={!c.mondayItemId} />
             )}
-            {(bucket !== "outstandingInvoices" || c.smsStatus === "Delivered") && (
+            {/*
+             * Mark Paid gate — uses c.status (which updates locally on
+             * Send Invoice click) rather than bucket (which only
+             * updates on refetch when Monday catches up). Otherwise
+             * Mark Paid leaks through the intermediate state between
+             * click and refetch.
+             *
+             *   status === "Sent to Patient"  → operator just sent the
+             *     invoice OR Monday confirmed it; wait for SMS Delivered
+             *     before allowing Mark Paid
+             *   status !== "Sent to Patient" → past the patient-pay
+             *     flow (Patient Paid for Invoice Review, etc.); render
+             *     Mark Paid normally
+             */}
+            {(c.status !== "Sent to Patient" || c.smsStatus === "Delivered") && (
               <Button
                 size="sm"
                 onClick={onMarkPaid}
@@ -2724,12 +2738,14 @@ function SendToPatientBody({
                 <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid
               </Button>
             )}
-            {bucket === "outstandingInvoices" && !c.smsStatus && (
+            {c.status === "Sent to Patient" && c.smsStatus !== "Delivered" && (
               <span
-                title="Waiting for the Twilio -> Monday SMS Status webhook. Mark Paid unlocks once the column reads Delivered."
+                title={c.smsStatus
+                  ? `SMS Status is currently '${c.smsStatus}'. Mark Paid unlocks once the column reads Delivered.`
+                  : "Waiting on the Twilio -> Monday SMS Status webhook. Mark Paid unlocks once the column reads Delivered."}
                 className="inline-flex h-8 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 text-[11px] font-semibold text-amber-700"
               >
-                <Loader2 className="h-3 w-3 animate-spin" /> Waiting on SMS status
+                <Loader2 className="h-3 w-3 animate-spin" /> Waiting on SMS
               </span>
             )}
           </>
