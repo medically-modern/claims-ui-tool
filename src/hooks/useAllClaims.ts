@@ -32,12 +32,16 @@ export function useAllClaims() {
     // instant first paint. Past the window, we still show cached data
     // immediately and refetch silently in the background, so the user
     // never sees a blank screen.
-    staleTime: 5 * 60 * 1000,
-    // gcTime needs to be long enough that the persister can save and
-    // restore the entry across reloads. The QueryClient default is 5
-    // minutes — bumping per-query so claims that aren't refetched for
-    // a while still come back from localStorage on the next visit.
-    gcTime: 24 * 60 * 60 * 1000,
-    refetchOnWindowFocus: false,
+    // 30s staleTime + always-refetch-on-mount: every page navigation
+    // sees a refetch fire while the cached snapshot renders instantly.
+    // Matches the Subscription Board pattern; eliminates the
+    // 'soft refresh did nothing because cache was still fresh' problem.
+    staleTime:         30 * 1000,
+    gcTime:            24 * 60 * 60 * 1000,
+    refetchInterval:        30 * 1000,
+    refetchIntervalInBackground: false,
+    refetchOnMount:       "always",
+    refetchOnWindowFocus: true,
+    refetchOnReconnect:   true,
   });
 }

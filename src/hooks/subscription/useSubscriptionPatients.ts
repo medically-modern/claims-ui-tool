@@ -28,8 +28,19 @@ export function useSubscriptionPatients() {
     queryKey: SUBSCRIPTION_PATIENTS_QUERY_KEY,
     queryFn: fetchSubscriptionPatients,
     enabled: hasMondayToken(),
-    staleTime: 5 * 60 * 1000,
-    gcTime:   24 * 60 * 60 * 1000,
+    // 30s staleTime + always-refetch-on-mount: every page navigation
+    // OR component remount sees a refetch fire, while the cached data
+    // renders instantly during the round-trip. Operators no longer
+    // hit "soft refresh did nothing because cache wasn\'t stale yet".
+    staleTime:         30 * 1000,
+    gcTime:            24 * 60 * 60 * 1000,
+    // Silent poll every 30s while the tab is open — picks up Monday-
+    // side edits within ~30s automatically (mirrors Josh\'s pattern
+    // in command-center). React Query throttles this to "while
+    // mounted" so closed tabs don\'t hammer Monday.
+    refetchInterval:        30 * 1000,
+    refetchIntervalInBackground: false,
+    refetchOnMount:       "always",
     refetchOnWindowFocus: true,
     refetchOnReconnect:   true,
   });

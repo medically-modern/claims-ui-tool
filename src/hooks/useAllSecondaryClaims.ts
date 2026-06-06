@@ -17,11 +17,17 @@ export function useAllSecondaryClaims() {
     queryKey: ALL_SECONDARY_CLAIMS_QUERY_KEY,
     queryFn: () => fetchAllSecondaryClaims(),
     enabled: hasMondayToken(),
-    staleTime: 5 * 60 * 1000,
+    // 30s staleTime + always-refetch-on-mount: live updates within
+    // ~30s, no manual refresh needed.
+    staleTime:         30 * 1000,
+    refetchInterval:        30 * 1000,
+    refetchIntervalInBackground: false,
+    refetchOnMount:       "always",
     // 24h gcTime so the persister in App.tsx can rehydrate this
     // across page reloads without React Query GC'ing the entry first.
     // See useAllClaims for the full rationale.
     gcTime: 24 * 60 * 60 * 1000,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect:   true,
   });
 }
