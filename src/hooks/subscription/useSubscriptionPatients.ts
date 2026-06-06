@@ -1,56 +1,52 @@
 /**
- * useSubscriptionPatients.ts — single source of truth for live
- * Subscription Board data across all Subscription tabs.
+ * useSubscriptionPatients.ts — React Query hook backed by the same
+ * persistent cache the Claims Board uses (localStorage via
+ * PersistQueryClientProvider in App.tsx).
  *
- * Returns { data, loading, error, refetch }. data is undefined while
- * the first fetch is in flight; subsequent refetches keep the
- * previous data visible and just flip loading.
+ *   staleTime 5 min : within the window, mounts/reloads hit cache,
+ *                     no Monday call. Past the window, cached data
+ *                     renders immediately while a background refetch
+ *                     runs — operator never sees a blank screen.
+ *   gcTime    24 h  : persister can rehydrate from a previous session.
+ *   refetchOnWindowFocus: true — alt-tabbing back refreshes silently.
  *
- * On token-missing or fetch failure, returns the existing mock
- * ORDER_PREP_PATIENTS so the UI doesn't go blank in dev / preview
- * builds without VITE_MONDAY_API_TOKEN.
+ * Falls back to mock data if the Monday token isn't configured (dev /
+ * preview builds).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   fetchSubscriptionPatients, type LiveSubscriptionPatient,
 } from "@/api/queries/subscriptionPatients";
+import { hasMondayToken } from "@/api/monday";
 import { ORDER_PREP_PATIENTS } from "@/components/subscription/mockData";
 
-interface State {
-  data: LiveSubscriptionPatient[] | undefined;
-  loading: boolean;
-  error: string | null;
-  usingMock: boolean;
-}
+export const SUBSCRIPTION_PATIENTS_QUERY_KEY = ["subscription", "patients"] as const;
 
 export function useSubscriptionPatients() {
-  const [state, setState] = useState<State>({
-    data: undefined, loading: true, error: null, usingMock: false,
+  const q = useQuery<LiveSubscriptionPatient[]>({
+    queryKey: SUBSCRIPTION_PATIENTS_QUERY_KEY,
+    queryFn: fetchSubscriptionPatients,
+    enabled: hasMondayToken(),
+    staleTime: 5 * 60 * 1000,
+    gcTime:   24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect:   true,
   });
-  const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
 
-  const refetch = useCallback(async () => {
-    setState((s) => ({ ...s, loading: true, error: null }));
-    try {
-      const data = await fetchSubscriptionPatients();
-      if (!mounted.current) return;
-      setState({ data, loading: false, error: null, usingMock: false });
-    } catch (e) {
-      if (!mounted.current) return;
-      const msg = (e as Error).message;
-      // Dev / preview fallback: surface the mock so the UI still works
-      setState({
-        data: ORDER_PREP_PATIENTS as unknown as LiveSubscriptionPatient[],
-        loading: false,
-        error: msg,
-        usingMock: true,
-      });
-    }
-  }, []);
+  // Mock fallback when no token / fetch hard-failed at first paint
+  const usingMock = !hasMondayToken() || (q.isError && q.data === undefined);
+  const data =
+    q.data ?? (usingMock ? (ORDER_PREP_PATIENTS as unknown as LiveSubscriptionPatient[]) : undefined);
 
-  useEffect(() => { void refetch(); }, [refetch]);
-
-  return { ...state, refetch };
+  return {
+    data,
+    loading: q.isLoading,
+    isFetching: q.isFetching,        // true during background refetch
+    isStale: q.isStale,
+    error: q.error ? (q.error as Error).message : null,
+    usingMock,
+    dataUpdatedAt: q.dataUpdatedAt,
+    refetch: q.refetch,
+  };
 }

@@ -42,6 +42,7 @@ import {
   PAYER_OPTIONS, PAUSE_REASON_OPTIONS, PATIENT_STATUS_OPTIONS,
 } from "./mockData";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
+import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { runEligibilityCheck, saveSubscriptionPatient } from "@/api/setSubscriptionPatient";
 import { Loader2, RefreshCw as ReloadIcon } from "lucide-react";
@@ -262,7 +263,9 @@ export function PatientProfile() {
   const [sortKey, setSortKey] = useState<"name" | "phone" | "dob" | "primaryPayer" | "subscriptionType" | "nextOrderDate" | "patientStatus" | "doctorName">("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
-  const { data: livePatients, loading, error, usingMock, refetch } = useSubscriptionPatients();
+  const { data: livePatients, loading, isFetching, error, usingMock, refetch, dataUpdatedAt }
+    = useSubscriptionPatients();
+  const { invalidate: invalidateSubscription } = useInvalidateSubscription();
   const patients: LiveSubscriptionPatient[] = livePatients ?? [];
 
   const filtered = useMemo(() => {
@@ -326,7 +329,7 @@ export function PatientProfile() {
         });
       }
       setDirtyMap((m) => ({ ...m, [openId]: false }));
-      void refetch();
+      void invalidateSubscription();
     } finally {
       setSaving(false);
     }
@@ -348,6 +351,7 @@ export function PatientProfile() {
       toast.success("Run Check flipped to 'Run' on Monday", {
         description: "Webhook will fire the eligibility check; refresh in a few seconds.",
       });
+      void invalidateSubscription();
     } catch (e) {
       toast.error("Couldn't flip Run Check", { description: (e as Error).message });
     } finally {
@@ -512,6 +516,7 @@ export function PatientProfile() {
           <div className="text-sm text-muted-foreground">Loading patients from Monday…</div>
         </Card>
       )}
+      <FreshnessPill isFetching={isFetching} dataUpdatedAt={dataUpdatedAt} onRefresh={() => void refetch()} />
       <Card className="p-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[260px]">
@@ -728,5 +733,39 @@ function SortableHead<K extends string>({ label, k, sortKey, sortDir, onClick }:
         )}
       </span>
     </TableHead>
+  );
+}
+
+/**
+ * FreshnessPill — small inline indicator of how fresh the cached data
+ * is plus a click-to-refresh affordance. Greys when within staleTime,
+ * pulses when refetching in background, surfaces 'Updated Xm ago' when
+ * stale. Operators get a clear answer to "am I looking at current
+ * data?" without us having to spam fetches.
+ */
+function FreshnessPill({ isFetching, dataUpdatedAt, onRefresh }: {
+  isFetching: boolean; dataUpdatedAt: number; onRefresh: () => void;
+}) {
+  const ageMs = Date.now() - dataUpdatedAt;
+  const ageS  = Math.round(ageMs / 1000);
+  const ageM  = Math.round(ageMs / 60_000);
+  const label = isFetching ? "Refreshing…"
+              : ageS < 30   ? "Updated just now"
+              : ageS < 60   ? `Updated ${ageS}s ago`
+              : ageM < 60   ? `Updated ${ageM}m ago`
+              :               `Updated ${Math.round(ageM / 60)}h ago`;
+  return (
+    <button
+      type="button"
+      onClick={onRefresh}
+      disabled={isFetching}
+      className={`inline-flex items-center gap-1 self-start rounded-full border px-2.5 py-1 text-[11px] font-medium transition
+        ${isFetching ? "bg-blue-50 text-blue-700 border-blue-200"
+                     : "bg-muted/40 text-muted-foreground border-border hover:bg-muted"}`}
+      title="Click to refresh now"
+    >
+      {isFetching ? <Loader2 className="h-3 w-3 animate-spin" /> : <ReloadIcon className="h-3 w-3" />}
+      {label}
+    </button>
   );
 }

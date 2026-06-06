@@ -46,6 +46,14 @@ const queryClient = new QueryClient({
       // persistence layer respects that, so a reload within 5 min of
       // the last fetch renders instantly without hitting Monday.
       gcTime: ONE_DAY_MS,
+      // Refetch silently when the tab regains focus or the network
+      // reconnects. Operators frequently flip between Monday and the
+      // tool; this picks up Monday-side edits within seconds without
+      // a manual refresh. Stale-while-revalidate means the previous
+      // data stays on screen during the refetch — no flash of empty
+      // state.
+      refetchOnWindowFocus: true,
+      refetchOnReconnect:   true,
     },
   },
 });
