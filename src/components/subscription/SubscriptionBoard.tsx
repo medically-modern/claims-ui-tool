@@ -16,8 +16,9 @@
 
 import { useMemo, useState } from "react";
 import {
-  ArrowRight, Building2, Check, ClipboardCheck, Clock, ExternalLink, Heart, MessageSquare, Pencil,
-  RefreshCw, Search, Send, Server, Shield, UserCog, Unlock, UserCircle, X,
+  ArrowRight, Building2, Check, ClipboardCheck, Clock, ExternalLink, Heart, Loader2,
+  MessageSquare, Pencil, RefreshCw, RefreshCw as ReloadIcon, Search, Send, Server,
+  Shield, UserCog, Unlock, UserCircle, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,9 @@ import { Financials } from "./Financials";
 import { PatientProfile } from "./PatientProfile";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
+import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
+import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
+import { runEligibilityCheck } from "@/api/setSubscriptionPatient";
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
   currentPhase, ORDER_PREP_PATIENTS, PATIENT_STATUS_OPTIONS, PAUSE_REASON_OPTIONS,
@@ -660,7 +664,16 @@ function OrderCycleWorkflow() {
   const [activePatient, setActivePatient] = useState<SubscriptionPatient | null>(null);
   const [activeKind, setActiveKind] = useState<CheckpointKind | "patient" | null>(null);
 
-  const all = ORDER_PREP_PATIENTS;
+  // ── Live Monday data wiring (Phase 2 of Option A) ──
+  // OrderCycle now reads from the same React-Query-backed Subscription
+  // Board fetch as PatientProfile. The hook's stale-while-revalidate +
+  // 30s background poll means the operator sees Monday-side edits
+  // automatically. Mock data still renders when no Monday token is
+  // configured (local dev / preview deploys) — usingMock surfaces that.
+  const {
+    data: liveAll, loading, isFetching, error, usingMock, refetch, dataUpdatedAt,
+  } = useSubscriptionPatients();
+  const all: SubscriptionPatient[] = liveAll ?? [];
 
   const counts = useMemo(() => {
     const c = { overview: 0, confirmation: 0, benefits: 0, auth: 0, lastPaid: 0, ready: 0 };
@@ -673,6 +686,48 @@ function OrderCycleWorkflow() {
   const closeDrawer = () => { setActivePatient(null); setActiveKind(null); };
   const sendToOrderBoard = (_p: SubscriptionPatient) => {
     // TODO: wire to backend /order/webhook when available.
+  };
+
+  // ── Batch action state ──
+  const { invalidate: invalidateSubscription } = useInvalidateSubscription();
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchMsg, setBatchMsg] = useState<string | null>(null);
+
+  /**
+   * Run Eligibility Batch — flips `Run Check` to "Run" for every patient
+   * currently in the Eligibility phase of the visible cohort, in parallel.
+   * Backend stedi-monday-integration webhook picks them up and runs 270s.
+   * Per memory: Monday batch writes are atomic per-item, so a single bad
+   * row only fails its own check — the rest still run.
+   */
+  const runEligibilityBatch = async () => {
+    const cohort = filteredAll.filter((p) => currentPhase(p) === "benefits");
+    if (cohort.length === 0) {
+      setBatchMsg("No patients in Eligibility phase to run.");
+      setTimeout(() => setBatchMsg(null), 4000);
+      return;
+    }
+    setBatchRunning(true);
+    setBatchMsg(`Triggering eligibility for ${cohort.length} patient${cohort.length === 1 ? "" : "s"}…`);
+    const results = await Promise.allSettled(
+      cohort.map((p) => runEligibilityCheck(p.mondayItemId)),
+    );
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.length - ok;
+    setBatchMsg(failed === 0
+      ? `Triggered ${ok} eligibility check${ok === 1 ? "" : "s"} ✓`
+      : `Triggered ${ok}, ${failed} failed`);
+    setBatchRunning(false);
+    invalidateSubscription();
+    setTimeout(() => setBatchMsg(null), 6000);
+  };
+
+  const sendReorderText = () => {
+    // TODO: wire to backend Twilio reorder-text endpoint. Likely flips a
+    // per-patient status column the backend listens on; column ID not
+    // yet confirmed in reference_subscription_board_columns.md.
+    setBatchMsg("Send Reorder Text not yet wired — pending backend endpoint.");
+    setTimeout(() => setBatchMsg(null), 5000);
   };
 
   const filteredAll = useMemo(() => {
@@ -744,6 +799,37 @@ function OrderCycleWorkflow() {
 
   return (
     <div className="space-y-4">
+      {/* Live data freshness + mock-data banner */}
+      <div className="flex flex-wrap items-center gap-2">
+        <OrderCycleFreshness
+          isFetching={isFetching}
+          dataUpdatedAt={dataUpdatedAt}
+          onRefresh={() => void refetch()}
+        />
+        {loading && all.length === 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700">
+            <Loader2 className="h-3 w-3 animate-spin" /> Loading patients from Monday…
+          </span>
+        )}
+        {usingMock && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-800">
+            Showing mock data (Monday token not configured)
+          </span>
+        )}
+        {error && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-medium text-red-700"
+                title={error}>
+            Failed to load — using last cached data
+          </span>
+        )}
+        {batchMsg && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700">
+            {batchRunning && <Loader2 className="h-3 w-3 animate-spin" />}
+            {batchMsg}
+          </span>
+        )}
+      </div>
+
       {/* Primary nav: Order Prep | Order | Overview */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs value={primary} onValueChange={(v) => setPrimary(v as PrimaryTab)}>
@@ -764,10 +850,22 @@ function OrderCycleWorkflow() {
         </Tabs>
         <div className="flex items-center gap-2">
           {phase === "confirmation" && (
-            <Button variant="outline" size="sm"><Send className="mr-2 h-4 w-4" />Send Reorder Text</Button>
+            <Button variant="outline" size="sm" onClick={sendReorderText}>
+              <Send className="mr-2 h-4 w-4" />Send Reorder Text
+            </Button>
           )}
           {phase === "benefits" && (
-            <Button variant="outline" size="sm"><RefreshCw className="mr-2 h-4 w-4" />Run Eligibility Batch</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void runEligibilityBatch()}
+              disabled={batchRunning}
+            >
+              {batchRunning
+                ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                : <RefreshCw className="mr-2 h-4 w-4" />}
+              Run Eligibility Batch
+            </Button>
           )}
         </div>
       </div>
@@ -1018,6 +1116,38 @@ function SubmitTable({
 
 // ─── Top-level SubscriptionBoard: 5 workflow tabs ────────────────────────────
 type WorkflowTab = "order-cycle" | "patient-profile" | "authorizations" | "medical-records" | "financials";
+
+/**
+ * OrderCycleFreshness — inline pill mirroring PatientProfile's
+ * FreshnessPill. Greys when cache is fresh, pulses while refetching,
+ * surfaces "Updated Xm ago" when stale, click to force refresh.
+ */
+function OrderCycleFreshness({ isFetching, dataUpdatedAt, onRefresh }: {
+  isFetching: boolean; dataUpdatedAt: number; onRefresh: () => void;
+}) {
+  const ageMs = Date.now() - dataUpdatedAt;
+  const ageS  = Math.round(ageMs / 1000);
+  const ageM  = Math.round(ageMs / 60_000);
+  const label = isFetching ? "Refreshing…"
+              : ageS < 30   ? "Updated just now"
+              : ageS < 60   ? `Updated ${ageS}s ago`
+              : ageM < 60   ? `Updated ${ageM}m ago`
+              :               `Updated ${Math.round(ageM / 60)}h ago`;
+  return (
+    <button
+      type="button"
+      onClick={onRefresh}
+      disabled={isFetching}
+      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition
+        ${isFetching ? "bg-blue-50 text-blue-700 border-blue-200"
+                     : "bg-muted/40 text-muted-foreground border-border hover:bg-muted"}`}
+      title="Click to refresh now"
+    >
+      {isFetching ? <Loader2 className="h-3 w-3 animate-spin" /> : <ReloadIcon className="h-3 w-3" />}
+      {label}
+    </button>
+  );
+}
 
 const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof RefreshCw }[] = [
   { id: "order-cycle",     label: "Order Cycle",     icon: RefreshCw },
