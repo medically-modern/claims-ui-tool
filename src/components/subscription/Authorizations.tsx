@@ -27,6 +27,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 
 import { ORDER_PREP_PATIENTS, SubscriptionPatient, currentPhase } from "./mockData";
+import { DvsQueue } from "./DvsQueue";
 import {
   decorateSamanthaRow, mockSamanthaPatient, SamanthaPatientRow,
 } from "./authorizationsMock";
@@ -192,6 +193,10 @@ export function Authorizations() {
         </TabsList>
       </Tabs>
 
+      {tab === "dvs" ? (
+        <DvsQueue />
+      ) : (
+        <>
       <Card className="p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -202,15 +207,6 @@ export function Authorizations() {
             placeholder="Search patient or payer" className="max-w-xs" />
         </div>
       </Card>
-
-      {tab === "dvs" && (
-        <Card className="p-4 bg-purple-50 border-purple-200 text-sm">
-          <strong className="text-purple-900">DVS at order time:</strong> NY Medicaid Supplies bypasses
-          traditional auth. We submit a Dispensing Validation System request through ePACES at order
-          validation; response (Review ID or rejection) lands immediately, and the claim response
-          comes back in the same exchange. Powered by the existing <code>automate-dvs</code> Playwright bot.
-        </Card>
-      )}
 
       {filtered.length === 0 ? (
         <Card className="p-12 text-center text-sm text-muted-foreground">No patients in this queue right now.</Card>
@@ -240,7 +236,6 @@ export function Authorizations() {
                     {p.auth.tone === "warn" && <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200"><AlertCircle className="mr-1 h-3 w-3" />{p.auth.label}</Badge>}
                     {p.auth.tone === "bad"  && <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200"><AlertCircle className="mr-1 h-3 w-3" />{p.auth.label}</Badge>}
                     {p.auth.tone === "pending" && <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200"><Clock className="mr-1 h-3 w-3" />Pending</Badge>}
-                    {p.auth.tone === "ok" && tab === "dvs" && <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">DVS ready</Badge>}
                   </TableCell>
                   <TableCell className="tabular-nums">{p.stuckSince ? daysSince(p.stuckSince) : "—"}</TableCell>
                   <TableCell>
@@ -253,6 +248,8 @@ export function Authorizations() {
             </TableBody>
           </Table>
         </Card>
+      )}
+        </>
       )}
     </div>
   );
