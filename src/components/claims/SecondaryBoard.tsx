@@ -1502,6 +1502,24 @@ function SecondaryRow({
               <>{"  ·  "}No remaining balance</>
             )}
           </div>
+          {/* Invoice cadence — visible in the COLLAPSED row of the
+              Outstanding Invoices bucket so ops can see "when did we
+              first invoice + how recently did we nag" at a glance,
+              without expanding. payLinkSentDate is stamped by Josh's
+              automation on first checkout link; latestFollowUpDate is
+              stamped by our fireSendFollowUpTrigger on each Send
+              Follow-Up click. */}
+          {b === "outstandingInvoices" && (c.payLinkSentDate || c.latestFollowUpDate) && (
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              {c.payLinkSentDate && (
+                <>Invoice sent: <span className="tabular-nums text-foreground">{fmt(c.payLinkSentDate)}</span></>
+              )}
+              {c.payLinkSentDate && c.latestFollowUpDate && "  ·  "}
+              {c.latestFollowUpDate && (
+                <>Last follow-up: <span className="tabular-nums text-foreground">{fmt(c.latestFollowUpDate)}</span></>
+              )}
+            </div>
+          )}
         </div>
         {/* On Awaiting Acceptance rows the 277 badge is the lifecycle
             indicator — the generic "Secondary Submitted" status pill
@@ -2629,24 +2647,6 @@ function SendToPatientBody({
             <div className="text-[11px] text-muted-foreground">
               DOS {fmt(c.dos)} · {c.primaryPayor}{c.secondaryPayer ? ` → ${displaySecondary(c)}` : ""}
             </div>
-            {/* Invoice cadence — shown only in Outstanding Invoices.
-                Two dates: when we first invoiced and when we last
-                followed up. Empty when neither has fired yet
-                (operator-side rows that never hit Send Invoice). */}
-            {bucket === "outstandingInvoices" && (c.payLinkSentDate || c.latestFollowUpDate) && (
-              <div className="mt-0.5 flex gap-3 text-[11px] text-muted-foreground">
-                {c.payLinkSentDate && (
-                  <span>
-                    Invoice sent <span className="text-foreground tabular-nums">{fmt(c.payLinkSentDate)}</span>
-                  </span>
-                )}
-                {c.latestFollowUpDate && (
-                  <span>
-                    Last follow-up <span className="text-foreground tabular-nums">{fmt(c.latestFollowUpDate)}</span>
-                  </span>
-                )}
-              </div>
-            )}
           </div>
           <div className="flex items-center gap-3 text-xs">
             <span><span className="text-muted-foreground">Allowed </span><span className="font-medium tabular-nums">{$(allowed)}</span></span>
