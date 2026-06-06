@@ -11,7 +11,7 @@
  * fires the actual DVS request.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle, ArrowRight, Check, CheckCircle2, ChevronDown,
   ChevronRight, FileText, Loader2, Play, RefreshCw, Send, XCircle,
@@ -84,9 +84,17 @@ export function DvsQueue() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
+  // Anchor index for shift-click range select. Reset whenever the
+  // visible set changes (filter or search) so the next click starts
+  // a fresh range from itself.
+  const [lastClickedIdx, setLastClickedIdx] = useState<number | null>(null);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
 
   const allPatients = useMemo(() => getDvsPatients(), []);
+
+  // Reset shift-anchor whenever the filter or search changes — the
+  // index we stored points into an array that may now be reordered.
+  useEffect(() => { setLastClickedIdx(null); }, [mode, search]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -112,12 +120,26 @@ export function DvsQueue() {
       return next;
     });
   }
-  function toggleOne(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+  function toggleOne(id: string, idx: number, shift: boolean) {
+    if (shift && lastClickedIdx !== null && lastClickedIdx !== idx) {
+      const from = Math.min(lastClickedIdx, idx);
+      const to   = Math.max(lastClickedIdx, idx);
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (let i = from; i <= to; i++) {
+          const rowId = visible[i]?.id;
+          if (rowId) next.add(rowId);
+        }
+        return next;
+      });
+    } else {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+    }
+    setLastClickedIdx(idx);
   }
   function toggleExpanded(id: string) {
     setExpanded((prev) => {
@@ -260,7 +282,7 @@ export function DvsQueue() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visible.map((p) => {
+              {visible.map((p, idx) => {
                 const effectiveDvs = overrides[p.id] ?? p.dvsStatus;
                 const isExpanded = expanded.has(p.id);
                 const isSelected = selected.has(p.id);
@@ -272,10 +294,19 @@ export function DvsQueue() {
                       onClick={() => toggleExpanded(p.id)}
                       data-state={isSelected ? "selected" : undefined}
                     >
-                      <TableCell onClick={(e) => e.stopPropagation()}>
+                      <TableCell
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleOne(p.id, idx, e.shiftKey);
+                        }}
+                      >
                         <Checkbox
                           checked={isSelected}
-                          onCheckedChange={() => toggleOne(p.id)}
+                          // onCheckedChange intentionally omitted —
+                          // the parent cell's onClick is the single
+                          // source of truth so shift-key state is
+                          // captured reliably. Keeps the Radix
+                          // checkbox in controlled mode.
                           aria-label={`Select ${p.name}`}
                         />
                       </TableCell>
