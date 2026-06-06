@@ -131,6 +131,13 @@ const COL = {
   // https://dashboard.stripe.com/payments/{id} from this so they
   // can verify the exact payment in Stripe.
   STRIPE_CHARGE_ID:    "text_mm3qsjdf",
+  // Send-Invoice date stamps. Both stamped from setSecondaryStatus.ts:
+  //   fireSendInvoiceTrigger -> PAY_LINK_SENT_DATE (only on first send)
+  //   fireSendFollowUpTrigger -> LATEST_FOLLOW_UP_DATE (resets per click)
+  // Surfaced on Outstanding Invoices rows so ops can see cadence at a
+  // glance without expanding the row.
+  PAY_LINK_SENT_DATE:   "date_mm3q88et",
+  LATEST_FOLLOW_UP_DATE: "date_mm41rs0q",
   // Send Invoice trigger — operator-controlled status column. Flips
   // to "Sent" only when our frontend's Send Invoice button is clicked
   // (fireSendInvoiceTrigger in api/setSecondaryStatus.ts). This is
@@ -588,6 +595,8 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
     patientPaidAmount: num(item, COL.PATIENT_PAID_AMOUNT) || undefined,
     patientPaidDate: isoDateOrEmpty(txt(item, COL.PATIENT_PAID_DATE)) || undefined,
     stripeChargeId: txt(item, COL.STRIPE_CHARGE_ID) || undefined,
+    payLinkSentDate: isoDateOrEmpty(txt(item, COL.PAY_LINK_SENT_DATE)) || undefined,
+    latestFollowUpDate: isoDateOrEmpty(txt(item, COL.LATEST_FOLLOW_UP_DATE)) || undefined,
     // True only when the operator clicked Send Invoice in our UI
     // (writes "Sent" to color_mm3x6qe6 via fireSendInvoiceTrigger).
     // Used by bucketOf to distinguish a "truly sent" patient invoice

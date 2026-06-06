@@ -202,10 +202,14 @@ export async function fireQuestionAnswered(
   });
 }
 
+// Pay Link Sent Date — stamped ONCE when the operator first clicks
+// Send Invoice. Stays put on subsequent follow-ups so the original
+// invoice timestamp is preserved.
+const PAY_LINK_SENT_DATE_COL = "date_mm3q88et";
 // Latest Follow-up date — stamped to today each time Send Follow-Up
-// fires. Separate from the original Send Invoice date (date_mm3q88et)
-// so the first-sent timestamp is preserved while the follow-up cadence
-// counter resets per click.
+// fires. Separate so the cadence counter resets per follow-up while
+// the initial Send Invoice date stays the source of truth for
+// "when did we first invoice this patient".
 const LATEST_FOLLOW_UP_DATE_COL = "date_mm41rs0q";
 
 const SET_DATE_MUT = `
@@ -244,6 +248,21 @@ export async function fireSendInvoiceTrigger(
     boardId: String(SECONDARY_BOARD_ID),
     value: JSON.stringify({ label: "Sent" }),
   });
+  // Stamp Pay Link Sent Date with today's ISO. Best-effort — if Monday
+  // hiccups on the date write the SMS automation has already fired and
+  // the operator still gets confirmation. Same defensive pattern as
+  // the follow-up date stamp below.
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    await mondayQuery(SET_DATE_MUT, {
+      itemId: mondayItemId,
+      boardId: String(SECONDARY_BOARD_ID),
+      columnId: PAY_LINK_SENT_DATE_COL,
+      value: JSON.stringify({ date: today }),
+    });
+  } catch {
+    // Date write hiccup shouldn't look like the SMS failed.
+  }
 }
 
 /**

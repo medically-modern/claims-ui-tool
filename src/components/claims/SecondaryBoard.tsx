@@ -156,6 +156,11 @@ export interface SecClaim {
   patientPaidAmount?: number;   // numeric_mm3q2vpb
   patientPaidDate?: string;     // date_mm3qxwjs (ISO YYYY-MM-DD)
   stripeChargeId?: string;      // text_mm3qsjdf — drives the See Payment link
+  /** Invoice cadence dates — surfaced on Outstanding Invoices rows.
+   *  payLinkSentDate is stamped once on the first Send Invoice click.
+   *  latestFollowUpDate is stamped fresh each Send Follow-Up click. */
+  payLinkSentDate?: string;
+  latestFollowUpDate?: string;
   /**
    * True only when the operator explicitly clicked Send Invoice in
    * our UI — fireSendInvoiceTrigger writes "Sent" to color_mm3x6qe6,
@@ -2624,6 +2629,24 @@ function SendToPatientBody({
             <div className="text-[11px] text-muted-foreground">
               DOS {fmt(c.dos)} · {c.primaryPayor}{c.secondaryPayer ? ` → ${displaySecondary(c)}` : ""}
             </div>
+            {/* Invoice cadence — shown only in Outstanding Invoices.
+                Two dates: when we first invoiced and when we last
+                followed up. Empty when neither has fired yet
+                (operator-side rows that never hit Send Invoice). */}
+            {bucket === "outstandingInvoices" && (c.payLinkSentDate || c.latestFollowUpDate) && (
+              <div className="mt-0.5 flex gap-3 text-[11px] text-muted-foreground">
+                {c.payLinkSentDate && (
+                  <span>
+                    Invoice sent <span className="text-foreground tabular-nums">{fmt(c.payLinkSentDate)}</span>
+                  </span>
+                )}
+                {c.latestFollowUpDate && (
+                  <span>
+                    Last follow-up <span className="text-foreground tabular-nums">{fmt(c.latestFollowUpDate)}</span>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3 text-xs">
             <span><span className="text-muted-foreground">Allowed </span><span className="font-medium tabular-nums">{$(allowed)}</span></span>
