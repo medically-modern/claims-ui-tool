@@ -119,6 +119,18 @@ const COL = {
   // stage so the operator can open exactly what the patient will see
   // before flipping Send Invoice → Done (which kicks off the SMS).
   PAY_LINK_URL: "text_mm3qag2c",
+  // Patient payment confirmation columns — written by Josh's
+  // coins-form-payment / Stripe automation when the patient checkout
+  // completes. Surfaced in the Invoice Review bucket so the operator
+  // can verify the actual payment amount + date before clicking
+  // Confirm Payment.
+  PATIENT_PAID_AMOUNT: "numeric_mm3q2vpb",
+  PATIENT_PAID_DATE:   "date_mm3qxwjs",
+  // Stripe Charge ID — also written by Josh's automation. The
+  // operator's See Payment link constructs
+  // https://dashboard.stripe.com/payments/{id} from this so they
+  // can verify the exact payment in Stripe.
+  STRIPE_CHARGE_ID:    "text_mm3qsjdf",
   // Send Invoice trigger — operator-controlled status column. Flips
   // to "Sent" only when our frontend's Send Invoice button is clicked
   // (fireSendInvoiceTrigger in api/setSecondaryStatus.ts). This is
@@ -573,6 +585,9 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
     bankEftDate: isoDateOrEmpty(txt(item, COL.BANK_EFT_DATE)) || null,
     bankTraceNumber: txt(item, COL.RAW_REMITTANCE_TRACE) || null,
     payLinkUrl: txt(item, COL.PAY_LINK_URL) || undefined,
+    patientPaidAmount: num(item, COL.PATIENT_PAID_AMOUNT) || undefined,
+    patientPaidDate: isoDateOrEmpty(txt(item, COL.PATIENT_PAID_DATE)) || undefined,
+    stripeChargeId: txt(item, COL.STRIPE_CHARGE_ID) || undefined,
     // True only when the operator clicked Send Invoice in our UI
     // (writes "Sent" to color_mm3x6qe6 via fireSendInvoiceTrigger).
     // Used by bucketOf to distinguish a "truly sent" patient invoice

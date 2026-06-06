@@ -18,7 +18,8 @@ import {
 import { BankPaymentMethodBadge, StatusBadge } from "@/components/claims/StatusBadge";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
-import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
+import { useAllSecondaryClaims, ALL_SECONDARY_CLAIMS_QUERY_KEY } from "@/hooks/useAllSecondaryClaims";
+import { useQueryClient } from "@tanstack/react-query";
 import { hasMondayToken } from "@/api/monday";
 import {
   setSecondaryStatus,
@@ -149,6 +150,12 @@ export interface SecClaim {
    * will see before flipping Send Invoice → Done. Empty string /
    * undefined means no link generated yet; button renders disabled. */
   payLinkUrl?: string;
+  // Patient payment confirmation (Josh's Stripe automation -> Monday).
+  // Populated on Invoice Review rows after the patient pays. Surfaced
+  // in InvoiceReviewBody as a verification panel + See Payment link.
+  patientPaidAmount?: number;   // numeric_mm3q2vpb
+  patientPaidDate?: string;     // date_mm3qxwjs (ISO YYYY-MM-DD)
+  stripeChargeId?: string;      // text_mm3qsjdf — drives the See Payment link
   /**
    * True only when the operator explicitly clicked Send Invoice in
    * our UI — fireSendInvoiceTrigger writes "Sent" to color_mm3x6qe6,
@@ -750,6 +757,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
     isFetching: secondaryLoading,
     refetch: refetchSecondary,
   } = useAllSecondaryClaims();
+  const queryClient = useQueryClient();
   const liveAvailable = hasMondayToken();
   const initialClaims: SecClaim[] = liveAvailable
     ? mondayClaims ?? []
@@ -1154,6 +1162,14 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
         "group_mkxsng4r",  // Paid And Closed
       );
       toast({ title: `Marked paid: ${c.patientName}`, description: "Row moved to Paid." });
+      // Invalidate before refetch — the persisted localStorage cache
+      // would otherwise serve the stale "Patient Paid" status when
+      // refetchSecondary returns from network slower than React Query
+      // serves cache. Invalidation marks the query dirty; refetch
+      // forces fresh data from Monday. Without this, Confirm Payment
+      // appeared to do nothing on the UI (row stuck in Invoice Review)
+      // even though the Monday write succeeded.
+      void queryClient.invalidateQueries({ queryKey: ALL_SECONDARY_CLAIMS_QUERY_KEY });
       void refetchSecondary();
     } catch (e) {
       // Roll back optimistic flip so the operator can retry
@@ -2624,6 +2640,49 @@ function SendToPatientBody({
         </div>
       </div>
 
+      {/* Invoice Review payment verification panel — only renders in
+          the invoiceReview bucket when Josh's coins-form-payment /
+          Stripe automation has written back the patient payment
+          details. Operator uses this + the See Payment button (which
+          opens the Stripe charge in Stripe's dashboard) to verify
+          the payment is real before clicking Confirm Payment. */}
+      {bucket === "invoiceReview" && (c.patientPaidAmount || c.patientPaidDate || c.stripeChargeId) && (
+        <div className="rounded-lg border bg-emerald-50/40 px-3 py-2 ring-1 ring-emerald-200/60">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+              Patient Payment Received
+            </div>
+            <div className="flex items-center gap-4 text-xs">
+              <span>
+                <span className="text-muted-foreground">Amount </span>
+                <span className="font-semibold tabular-nums text-emerald-700">
+                  {c.patientPaidAmount != null ? $(c.patientPaidAmount) : "—"}
+                </span>
+              </span>
+              <span>
+                <span className="text-muted-foreground">Paid date </span>
+                <span className="font-medium tabular-nums">
+                  {c.patientPaidDate ? fmt(c.patientPaidDate) : "—"}
+                </span>
+              </span>
+              {c.stripeChargeId && (
+                <span title={`Stripe Charge ID: ${c.stripeChargeId}`}>
+                  <span className="text-muted-foreground">Stripe </span>
+                  <span className="font-mono text-[10px] text-foreground">
+                    {c.stripeChargeId.length > 16 ? `${c.stripeChargeId.slice(0, 14)}…` : c.stripeChargeId}
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
+          {c.patientPaidAmount != null && Math.abs(c.patientPaidAmount - youOwe) > 0.01 && (
+            <div className="mt-1 text-[11px] text-amber-700">
+              ⚠ Paid amount ({$(c.patientPaidAmount)}) doesn't match patient-owes ({$(youOwe)}). Verify before confirming.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Items table — Ins. paid split into Deductible + Co-ins/Copay */}
       <div className="rounded-lg border bg-background">
         <div className="grid grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_0.9fr_0.8fr] gap-2 border-b bg-muted/30 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -2677,27 +2736,49 @@ function SendToPatientBody({
           (app primary blue, matches the Uploaded Docs to Payer
           button on ClaimDetail). */}
       <div className="flex items-center justify-end gap-2">
-        {/* Preview Link — always visible; disabled when no URL on the
-            Monday row yet. */}
-        <Button
-          size="sm"
-          disabled={!c.payLinkUrl}
-          onClick={() => {
-            if (!c.payLinkUrl) return;
-            // noopener/noreferrer keeps the new tab from accessing
-            // window.opener — standard for opening untrusted /
-            // patient-facing URLs from an internal tool.
-            window.open(c.payLinkUrl, "_blank", "noopener,noreferrer");
-          }}
-          title={
-            c.payLinkUrl
-              ? "Open the patient's invoice link in a new tab"
-              : "No Pay Link URL on this row yet — populate the Monday column first."
-          }
-          className="h-8"
-        >
-          <ExternalLink className="mr-1 h-3.5 w-3.5" /> Preview Link
-        </Button>
+        {/* Invoice-flow primary action button:
+            - patient / outstandingInvoices buckets -> Preview Link (opens
+              the patient-facing checkout URL so ops can sanity-check or
+              re-send out of band).
+            - invoiceReview bucket -> See Payment (opens the completed
+              Stripe charge in Stripe's dashboard so ops can verify the
+              actual payment landed before clicking Confirm Payment). */}
+        {bucket === "invoiceReview" ? (
+          <Button
+            size="sm"
+            disabled={!c.stripeChargeId}
+            onClick={() => {
+              if (!c.stripeChargeId) return;
+              const url = `https://dashboard.stripe.com/payments/${encodeURIComponent(c.stripeChargeId)}`;
+              window.open(url, "_blank", "noopener,noreferrer");
+            }}
+            title={
+              c.stripeChargeId
+                ? `Open Stripe charge ${c.stripeChargeId} in a new tab`
+                : "No Stripe Charge ID on this row yet — Josh's payment webhook hasn't fired or it didn't write back."
+            }
+            className="h-8"
+          >
+            <ExternalLink className="mr-1 h-3.5 w-3.5" /> See Payment
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            disabled={!c.payLinkUrl}
+            onClick={() => {
+              if (!c.payLinkUrl) return;
+              window.open(c.payLinkUrl, "_blank", "noopener,noreferrer");
+            }}
+            title={
+              c.payLinkUrl
+                ? "Open the patient's invoice link in a new tab"
+                : "No Pay Link URL on this row yet — populate the Monday column first."
+            }
+            className="h-8"
+          >
+            <ExternalLink className="mr-1 h-3.5 w-3.5" /> Preview Link
+          </Button>
+        )}
 
         {(c.rawSecondaryStatus ?? "Submit") === "Submit" ? (
           // Stage 1 — invoice not yet sent. Send Invoice flips Secondary
@@ -2741,7 +2822,10 @@ function SendToPatientBody({
              *     Mark Paid normally
              */}
             {(c.status !== "Sent to Patient" || c.smsStatus === "Delivered") && (
-              <MarkPaidButton onClick={async () => { await onMarkPaid(); }} />
+              <MarkPaidButton
+                onClick={async () => { await onMarkPaid(); }}
+                label={bucket === "invoiceReview" ? "Confirm Payment" : undefined}
+              />
             )}
             {c.status === "Sent to Patient" && c.smsStatus !== "Delivered" && (
               <span
@@ -3394,8 +3478,24 @@ function SendInvoiceButton({ onClick }: { onClick: () => Promise<void> }) {
 // MarkPaidButton — local loading state (Marking… / Marked ✓) so the
 // operator sees the click register while Monday writes round-trip,
 // plus a brief success flash before the row drops out of the bucket.
-function MarkPaidButton({ onClick }: { onClick: () => Promise<void> }) {
+function MarkPaidButton({
+  onClick,
+  label,
+}: {
+  onClick: () => Promise<void>;
+  /** Override the default "Mark Paid" label. Used by the Invoice
+   *  Review bucket which shows "Confirm Payment" — semantically a
+   *  verification step (the patient already paid; the operator is
+   *  acknowledging Stripe → Monday). */
+  label?: string;
+}) {
   const [state, setState] = useState<"idle" | "marking" | "marked">("idle");
+  const idleLabel    = label ?? "Mark Paid";
+  // Active-state copy matches the noun — "Confirming…" / "Confirmed"
+  // when the bucket is Invoice Review, "Marking…" / "Marked Paid"
+  // otherwise. Keeps the spinner copy aligned with the button intent.
+  const activeLabel  = label === "Confirm Payment" ? "Confirming…" : "Marking…";
+  const doneLabel    = label === "Confirm Payment" ? "Confirmed"   : "Marked Paid";
   async function handleClick() {
     if (state !== "idle") return;
     setState("marking");
@@ -3421,11 +3521,11 @@ function MarkPaidButton({ onClick }: { onClick: () => Promise<void> }) {
       )}
     >
       {state === "marking" ? (
-        <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Marking…</>
+        <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> {activeLabel}</>
       ) : state === "marked" ? (
-        <><CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Marked Paid</>
+        <><CheckCircle2 className="mr-1 h-3.5 w-3.5" /> {doneLabel}</>
       ) : (
-        <><CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark Paid</>
+        <><CheckCircle2 className="mr-1 h-3.5 w-3.5" /> {idleLabel}</>
       )}
     </Button>
   );
