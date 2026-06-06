@@ -259,7 +259,7 @@ export function PatientProfile() {
       if (q && !(p.name.toLowerCase().includes(q) || p.phone.includes(q) || p.mondayItemId.includes(q))) return false;
       return true;
     });
-  }, [search, statusFilter, payerFilter]);
+  }, [patients, search, statusFilter, payerFilter]);
 
   function openPatient(p: LiveSubscriptionPatient) {
     setOpenId(p.id);
