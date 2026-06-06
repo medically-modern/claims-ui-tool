@@ -1502,25 +1502,25 @@ function SecondaryRow({
               <>{"  ·  "}No remaining balance</>
             )}
           </div>
-          {/* Invoice cadence — visible in the COLLAPSED row of the
-              Outstanding Invoices bucket so ops can see "when did we
-              first invoice + how recently did we nag" at a glance,
-              without expanding. payLinkSentDate is stamped by Josh's
-              automation on first checkout link; latestFollowUpDate is
-              stamped by our fireSendFollowUpTrigger on each Send
-              Follow-Up click. */}
-          {b === "outstandingInvoices" && (c.payLinkSentDate || c.latestFollowUpDate) && (
-            <div className="mt-0.5 text-xs text-muted-foreground">
-              {c.payLinkSentDate && (
-                <>Invoice sent: <span className="tabular-nums text-foreground">{fmt(c.payLinkSentDate)}</span></>
-              )}
-              {c.payLinkSentDate && c.latestFollowUpDate && "  ·  "}
-              {c.latestFollowUpDate && (
-                <>Last follow-up: <span className="tabular-nums text-foreground">{fmt(c.latestFollowUpDate)}</span></>
-              )}
-            </div>
-          )}
         </div>
+        {/* Invoice cadence — sits between the patient content (which
+            takes flex-1) and the StatusPill on the right, so it
+            uses the empty middle space without stacking vertically.
+            Only shows in the Outstanding Invoices bucket. */}
+        {b === "outstandingInvoices" && (c.payLinkSentDate || c.latestFollowUpDate) && (
+          <div className="shrink-0 text-right text-[11px] text-muted-foreground leading-tight whitespace-nowrap">
+            {c.payLinkSentDate && (
+              <div>
+                Invoice sent <span className="tabular-nums text-foreground">{fmt(c.payLinkSentDate)}</span>
+              </div>
+            )}
+            {c.latestFollowUpDate && (
+              <div>
+                Last follow-up <span className="tabular-nums text-foreground">{fmt(c.latestFollowUpDate)}</span>
+              </div>
+            )}
+          </div>
+        )}
         {/* On Awaiting Acceptance rows the 277 badge is the lifecycle
             indicator — the generic "Secondary Submitted" status pill
             would be redundant + visually competing. On every other
