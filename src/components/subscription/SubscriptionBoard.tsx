@@ -77,6 +77,18 @@ function allChecksPass(p: SubscriptionPatient): boolean {
     && p.auth.tone === "ok" && p.lastPaid.tone === "ok";
 }
 
+/**
+ * Order Prep horizon: how far out we let patients show up in any of the
+ * Order Prep sub-tabs (All / Confirmation / Eligibility / Authorization /
+ * Last Paid). Anything further than this is "not yet our problem" and
+ * just clutters the view. Past-due (negative daysBetween) always shows.
+ */
+const ORDER_PREP_WINDOW_DAYS = 21;
+function withinOrderPrepWindow(p: SubscriptionPatient): boolean {
+  if (!p.nextOrderDate) return false;
+  return daysBetween(p.nextOrderDate) <= ORDER_PREP_WINDOW_DAYS;
+}
+
 // ─── Atoms ───────────────────────────────────────────────────────────────────
 
 
@@ -690,7 +702,15 @@ function OrderCycleWorkflow() {
 
   const counts = useMemo(() => {
     const c = { overview: 0, confirmation: 0, benefits: 0, auth: 0, lastPaid: 0, ready: 0 };
-    for (const p of all) { c.overview++; c[currentPhase(p)]++; }
+    for (const p of all) {
+      c.overview++;
+      const phase = currentPhase(p);
+      if (phase === "ready") { c.ready++; continue; }
+      // Order Prep phase counts are scoped to the 21-day order horizon —
+      // anything further out isn't in Order Prep yet so it shouldn't
+      // appear in the primary or sub-tab badges.
+      if (withinOrderPrepWindow(p)) c[phase]++;
+    }
     return c;
   }, [all]);
 
@@ -770,6 +790,12 @@ function OrderCycleWorkflow() {
       }
     } else {
       base = filteredAll.filter((p) => currentPhase(p) === phase);
+    }
+    // Order Prep 21-day horizon — only applies when the operator is in
+    // the Order Prep primary tab. Overview shows the whole board; Order
+    // (ready-to-submit) is its own filter and stays unbounded.
+    if (primary === "prep") {
+      base = base.filter(withinOrderPrepWindow);
     }
     // Apply sort. nextOrderDate uses lexical ISO compare which is
     // chronologically correct ("2026-06-15" < "2026-06-20"). Empty
