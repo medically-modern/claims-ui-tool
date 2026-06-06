@@ -274,8 +274,8 @@ export function PatientProfile() {
       return true;
     });
     const sorted = [...list].sort((a, b) => {
-      const av = String((a as Record<string, unknown>)[sortKey] ?? "");
-      const bv = String((b as Record<string, unknown>)[sortKey] ?? "");
+      const av = String((a as unknown as Record<string, unknown>)[sortKey] ?? "");
+      const bv = String((b as unknown as Record<string, unknown>)[sortKey] ?? "");
       return sortDir === "asc"
         ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" })
         : bv.localeCompare(av, undefined, { numeric: true, sensitivity: "base" });
