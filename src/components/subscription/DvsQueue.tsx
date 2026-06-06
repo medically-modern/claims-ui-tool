@@ -185,10 +185,6 @@ export function DvsQueue() {
 
   return (
     <div className="space-y-4">
-      <Card className="p-4 bg-purple-50 border-purple-200 text-sm">
-        <strong className="text-purple-900">Medicaid Supplies DVS workstation.</strong> NY Medicaid auths happen at order time via DVS through ePACES. Toggle to "Today or earlier", select all, click Run DVS — the ePACES Playwright bot fires the actual requests and writes the result back here. Most pass with Claim Paid; failures land in the retry queue for triage.
-      </Card>
-
       {/* Toggle + filters */}
       <Card className="p-4">
         <div className="flex flex-wrap items-center gap-3">
