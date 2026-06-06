@@ -255,6 +255,10 @@ export function PatientProfile() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("All");
   const [payerFilter, setPayerFilter] = useState<string>("All payers");
+  // Hide patients in the "Not Active Patients" Monday group by default.
+  // Operators can toggle this on when they need to dig into the inactive
+  // cohort (e.g. reactivations, manual review).
+  const [includeNotActive, setIncludeNotActive] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, EditableProfile>>({});
   const [dirtyMap, setDirtyMap] = useState<Record<string, boolean>>({});
@@ -271,6 +275,10 @@ export function PatientProfile() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = patients.filter((p) => {
+      // Group filter: by default hide "Not Active Patients" group entirely.
+      // Fall back to truthy check so the field being undefined (mock data
+      // / older cached entries) doesn't accidentally filter everyone out.
+      if (!includeNotActive && (p as { isNotActive?: boolean }).isNotActive) return false;
       if (statusFilter !== "All" && p.patientStatus !== statusFilter) return false;
       if (payerFilter !== "All payers" && p.primaryPayer !== payerFilter) return false;
       if (q && !(p.name.toLowerCase().includes(q) || p.phone.includes(q) || p.mondayItemId.includes(q))) return false;
@@ -284,7 +292,7 @@ export function PatientProfile() {
         : bv.localeCompare(av, undefined, { numeric: true, sensitivity: "base" });
     });
     return sorted;
-  }, [patients, search, statusFilter, payerFilter, sortKey, sortDir]);
+  }, [patients, search, statusFilter, payerFilter, includeNotActive, sortKey, sortDir]);
 
   function toggleSort(key: typeof sortKey) {
     if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -531,6 +539,18 @@ export function PatientProfile() {
             <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
             <SelectContent>{PAYER_OPTIONS.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
           </Select>
+          <label
+            className="inline-flex select-none items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium hover:bg-muted cursor-pointer"
+            title="Show patients in the Not Active Patients Monday group"
+          >
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 rounded border-input accent-primary"
+              checked={includeNotActive}
+              onChange={(e) => setIncludeNotActive(e.target.checked)}
+            />
+            Include Not Active
+          </label>
           <div className="text-xs text-muted-foreground tabular-nums">
             {filtered.length} of {patients.length} patients
           </div>

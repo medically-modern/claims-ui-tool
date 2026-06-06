@@ -149,11 +149,24 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   coinsurancePct: string; oopMax: string; oopMaxRemaining: string;
   // Claims
   primaryClaimPaid: string; secondaryClaimPaid: string;
+  // Group membership (used to filter Not Active patients out by default)
+  groupId: string;
+  isNotActive: boolean;
 }
 
 // ─── Monday types ───────────────────────────────────────────────────────────
 interface ColumnValue { id: string; text: string }
-interface MondayItem  { id: string; name: string; column_values: ColumnValue[] }
+interface MondayGroup { id: string; title: string }
+interface MondayItem  {
+  id: string; name: string;
+  group?: MondayGroup | null;
+  column_values: ColumnValue[];
+}
+
+// Subscription Board group IDs (verified 2026-06-06 via Monday API).
+// "Subscriptions" is the live cohort; everything in the "Not Active
+// Patients" group is hidden by default in the Patient Profile.
+const NOT_ACTIVE_GROUP_ID = "group_mkp19fyp";
 
 const PAGE_QUERY = `
   query SubFirstPage($boardId: ID!, $cols: [String!]!) {
@@ -162,6 +175,7 @@ const PAGE_QUERY = `
         cursor
         items {
           id name
+          group { id title }
           column_values(ids: $cols) { id text }
         }
       }
@@ -174,6 +188,7 @@ const NEXT_QUERY = `
       cursor
       items {
         id name
+        group { id title }
         column_values(ids: $cols) { id text }
       }
     }
@@ -363,6 +378,8 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
     oopMaxRemaining:     get(item, SUB_COL.oop_max_remaining),
     primaryClaimPaid:    get(item, SUB_COL.primary_claim_paid),
     secondaryClaimPaid:  get(item, SUB_COL.secondary_claim_paid),
+    groupId:             item.group?.id ?? "",
+    isNotActive:         item.group?.id === NOT_ACTIVE_GROUP_ID,
   };
 }
 

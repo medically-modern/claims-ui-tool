@@ -722,13 +722,6 @@ function OrderCycleWorkflow() {
     setTimeout(() => setBatchMsg(null), 6000);
   };
 
-  const sendReorderText = () => {
-    // TODO: wire to backend Twilio reorder-text endpoint. Likely flips a
-    // per-patient status column the backend listens on; column ID not
-    // yet confirmed in reference_subscription_board_columns.md.
-    setBatchMsg("Send Reorder Text not yet wired — pending backend endpoint.");
-    setTimeout(() => setBatchMsg(null), 5000);
-  };
 
   const filteredAll = useMemo(() => {
     return all.filter((p) => {
@@ -849,11 +842,9 @@ function OrderCycleWorkflow() {
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
-          {phase === "confirmation" && (
-            <Button variant="outline" size="sm" onClick={sendReorderText}>
-              <Send className="mr-2 h-4 w-4" />Send Reorder Text
-            </Button>
-          )}
+          {/* Send Reorder Text is auto-fired by Josh's backend automation
+              when status hits 20-days and reorder link is empty — no
+              manual button needed. */}
           {phase === "benefits" && (
             <Button
               variant="outline"
