@@ -16,7 +16,7 @@
 
 import { useMemo, useState } from "react";
 import {
-  ArrowRight, Building2, Check, ClipboardCheck, ExternalLink, Heart, Pencil,
+  ArrowRight, Building2, Check, ClipboardCheck, Clock, ExternalLink, Heart, MessageSquare, Pencil,
   RefreshCw, Search, Send, Server, Shield, UserCog, Unlock, UserCircle, X,
 } from "lucide-react";
 
@@ -152,6 +152,7 @@ function CheckpointCircle({
         title ?? [
           `${check.label}${check.detail ? " — " + check.detail : ""}`,
           check.changes?.length ? `Changes: ${check.changes.join(" • ")}` : null,
+          check.patientMessage ? `Patient message: ${check.patientMessage}` : null,
         ].filter(Boolean).join("\n")
       }
       className="relative inline-flex items-center justify-center"
@@ -173,6 +174,18 @@ function CheckpointCircle({
         <Pencil
           className="absolute -bottom-1 -right-1 h-3 w-3 text-orange-600 bg-white rounded-full p-[1px] ring-1 ring-orange-200"
           aria-label="changes"
+        />
+      )}
+      {check.delayed && (
+        <Clock
+          className="absolute -bottom-1 -left-1 h-3 w-3 text-amber-600 bg-white rounded-full p-[1px] ring-1 ring-amber-200"
+          aria-label="delayed"
+        />
+      )}
+      {check.patientMessage && (
+        <MessageSquare
+          className="absolute -top-1 -left-1 h-3 w-3 text-sky-600 bg-white rounded-full p-[1px] ring-1 ring-sky-200"
+          aria-label="patient message"
         />
       )}
     </button>

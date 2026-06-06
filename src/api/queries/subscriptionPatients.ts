@@ -1,0 +1,396 @@
+/**
+ * subscriptionPatients.ts — live read of the Subscription Board
+ * (18407459988) for all Subscription tabs (Order Cycle, Patient
+ * Profile, Authorizations, Medical Records, Financials).
+ *
+ * Pulls every column referenced anywhere in the Subscription Board UI
+ * in a single paged query. Maps Monday cells to a SubscriptionPatient
+ * shape compatible with the existing mock-data shape so tab consumers
+ * can swap in live data without changing render code.
+ *
+ * Checkpoint derivation (Order Cycle):
+ *   Confirmation  -> color_mm3kjykc 'Patient Order Response'
+ *                   (Confirmed / Delayed) + color_mm3k4z79 'Patient
+ *                    Insurance Response' for the change-detected flag
+ *   Benefits      -> color_mm2nzm33 'Active?'
+ *                    Active                    -> ok
+ *                    Inactive / MA             -> bad
+ *                    blank / Failed Check      -> pending
+ *   Auth          -> color_mm25t997 'Sensors Auth Status' +
+ *                    color_mm27snkq 'Supplies Auth Status'
+ *                    Both must be one of 'Auth Valid' | 'Not Serving' |
+ *                    'No Auth Needed' for ok. Sensors-only subscriptions
+ *                    ignore Supplies; Supplies-only subscriptions ignore
+ *                    Sensors.
+ *   Last Paid     -> color_mm33spks 'Primary Claim Paid?' +
+ *                    color_mm3aa9bx 'Secondary Claim Paid?'
+ */
+
+import { mondayQuery } from "../monday";
+import type {
+  Checkpoint, CheckpointTone, SubscriptionPatient, SubscriptionType,
+  PatientStatus,
+} from "@/components/subscription/mockData";
+
+export const SUBSCRIPTION_BOARD_ID = 18407459988;
+
+// ─── Column id map ──────────────────────────────────────────────────────────
+export const SUB_COL = {
+  // Identity / contact
+  dob:               "text_mkvdefh1",
+  gender:            "color_mm1zgyy2",
+  patient_uid:       "text_mm3af3zt",
+  phone:             "phone_mkp0q3cw",
+  email:             "email_mkp01rrw",
+  patient_address:   "location_mkp0rs0v",
+  // Subscription
+  subscription:      "color_mm273mv8",
+  ordering_cycle:    "color_mkyjawhq",
+  next_order:        "date_mkp0nvf1",
+  sensors_type:      "color_mkxmdscr",
+  supplies_type:     "color_mkxmnheg",
+  inf_set_1:         "color_mkxm50f9",
+  inf_qty_1:         "numeric_mkw839ks",
+  inf_set_2:         "color_mkxmx5wk",
+  inf_qty_2:         "numeric_mkwac234",
+  patient_notes:     "long_text_mm3rj7k7",
+  // Insurance
+  primary_insurance:   "color_mm254qxj",
+  member_id_1:         "text_mkvp6zfg",
+  secondary_insurance: "color_mm25cr82",
+  member_id_2:         "text_mm25cpx6",
+  insurance_card:      "file_mm3knk5q",
+  active:              "color_mm2nzm33",
+  patient_insurance_response: "color_mm3k4z79",
+  patient_order_response:     "color_mm3kjykc",
+  patient_help_message:       "long_text_mm3xnb6k",
+  // Doctor
+  doctor:           "text_mkxn3wza",
+  npi:              "text_mkxnkgzg",
+  doctor_address:   "location_mkxnbt7y",
+  doctor_phone:     "phone_mkxnv7e5",
+  doctor_fax:       "email_mkxn9af2",
+  fax_parachute:    "color_mm25t5q",
+  // Status / flags
+  status:           "color_mm2t7tdy",
+  pause_reason:     "dropdown_mm2v3gfy",
+  dead_reason:      "dropdown_mm27mdkh",
+  // Clinical
+  mn_expiry:        "date_mkp09gra",
+  diagnosis:        "color_mkxrxv9w",
+  mn_docs:          "file_mkp0vm0a",
+  // Auth
+  sensors_auth_status:  "color_mm25t997",
+  sensors_auth_id:      "text_mkwbkq9d",
+  sensors_auth_start:   "date_mkwb4q5e",
+  sensors_auth_end:     "date_mkwbvr6t",
+  sensors_units:        "numeric_mkwbzsg2",
+  sensors_id_2:         "text_mm273kgs",
+  supplies_auth_status: "color_mm27snkq",
+  inf_set_auth_id:      "text_mm28v64f",
+  cartridge_auth_id:    "text_mm255y04",
+  supplies_auth_start:  "date_mm25csyr",
+  supplies_auth_end:    "date_mm255cs4",
+  supplies_units:       "numeric_mm25mf8k",
+  prior_auth_req:       "color_mm2pj23n",
+  trigger_dvs:          "color_mm2narpj",
+  // Eligibility outputs
+  stedi_payer_name:     "dropdown_mm2nz3wd",
+  stedi_plan_name:      "dropdown_mm2n7ps1",
+  stedi_member_id:      "text_mm2phve4",
+  date_plan_begin:      "text_mm3grb6t",
+  deductible:           "text_mm3gbped",
+  ded_remaining:        "text_mm3g32ja",
+  coinsurance:          "text_mm3gphed",
+  oop_max:              "text_mm3gh0q3",
+  oop_max_remaining:    "text_mm3gs345",
+  qmb:                  "text_mm3gr7rh",
+  // Claims
+  primary_claim_paid:   "color_mm33spks",
+  secondary_claim_paid: "color_mm3aa9bx",
+} as const;
+
+const READ_IDS = Object.values(SUB_COL);
+
+// ─── Type extensions ───────────────────────────────────────────────────────
+/**
+ * Extended SubscriptionPatient with the extra columns the Patient
+ * Profile + tabs need. Compatible with the mock's SubscriptionPatient
+ * (all those fields are present); adds Monday-only data so consumers
+ * can edit a wide form against a single object.
+ */
+export interface LiveSubscriptionPatient extends SubscriptionPatient {
+  dob: string; gender: string; patientUid: string; email: string; address: string;
+  sensorsType: string; suppliesType: string;
+  infusionSet1: string; infusionSet1Qty: string;
+  infusionSet2: string; infusionSet2Qty: string;
+  subscriptionNotes: string;
+  memberId1: string; secondaryInsurance: string; memberId2: string;
+  insuranceCardName: string;
+  patientInsuranceResponse: string;
+  patientOrderResponse: string;
+  patientHelpMessage: string;
+  doctorName: string; doctorNpi: string; doctorAddress: string;
+  doctorPhone: string; doctorFax: string; clinicalsMethod: string;
+  diagnosis: string; mnExpiry: string; mnDocsName: string;
+  // Auth (per-product)
+  sensorsAuthStatus: string; sensorsAuthId: string;
+  sensorsAuthStart: string; sensorsAuthEnd: string; sensorsAuthUnits: string;
+  sensorsId2: string;
+  suppliesAuthStatus: string;
+  infusionAuthId: string; cartridgeAuthId: string;
+  suppliesAuthStart: string; suppliesAuthEnd: string; suppliesAuthUnits: string;
+  priorAuthReq: string;
+  triggerDvs: string;
+  // Eligibility
+  active: string;
+  stediMemberId: string; stediPayerName: string; stediPlanName: string;
+  datePlanBegin: string; deductibleAmt: string; dedRemaining: string;
+  coinsurancePct: string; oopMax: string; oopMaxRemaining: string;
+  // Claims
+  primaryClaimPaid: string; secondaryClaimPaid: string;
+}
+
+// ─── Monday types ───────────────────────────────────────────────────────────
+interface ColumnValue { id: string; text: string }
+interface MondayItem  { id: string; name: string; column_values: ColumnValue[] }
+
+const PAGE_QUERY = `
+  query SubFirstPage($boardId: ID!, $cols: [String!]!) {
+    boards(ids: [$boardId]) {
+      items_page(limit: 500) {
+        cursor
+        items {
+          id name
+          column_values(ids: $cols) { id text }
+        }
+      }
+    }
+  }
+`;
+const NEXT_QUERY = `
+  query SubNextPage($cursor: String!, $cols: [String!]!) {
+    next_items_page(cursor: $cursor, limit: 500) {
+      cursor
+      items {
+        id name
+        column_values(ids: $cols) { id text }
+      }
+    }
+  }
+`;
+
+// ─── Cell helpers ───────────────────────────────────────────────────────────
+function get(item: MondayItem, col: string): string {
+  return (item.column_values.find((c) => c.id === col)?.text ?? "").trim();
+}
+
+// ─── Checkpoint derivation ──────────────────────────────────────────────────
+const AUTH_OK = new Set(["Auth Valid", "Not Serving", "No Auth Needed"]);
+
+function deriveConfirmation(item: MondayItem): Checkpoint {
+  const por = get(item, SUB_COL.patient_order_response);
+  const pir = get(item, SUB_COL.patient_insurance_response);
+  const msg = get(item, SUB_COL.patient_help_message);
+  const changes: string[] = [];
+  if (pir && pir !== "" && pir.toLowerCase() !== "no") changes.push(`Insurance: ${pir}`);
+
+  let tone: CheckpointTone = "pending";
+  let label = "Awaiting";
+  const delayed = por === "Delayed";
+  if (por === "Confirmed") { tone = "ok"; label = "Confirmed"; }
+  else if (delayed)        { tone = "ok"; label = "Confirmed (delayed)"; }
+  return {
+    tone,
+    label,
+    pill: delayed ? "Delayed" : undefined,
+    changes: changes.length ? changes : undefined,
+    delayed: delayed || undefined,
+    patientMessage: msg || undefined,
+  };
+}
+
+function deriveBenefits(item: MondayItem): Checkpoint {
+  const active = get(item, SUB_COL.active);
+  if (!active) return { tone: "pending", label: "Not run" };
+  if (active === "Active") return { tone: "ok", label: "Active" };
+  if (active === "Inactive" || active === "Medicare Advantage") {
+    return { tone: "bad", label: active };
+  }
+  return { tone: "warn", label: active };
+}
+
+function deriveAuth(item: MondayItem, subType: string): Checkpoint {
+  const sensors  = get(item, SUB_COL.sensors_auth_status);
+  const supplies = get(item, SUB_COL.supplies_auth_status);
+  const needSensors  = subType !== "Supplies";
+  const needSupplies = subType !== "Sensors";
+  const sensorsOk  = !needSensors  || AUTH_OK.has(sensors);
+  const suppliesOk = !needSupplies || AUTH_OK.has(supplies);
+  if (sensorsOk && suppliesOk) {
+    return { tone: "ok", label: "Valid", pill: undefined };
+  }
+  // Pick the more-severe label between the two relevant statuses
+  const labels = [
+    needSensors  ? sensors  : "",
+    needSupplies ? supplies : "",
+  ].filter(Boolean);
+  return {
+    tone: labels.some((l) => /(Denied|Expired|Mismatch|Required)/i.test(l)) ? "bad" : "warn",
+    label: labels.join(" / ") || "Not set",
+  };
+}
+
+function deriveLastPaid(item: MondayItem): Checkpoint {
+  const pri = get(item, SUB_COL.primary_claim_paid);
+  const sec = get(item, SUB_COL.secondary_claim_paid);
+  // Treat blank as pending; "Paid" / "Fully Paid" as ok; anything else
+  // (Denied, Partially Paid, Underpaid, Patient Paid, etc.) as warn/bad.
+  function statusToTone(v: string): CheckpointTone {
+    if (!v) return "pending";
+    if (/(Paid|Fully Paid|Patient Paid)/i.test(v)) return "ok";
+    if (/Denied/i.test(v)) return "bad";
+    return "warn";
+  }
+  const priTone = statusToTone(pri);
+  const secTone = sec ? statusToTone(sec) : "ok"; // empty secondary = no secondary needed
+  const tones: CheckpointTone[] = [priTone, secTone];
+  let tone: CheckpointTone = "ok";
+  if (tones.includes("bad")) tone = "bad";
+  else if (tones.includes("warn")) tone = "warn";
+  else if (tones.includes("pending")) tone = "pending";
+
+  return {
+    tone,
+    label: pri || "Not run",
+    detail: sec ? `Secondary: ${sec}` : undefined,
+  };
+}
+
+function normalizeSubscriptionType(raw: string): SubscriptionType {
+  if (raw === "Sensors" || raw === "Supplies" || raw === "Sensors & Supplies") return raw;
+  // Map any other label sensibly — default to Sensors & Supplies (most permissive)
+  if (raw.toLowerCase().includes("sensor") && raw.toLowerCase().includes("supplies")) return "Sensors & Supplies";
+  if (raw.toLowerCase().includes("sensor"))  return "Sensors";
+  if (raw.toLowerCase().includes("supplies")) return "Supplies";
+  return "Sensors & Supplies";
+}
+
+function normalizeStatus(raw: string): PatientStatus {
+  if (raw === "Paused" || raw === "Dead") return raw;
+  return "Active";
+}
+
+// ─── Map one item ───────────────────────────────────────────────────────────
+function mapItem(item: MondayItem): LiveSubscriptionPatient {
+  const subType = normalizeSubscriptionType(get(item, SUB_COL.subscription));
+  const confirmation = deriveConfirmation(item);
+  const benefits     = deriveBenefits(item);
+  const auth         = deriveAuth(item, subType);
+  const lastPaid     = deriveLastPaid(item);
+
+  return {
+    // Base SubscriptionPatient
+    id: item.id,
+    mondayItemId: item.id,
+    name: item.name,
+    phone: get(item, SUB_COL.phone),
+    primaryPayer: get(item, SUB_COL.primary_insurance) || "—",
+    nextOrderDate: get(item, SUB_COL.next_order),
+    subscriptionType: subType,
+    runCheck: "—",
+    patientStatus: normalizeStatus(get(item, SUB_COL.status)),
+    pauseReason: get(item, SUB_COL.pause_reason) || undefined,
+    deadReason:  get(item, SUB_COL.dead_reason)  || undefined,
+    orderingCycle: get(item, SUB_COL.ordering_cycle) || undefined,
+    confirmation,
+    benefits,
+    auth,
+    lastPaid,
+
+    // Extended fields
+    dob:                 get(item, SUB_COL.dob),
+    gender:              get(item, SUB_COL.gender),
+    patientUid:          get(item, SUB_COL.patient_uid),
+    email:               get(item, SUB_COL.email),
+    address:             get(item, SUB_COL.patient_address),
+    sensorsType:         get(item, SUB_COL.sensors_type),
+    suppliesType:        get(item, SUB_COL.supplies_type),
+    infusionSet1:        get(item, SUB_COL.inf_set_1),
+    infusionSet1Qty:     get(item, SUB_COL.inf_qty_1),
+    infusionSet2:        get(item, SUB_COL.inf_set_2),
+    infusionSet2Qty:     get(item, SUB_COL.inf_qty_2),
+    subscriptionNotes:   get(item, SUB_COL.patient_notes),
+    memberId1:           get(item, SUB_COL.member_id_1),
+    secondaryInsurance:  get(item, SUB_COL.secondary_insurance),
+    memberId2:           get(item, SUB_COL.member_id_2),
+    insuranceCardName:   get(item, SUB_COL.insurance_card),
+    patientInsuranceResponse: get(item, SUB_COL.patient_insurance_response),
+    patientOrderResponse:     get(item, SUB_COL.patient_order_response),
+    patientHelpMessage:       get(item, SUB_COL.patient_help_message),
+    doctorName:          get(item, SUB_COL.doctor),
+    doctorNpi:           get(item, SUB_COL.npi),
+    doctorAddress:       get(item, SUB_COL.doctor_address),
+    doctorPhone:         get(item, SUB_COL.doctor_phone),
+    doctorFax:           get(item, SUB_COL.doctor_fax),
+    clinicalsMethod:     get(item, SUB_COL.fax_parachute),
+    diagnosis:           get(item, SUB_COL.diagnosis),
+    mnExpiry:            get(item, SUB_COL.mn_expiry),
+    mnDocsName:          get(item, SUB_COL.mn_docs),
+    sensorsAuthStatus:   get(item, SUB_COL.sensors_auth_status),
+    sensorsAuthId:       get(item, SUB_COL.sensors_auth_id),
+    sensorsAuthStart:    get(item, SUB_COL.sensors_auth_start),
+    sensorsAuthEnd:      get(item, SUB_COL.sensors_auth_end),
+    sensorsAuthUnits:    get(item, SUB_COL.sensors_units),
+    sensorsId2:          get(item, SUB_COL.sensors_id_2),
+    suppliesAuthStatus:  get(item, SUB_COL.supplies_auth_status),
+    infusionAuthId:      get(item, SUB_COL.inf_set_auth_id),
+    cartridgeAuthId:     get(item, SUB_COL.cartridge_auth_id),
+    suppliesAuthStart:   get(item, SUB_COL.supplies_auth_start),
+    suppliesAuthEnd:     get(item, SUB_COL.supplies_auth_end),
+    suppliesAuthUnits:   get(item, SUB_COL.supplies_units),
+    priorAuthReq:        get(item, SUB_COL.prior_auth_req),
+    triggerDvs:          get(item, SUB_COL.trigger_dvs),
+    active:              get(item, SUB_COL.active),
+    stediMemberId:       get(item, SUB_COL.stedi_member_id),
+    stediPayerName:      get(item, SUB_COL.stedi_payer_name),
+    stediPlanName:       get(item, SUB_COL.stedi_plan_name),
+    datePlanBegin:       get(item, SUB_COL.date_plan_begin),
+    deductibleAmt:       get(item, SUB_COL.deductible),
+    dedRemaining:        get(item, SUB_COL.ded_remaining),
+    coinsurancePct:      get(item, SUB_COL.coinsurance),
+    oopMax:              get(item, SUB_COL.oop_max),
+    oopMaxRemaining:     get(item, SUB_COL.oop_max_remaining),
+    primaryClaimPaid:    get(item, SUB_COL.primary_claim_paid),
+    secondaryClaimPaid:  get(item, SUB_COL.secondary_claim_paid),
+  };
+}
+
+// ─── Fetcher ────────────────────────────────────────────────────────────────
+interface PageResponse {
+  boards: Array<{ items_page: { cursor: string | null; items: MondayItem[] } }>;
+}
+interface NextPageResponse {
+  next_items_page: { cursor: string | null; items: MondayItem[] };
+}
+
+export async function fetchSubscriptionPatients(): Promise<LiveSubscriptionPatient[]> {
+  const out: LiveSubscriptionPatient[] = [];
+
+  const first = await mondayQuery<PageResponse>(PAGE_QUERY, {
+    boardId: String(SUBSCRIPTION_BOARD_ID),
+    cols: READ_IDS,
+  });
+  for (const it of first.boards[0]?.items_page?.items ?? []) out.push(mapItem(it));
+  let cursor = first.boards[0]?.items_page?.cursor ?? null;
+
+  while (cursor) {
+    const next = await mondayQuery<NextPageResponse>(NEXT_QUERY, {
+      cursor,
+      cols: READ_IDS,
+    });
+    for (const it of next.next_items_page?.items ?? []) out.push(mapItem(it));
+    cursor = next.next_items_page?.cursor ?? null;
+  }
+  return out;
+}

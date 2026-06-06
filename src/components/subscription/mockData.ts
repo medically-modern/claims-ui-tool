@@ -22,6 +22,13 @@ export type Checkpoint = {
   /** Pill-displayed metadata. Used for Auth (auth-end date) and Last Paid
       (link / amount). Keeps the row legible without opening the popover. */
   pill?: string;
+  /** True when the patient delayed via the reorder form. Confirmation tone
+   *  stays green but the circle renders a Clock overlay so ops know. */
+  delayed?: boolean;
+  /** Free-text help message from the patient via the reorder form (Patient
+   *  Help Message column on Monday). Renders a MessageSquare overlay on the
+   *  Confirmation circle so ops can hover to read it. */
+  patientMessage?: string;
 };
 
 export type SubscriptionType = "Sensors" | "Supplies" | "Sensors & Supplies";

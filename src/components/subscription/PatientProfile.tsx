@@ -39,9 +39,12 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 
 import {
-  ORDER_PREP_PATIENTS, PAYER_OPTIONS, PAUSE_REASON_OPTIONS,
-  PATIENT_STATUS_OPTIONS, SubscriptionPatient,
+  PAYER_OPTIONS, PAUSE_REASON_OPTIONS, PATIENT_STATUS_OPTIONS,
 } from "./mockData";
+import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
+import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
+import { runEligibilityCheck, saveSubscriptionPatient } from "@/api/setSubscriptionPatient";
+import { Loader2, RefreshCw as ReloadIcon } from "lucide-react";
 
 // ─── Field shape ─────────────────────────────────────────────────────────────
 type EditableProfile = {
@@ -106,7 +109,64 @@ const GENDERS         = ["Male", "Female"];
 const DEAD_REASONS    = ["No reason on file", "Switched supplier", "Deceased", "Insurance dropped", "Patient request"];
 const SECONDARY_PAYERS = ["None", "Medicare A&B", "Medicaid", "United Medicaid", "Cigna", "Anthem BCBS Commercial"];
 
-function defaultsFromPatient(p: SubscriptionPatient): EditableProfile {
+function defaultsFromLivePatient(p: LiveSubscriptionPatient): EditableProfile {
+  // Live mapping — fill from Monday columns, fall back to "" for any
+  // field that doesn't have a corresponding column yet (MN Docs files,
+  // Insurance Card file, etc. — those are file columns we'll wire
+  // later in a separate pass).
+  return {
+    name: p.name,
+    dob:  p.dob,
+    gender: p.gender,
+    phone: p.phone,
+    email: p.email,
+    address: p.address,
+    patientUid: p.patientUid || p.mondayItemId,
+    subscriptionType: p.subscriptionType,
+    nextOrderDate: p.nextOrderDate,
+    sensorsType: p.sensorsType,
+    suppliesType: p.suppliesType,
+    infusionSet1: p.infusionSet1,
+    infusionSet1Qty: p.infusionSet1Qty,
+    infusionSet2: p.infusionSet2,
+    infusionSet2Qty: p.infusionSet2Qty,
+    primaryInsurance: p.primaryPayer,
+    memberId1: p.memberId1,
+    secondaryInsurance: p.secondaryInsurance,
+    memberId2: p.memberId2,
+    insuranceCardName: p.insuranceCardName,
+    doctorName: p.doctorName,
+    doctorNpi: p.doctorNpi,
+    doctorAddress: p.doctorAddress,
+    doctorPhone: p.doctorPhone,
+    doctorFax: p.doctorFax,
+    clinicalsMethod: p.clinicalsMethod,
+    status: p.patientStatus,
+    pauseReason: p.pauseReason ?? "",
+    deadReason: p.deadReason ?? "",
+    diagnosis: p.diagnosis,
+    mnExpiry: p.mnExpiry,
+    mnDocs: [],
+    sensorsAuthStatus: p.sensorsAuthStatus,
+    sensorsAuthId: p.sensorsAuthId,
+    sensorsAuthStart: p.sensorsAuthStart,
+    sensorsAuthEnd: p.sensorsAuthEnd,
+    sensorsAuthUnits: p.sensorsAuthUnits,
+    suppliesAuthStatus: p.suppliesAuthStatus,
+    infusionAuthId: p.infusionAuthId,
+    cartridgeAuthId: p.cartridgeAuthId,
+    suppliesAuthStart: p.suppliesAuthStart,
+    suppliesAuthEnd: p.suppliesAuthEnd,
+    suppliesAuthUnits: p.suppliesAuthUnits,
+    priorAuthReqSensors: p.priorAuthReq,
+    priorAuthReqSupplies: p.priorAuthReq,
+    triggerDvs: p.triggerDvs,
+  };
+}
+
+// Legacy mock-data shim kept around for any test code that imports it.
+// Returns the same shape but built from a stripped-down SubscriptionPatient.
+function defaultsFromPatient(p: { id: string; name: string; phone: string; primaryPayer: string; nextOrderDate: string; subscriptionType: string; mondayItemId: string; patientStatus: string; pauseReason?: string; deadReason?: string }): EditableProfile {
   const h = hash(p.id);
   const dobY = 1955 + (h % 35);
   const dobM = String((h % 12) + 1).padStart(2, "0");
@@ -185,10 +245,15 @@ export function PatientProfile() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, EditableProfile>>({});
   const [dirtyMap, setDirtyMap] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState(false);
+  const [runningElig, setRunningElig] = useState(false);
+
+  const { data: livePatients, loading, error, usingMock, refetch } = useSubscriptionPatients();
+  const patients: LiveSubscriptionPatient[] = livePatients ?? [];
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return ORDER_PREP_PATIENTS.filter((p) => {
+    return patients.filter((p) => {
       if (statusFilter !== "All" && p.patientStatus !== statusFilter) return false;
       if (payerFilter !== "All payers" && p.primaryPayer !== payerFilter) return false;
       if (q && !(p.name.toLowerCase().includes(q) || p.phone.includes(q) || p.mondayItemId.includes(q))) return false;
@@ -196,33 +261,74 @@ export function PatientProfile() {
     });
   }, [search, statusFilter, payerFilter]);
 
-  function openPatient(p: SubscriptionPatient) {
+  function openPatient(p: LiveSubscriptionPatient) {
     setOpenId(p.id);
-    setDrafts((d) => d[p.id] ? d : { ...d, [p.id]: defaultsFromPatient(p) });
+    setDrafts((d) => d[p.id] ? d : { ...d, [p.id]: defaultsFromLivePatient(p) });
   }
   function update<K extends keyof EditableProfile>(k: K, v: EditableProfile[K]) {
     if (!openId) return;
     setDrafts((d) => ({ ...d, [openId]: { ...d[openId], [k]: v } }));
     setDirtyMap((m) => ({ ...m, [openId]: true }));
   }
-  function save() {
-    if (!openId) return;
-    setDirtyMap((m) => ({ ...m, [openId]: false }));
-    toast.success("Saved — would write to Monday on production");
+  async function save() {
+    if (!openId || !draft) return;
+    const opened = patients.find((p) => p.id === openId);
+    if (!opened) return;
+    setSaving(true);
+    // Compute diff against the live patient — only write fields the
+    // operator actually changed.
+    const original = defaultsFromLivePatient(opened);
+    const patch: Record<string, string> = {};
+    (Object.keys(draft) as (keyof EditableProfile)[]).forEach((k) => {
+      if (k === "mnDocs") return;
+      if (draft[k] !== original[k]) patch[k as string] = String(draft[k]);
+    });
+    if (Object.keys(patch).length === 0) {
+      toast.message("Nothing to save.");
+      setSaving(false);
+      return;
+    }
+    try {
+      const result = await saveSubscriptionPatient(opened.mondayItemId, patch);
+      if (result.failed.length === 0) {
+        toast.success(`Saved ${result.ok.length} field${result.ok.length === 1 ? "" : "s"}`);
+      } else {
+        toast.error(`Saved ${result.ok.length}, ${result.failed.length} failed`, {
+          description: result.failed.map((f) => `${f.field}: ${f.error}`).slice(0, 3).join("\n"),
+          duration: 12_000,
+        });
+      }
+      setDirtyMap((m) => ({ ...m, [openId]: false }));
+      void refetch();
+    } finally {
+      setSaving(false);
+    }
   }
   function discard() {
     if (!openId) return;
-    const p = ORDER_PREP_PATIENTS.find((x) => x.id === openId);
+    const p = patients.find((x) => x.id === openId);
     if (!p) return;
-    setDrafts((d) => ({ ...d, [openId]: defaultsFromPatient(p) }));
+    setDrafts((d) => ({ ...d, [openId]: defaultsFromLivePatient(p) }));
     setDirtyMap((m) => ({ ...m, [openId]: false }));
   }
-  function runEligibility() {
+  async function runEligibility() {
     if (!openId) return;
-    toast.success("Run Check flipped to \"Run\" on Monday — webhook will fire the eligibility check");
+    const opened = patients.find((p) => p.id === openId);
+    if (!opened) return;
+    setRunningElig(true);
+    try {
+      await runEligibilityCheck(opened.mondayItemId);
+      toast.success("Run Check flipped to 'Run' on Monday", {
+        description: "Webhook will fire the eligibility check; refresh in a few seconds.",
+      });
+    } catch (e) {
+      toast.error("Couldn't flip Run Check", { description: (e as Error).message });
+    } finally {
+      setRunningElig(false);
+    }
   }
 
-  const opened = openId ? ORDER_PREP_PATIENTS.find((p) => p.id === openId) : null;
+  const opened = openId ? patients.find((p) => p.id === openId) : null;
   const draft  = openId ? drafts[openId] : null;
   const dirty  = openId ? !!dirtyMap[openId] : false;
 
@@ -246,8 +352,8 @@ export function PatientProfile() {
             </div>
             <div className="flex items-center gap-2">
               {dirty && <Button variant="outline" size="sm" onClick={discard}>Discard</Button>}
-              <Button size="sm" disabled={!dirty} onClick={save}>
-                <Save className="mr-2 h-4 w-4" />Save changes
+              <Button size="sm" disabled={!dirty || saving} onClick={save}>
+                {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</> : <><Save className="mr-2 h-4 w-4" />Save changes</>}
               </Button>
             </div>
           </div>
@@ -276,8 +382,8 @@ export function PatientProfile() {
           </FormSection>
 
           <FormSection title="Insurance" action={
-            <Button size="sm" variant="outline" onClick={runEligibility}>
-              <RefreshCw className="mr-2 h-3.5 w-3.5" />Run Eligibility Check
+            <Button size="sm" variant="outline" onClick={runEligibility} disabled={runningElig}>
+              {runningElig ? <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />Running…</> : <><RefreshCw className="mr-2 h-3.5 w-3.5" />Run Eligibility Check</>}
             </Button>
           }>
             <SelectField label="Primary insurance" value={draft.primaryInsurance} onChange={(v) => update("primaryInsurance", v)} options={PAYER_OPTIONS.filter((p) => p !== "All payers")} />
@@ -366,6 +472,19 @@ export function PatientProfile() {
   // ─── Main table view ─────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
+      {usingMock && (
+        <Card className="p-3 bg-amber-50 border-amber-200 text-xs text-amber-900 flex items-center gap-2">
+          <ReloadIcon className="h-3.5 w-3.5" />
+          Couldn\'t reach Monday — showing mock data. {error}
+          <Button variant="ghost" size="sm" className="h-6 ml-auto" onClick={() => void refetch()}>Retry</Button>
+        </Card>
+      )}
+      {loading && livePatients === undefined && (
+        <Card className="p-12 text-center">
+          <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin text-muted-foreground" />
+          <div className="text-sm text-muted-foreground">Loading patients from Monday…</div>
+        </Card>
+      )}
       <Card className="p-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[260px]">
@@ -381,7 +500,7 @@ export function PatientProfile() {
             <SelectContent>{PAYER_OPTIONS.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
           </Select>
           <div className="text-xs text-muted-foreground tabular-nums">
-            {filtered.length} of {ORDER_PREP_PATIENTS.length} patients
+            {filtered.length} of {patients.length} patients
           </div>
         </div>
       </Card>
