@@ -248,21 +248,12 @@ export async function fireSendInvoiceTrigger(
     boardId: String(SECONDARY_BOARD_ID),
     value: JSON.stringify({ label: "Sent" }),
   });
-  // Stamp Pay Link Sent Date with today's ISO. Best-effort — if Monday
-  // hiccups on the date write the SMS automation has already fired and
-  // the operator still gets confirmation. Same defensive pattern as
-  // the follow-up date stamp below.
-  try {
-    const today = new Date().toISOString().slice(0, 10);
-    await mondayQuery(SET_DATE_MUT, {
-      itemId: mondayItemId,
-      boardId: String(SECONDARY_BOARD_ID),
-      columnId: PAY_LINK_SENT_DATE_COL,
-      value: JSON.stringify({ date: today }),
-    });
-  } catch {
-    // Date write hiccup shouldn't look like the SMS failed.
-  }
+  // NOTE: do NOT stamp PAY_LINK_SENT_DATE_COL here — Josh's Monday
+  // automation already writes that date column when the patient
+  // checkout link is generated upstream of our Send Invoice click.
+  // Stamping again from our side would be a redundant Monday write.
+  // We just READ that column via allSecondaryClaims and render it
+  // on the row header.
 }
 
 /**
