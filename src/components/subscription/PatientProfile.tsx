@@ -85,6 +85,18 @@ function hash(s: string): number {
 }
 function pick<T>(arr: readonly T[], h: number): T { return arr[h % arr.length]; }
 
+/** Format a phone-ish string into (XXX)-XXX-XXXX. Handles bare digits,
+ *  +1-prefixed, and mixed-format strings. Returns the input as-is if
+ *  it can\'t be parsed into 10 digits.
+ */
+function fmtPhone(raw: string): string {
+  if (!raw) return "";
+  const digits = raw.replace(/\D/g, "");
+  const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (ten.length !== 10) return raw;
+  return `(${ten.slice(0, 3)})-${ten.slice(3, 6)}-${ten.slice(6)}`;
+}
+
 /** Format an ISO YYYY-MM-DD into MM/DD/YYYY. Returns empty if invalid. */
 function fmtDobUS(iso: string): string {
   if (!iso) return "";
@@ -247,19 +259,34 @@ export function PatientProfile() {
   const [dirtyMap, setDirtyMap] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [runningElig, setRunningElig] = useState(false);
+  const [sortKey, setSortKey] = useState<"name" | "phone" | "dob" | "primaryPayer" | "subscriptionType" | "nextOrderDate" | "patientStatus" | "doctorName">("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   const { data: livePatients, loading, error, usingMock, refetch } = useSubscriptionPatients();
   const patients: LiveSubscriptionPatient[] = livePatients ?? [];
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return patients.filter((p) => {
+    const list = patients.filter((p) => {
       if (statusFilter !== "All" && p.patientStatus !== statusFilter) return false;
       if (payerFilter !== "All payers" && p.primaryPayer !== payerFilter) return false;
       if (q && !(p.name.toLowerCase().includes(q) || p.phone.includes(q) || p.mondayItemId.includes(q))) return false;
       return true;
     });
-  }, [patients, search, statusFilter, payerFilter]);
+    const sorted = [...list].sort((a, b) => {
+      const av = String((a as Record<string, unknown>)[sortKey] ?? "");
+      const bv = String((b as Record<string, unknown>)[sortKey] ?? "");
+      return sortDir === "asc"
+        ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" })
+        : bv.localeCompare(av, undefined, { numeric: true, sensitivity: "base" });
+    });
+    return sorted;
+  }, [patients, search, statusFilter, payerFilter, sortKey, sortDir]);
+
+  function toggleSort(key: typeof sortKey) {
+    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("asc"); }
+  }
 
   function openPatient(p: LiveSubscriptionPatient) {
     setOpenId(p.id);
@@ -509,27 +536,23 @@ export function PatientProfile() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Patient</TableHead>
-              <TableHead>Phone</TableHead>
-              <TableHead>DOB</TableHead>
-              <TableHead>Primary Insurance</TableHead>
-              <TableHead>Subscription</TableHead>
-              <TableHead>Next Order</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Doctor</TableHead>
+              <SortableHead label="Patient"            k="name"             sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <SortableHead label="Phone"              k="phone"            sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <SortableHead label="DOB"                k="dob"              sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <SortableHead label="Primary Insurance"  k="primaryPayer"     sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <SortableHead label="Subscription"       k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <SortableHead label="Next Order"         k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <SortableHead label="Status"             k="patientStatus"    sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <SortableHead label="Doctor"             k="doctorName"       sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
             </TableRow>
           </TableHeader>
           <TableBody>
             {filtered.map((p) => {
-              const h = hash(p.id);
-              const dobIso = `${1955 + (h % 35)}-${String((h % 12) + 1).padStart(2, "0")}-${String((h % 28) + 1).padStart(2, "0")}`;
-              const dob = fmtDobUS(dobIso);
-              const doctor = `Dr. ${pick(DOCTORS, h)}`;
               return (
                 <TableRow key={p.id} className="cursor-pointer hover:bg-muted/40" onClick={() => openPatient(p)}>
                   <TableCell className="font-medium">{p.name}</TableCell>
-                  <TableCell className="text-muted-foreground tabular-nums text-xs">{p.phone}</TableCell>
-                  <TableCell className="tabular-nums text-xs">{dob}</TableCell>
+                  <TableCell className="tabular-nums">{fmtPhone(p.phone)}</TableCell>
+                  <TableCell className="tabular-nums">{fmtDobUS(p.dob) || p.dob}</TableCell>
                   <TableCell>{p.primaryPayer}</TableCell>
                   <TableCell><span className={SUB_TYPE_PILLS[p.subscriptionType] ?? SUB_TYPE_PILLS["Sensors"]}>{p.subscriptionType}</span></TableCell>
                   <TableCell className="tabular-nums">{p.nextOrderDate}</TableCell>
@@ -540,7 +563,7 @@ export function PatientProfile() {
                                                      "bg-red-50 text-red-700 border-red-200"
                     }>{p.patientStatus}</Badge>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{doctor}</TableCell>
+                  <TableCell>{p.doctorName || "—"}</TableCell>
                 </TableRow>
               );
             })}
@@ -685,5 +708,25 @@ function FileList({ label, files, onRemove, onAdd }: {
         </Button>
       </div>
     </div>
+  );
+}
+
+// Sortable table header — click toggles asc/desc on the active column.
+function SortableHead<K extends string>({ label, k, sortKey, sortDir, onClick }: {
+  label: string; k: K; sortKey: K; sortDir: "asc" | "desc"; onClick: (k: K) => void;
+}) {
+  const active = sortKey === k;
+  return (
+    <TableHead
+      onClick={() => onClick(k)}
+      className="cursor-pointer select-none whitespace-nowrap"
+    >
+      <span className={active ? "font-semibold" : ""}>
+        {label}
+        {active && (
+          <span className="ml-1 text-muted-foreground">{sortDir === "asc" ? "▲" : "▼"}</span>
+        )}
+      </span>
+    </TableHead>
   );
 }
