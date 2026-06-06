@@ -1470,9 +1470,9 @@ function SecondaryRow({
       >
         {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 leading-tight">
             <span className="font-semibold">{c.patientName}</span>
-            <span className="text-xs text-muted-foreground">
+            <span className="text-sm text-muted-foreground">
               {c.primaryPayor}
               {c.secondaryPayer && (
                 <> {" → "}
@@ -1482,14 +1482,14 @@ function SecondaryRow({
                 </>
               )}
             </span>
-            <span className="text-xs text-muted-foreground">· DOS {fmt(c.dos)}</span>
+            <span className="text-sm text-muted-foreground">· DOS {fmt(c.dos)}</span>
             {/* 277 lifecycle pill — only on Awaiting Acceptance rows.
                 Mirrors the per-row badge on PrimarySubmitBoard so the
                 operator can see Stedi-Accepted vs Payer-Rejected vs
                 still-no-277 at a glance without expanding. */}
             {b === "awaiting" && <Row277Badge status={c.status277 ?? null} />}
           </div>
-          <div className="mt-0.5 text-xs text-muted-foreground">
+          <div className="mt-0.5 text-sm text-muted-foreground leading-tight">
             Primary paid: <span className="tabular-nums text-foreground">{$(c.primaryPaid)}</span>
             {hasBreakdown ? (
               <>
@@ -1508,7 +1508,7 @@ function SecondaryRow({
             uses the empty middle space without stacking vertically.
             Only shows in the Outstanding Invoices bucket. */}
         {b === "outstandingInvoices" && (c.payLinkSentDate || c.latestFollowUpDate) && (
-          <div className="shrink-0 text-right text-[11px] text-muted-foreground leading-tight whitespace-nowrap">
+          <div className="shrink-0 text-right text-xs text-muted-foreground leading-tight whitespace-nowrap">
             {c.payLinkSentDate && (
               <div>
                 Invoice sent <span className="tabular-nums text-foreground">{fmt(c.payLinkSentDate)}</span>
