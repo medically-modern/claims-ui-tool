@@ -664,6 +664,19 @@ function OrderCycleWorkflow() {
   const [activePatient, setActivePatient] = useState<SubscriptionPatient | null>(null);
   const [activeKind, setActiveKind] = useState<CheckpointKind | "patient" | null>(null);
 
+  // ── Sort state ──
+  // Default sort: nextOrderDate ascending (soonest order first). Operators
+  // want to see what's coming due first; that's the whole point of Order
+  // Prep. Column headers in both OverviewTable and PhaseTable are
+  // clickable to re-sort.
+  type SortKey = "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer";
+  const [sortKey, setSortKey] = useState<SortKey>("nextOrderDate");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const toggleSort = (k: SortKey) => {
+    if (k === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(k); setSortDir("asc"); }
+  };
+
   // ── Live Monday data wiring (Phase 2 of Option A) ──
   // OrderCycle now reads from the same React-Query-backed Subscription
   // Board fetch as PatientProfile. The hook's stale-while-revalidate +
@@ -745,17 +758,37 @@ function OrderCycleWorkflow() {
   }, [all, search, payer, blocked, statusFilter, pauseReason]);
 
   const rows = useMemo(() => {
+    let base: SubscriptionPatient[];
     if (phase === "overview") {
       // Order Prep "All" shows the full overview table filtered to non-ready
       // patients (everyone the operator still has work to do on). Pure
       // Overview tab shows the whole cohort.
       if (primary === "prep" && prepPhase === "all") {
-        return filteredAll.filter((p) => currentPhase(p) !== "ready");
+        base = filteredAll.filter((p) => currentPhase(p) !== "ready");
+      } else {
+        base = filteredAll;
       }
-      return filteredAll;
+    } else {
+      base = filteredAll.filter((p) => currentPhase(p) === phase);
     }
-    return filteredAll.filter((p) => currentPhase(p) === phase);
-  }, [filteredAll, phase, primary, prepPhase]);
+    // Apply sort. nextOrderDate uses lexical ISO compare which is
+    // chronologically correct ("2026-06-15" < "2026-06-20"). Empty
+    // dates sort to the bottom regardless of direction so they don't
+    // hide what's coming due.
+    const sorted = [...base].sort((a, b) => {
+      const av = String((a as unknown as Record<string, unknown>)[sortKey] ?? "");
+      const bv = String((b as unknown as Record<string, unknown>)[sortKey] ?? "");
+      if (sortKey === "nextOrderDate") {
+        if (!av && !bv) return 0;
+        if (!av) return 1;
+        if (!bv) return -1;
+      }
+      return sortDir === "asc"
+        ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" })
+        : bv.localeCompare(av, undefined, { numeric: true, sensitivity: "base" });
+    });
+    return sorted;
+  }, [filteredAll, phase, primary, prepPhase, sortKey, sortDir]);
 
   const phaseKpis = useMemo(() => {
     if (phase === "overview") {
@@ -917,6 +950,9 @@ function OrderCycleWorkflow() {
             onCellClick={openCell}
             onPatientClick={openPatient}
             onSubmit={sendToOrderBoard}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={toggleSort}
           />
         ) : phase === "ready" ? (
           <SubmitTable rows={rows} onPatientClick={openPatient} onSubmit={sendToOrderBoard} />
@@ -927,6 +963,9 @@ function OrderCycleWorkflow() {
             onCellClick={openCell}
             onPatientClick={openPatient}
             onSubmit={sendToOrderBoard}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={toggleSort}
           />
         )}
         {rows.length === 0 && (
@@ -946,21 +985,54 @@ function OrderCycleWorkflow() {
 
 const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_300px] gap-4";
 
+type OverviewSortKey = "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer";
+
+function SortableLabel({
+  label, k, sortKey, sortDir, onClick, align,
+}: {
+  label: string;
+  k: OverviewSortKey;
+  sortKey: OverviewSortKey;
+  sortDir: "asc" | "desc";
+  onClick: (k: OverviewSortKey) => void;
+  align?: "left" | "right" | "center";
+}) {
+  const active = sortKey === k;
+  const arrow = active ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(k)}
+      className={cn(
+        "inline-flex items-center gap-1 hover:text-foreground transition-colors",
+        active && "text-foreground",
+        align === "right" && "justify-end",
+        align === "center" && "justify-center",
+      )}
+    >
+      {label}{arrow}
+    </button>
+  );
+}
+
 function OverviewTable({
-  rows, onCellClick, onPatientClick, onSubmit,
+  rows, onCellClick, onPatientClick, onSubmit, sortKey, sortDir, onSort,
 }: {
   rows: SubscriptionPatient[];
   onCellClick: (p: SubscriptionPatient, k: CheckpointKind) => void;
   onPatientClick: (p: SubscriptionPatient) => void;
   onSubmit: (p: SubscriptionPatient) => void;
+  sortKey: OverviewSortKey;
+  sortDir: "asc" | "desc";
+  onSort: (k: OverviewSortKey) => void;
 }) {
   return (
     <div className="text-[13px]">
       <div className={cn(OVERVIEW_GRID, "border-b bg-muted/60 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
-        <div>Patient</div>
-        <div>Order</div>
-        <div>Subscription</div>
-        <div>Primary Payer</div>
+        <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
+        <div><SortableLabel label="Order"          k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
+        <div><SortableLabel label="Subscription"   k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
+        <div><SortableLabel label="Primary Payer"  k="primaryPayer"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div className="text-center">Conf</div>
         <div className="text-center">Elig</div>
         <div className="text-center">Auth</div>
@@ -1008,22 +1080,25 @@ function OverviewTable({
 }
 
 function PhaseTable({
-  rows, phase, onCellClick, onPatientClick, onSubmit,
+  rows, phase, onCellClick, onPatientClick, onSubmit, sortKey, sortDir, onSort,
 }: {
   rows: SubscriptionPatient[];
   phase: CheckpointKind;
   onCellClick: (p: SubscriptionPatient, k: CheckpointKind) => void;
   onPatientClick: (p: SubscriptionPatient) => void;
   onSubmit: (p: SubscriptionPatient) => void;
+  sortKey: OverviewSortKey;
+  sortDir: "asc" | "desc";
+  onSort: (k: OverviewSortKey) => void;
 }) {
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead className="w-[220px]">Patient</TableHead>
-          <TableHead className="w-[100px]">Order</TableHead>
-          <TableHead className="w-[140px]">Subscription</TableHead>
-          <TableHead className="w-[170px]">Primary Payer</TableHead>
+          <TableHead className="w-[220px]"><SortableLabel label="Patient"       k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></TableHead>
+          <TableHead className="w-[100px]"><SortableLabel label="Order"         k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></TableHead>
+          <TableHead className="w-[140px]"><SortableLabel label="Subscription"  k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></TableHead>
+          <TableHead className="w-[170px]"><SortableLabel label="Primary Payer" k="primaryPayer"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></TableHead>
           <TableHead className="w-[60px] text-center">{PHASE_LABELS[phase]}</TableHead>
           <TableHead className="w-[120px]">Blocked By</TableHead>
           <TableHead className="w-[170px]">Next Check-In</TableHead>
