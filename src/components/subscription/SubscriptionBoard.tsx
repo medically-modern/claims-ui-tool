@@ -454,14 +454,23 @@ function ReviewAndSubmit({ p, onReview, onSubmit }: {
 }) {
   const ready = allChecksPass(p);
   return (
-    <div className="flex items-center justify-end gap-2">
-      <Button variant="outline" className="h-9 text-[13px] font-semibold" onClick={onReview}>
-        Review Profile<ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+    // pl-6 pushes the buttons away from the Paid circle in the
+    // OverviewTable grid layout; justify-end keeps them right-anchored
+    // so the spacing scales with column width.
+    <div className="flex items-center justify-end gap-1.5 pl-6">
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 px-2.5 text-[11px] font-semibold"
+        onClick={onReview}
+      >
+        Review<ArrowRight className="ml-1 h-3 w-3" />
       </Button>
       <Button
+        size="sm"
         onClick={onSubmit}
         className={cn(
-          "h-9 text-[13px] font-semibold text-white",
+          "h-7 px-2.5 text-[11px] font-semibold text-white",
           ready
             ? "bg-emerald-700 hover:bg-emerald-800 shadow-sm"
             : "bg-slate-400 hover:bg-slate-500",
@@ -470,7 +479,7 @@ function ReviewAndSubmit({ p, onReview, onSubmit }: {
           ? "All 4 checks passed — send order"
           : "Not all 4 checks pass — confirm before submitting"}
       >
-        <Send className="mr-1.5 h-3.5 w-3.5" />Send to Order Board
+        <Send className="mr-1 h-3 w-3" />Send Order
       </Button>
     </div>
   );
