@@ -32,15 +32,15 @@ export function useSubscriptionPatients() {
     // OR component remount sees a refetch fire, while the cached data
     // renders instantly during the round-trip. Operators no longer
     // hit "soft refresh did nothing because cache wasn\'t stale yet".
-    staleTime:         30 * 1000,
+    staleTime:         90 * 1000,
     gcTime:            24 * 60 * 60 * 1000,
     // Silent poll every 30s while the tab is open — picks up Monday-
     // side edits within ~30s automatically (mirrors Josh\'s pattern
     // in command-center). React Query throttles this to "while
     // mounted" so closed tabs don\'t hammer Monday.
-    refetchInterval:        30 * 1000,
+    refetchInterval:        false,
     refetchIntervalInBackground: false,
-    refetchOnMount:       "always",
+    refetchOnMount:       true,
     refetchOnWindowFocus: true,
     refetchOnReconnect:   true,
   });

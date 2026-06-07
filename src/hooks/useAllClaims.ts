@@ -36,11 +36,11 @@ export function useAllClaims() {
     // sees a refetch fire while the cached snapshot renders instantly.
     // Matches the Subscription Board pattern; eliminates the
     // 'soft refresh did nothing because cache was still fresh' problem.
-    staleTime:         30 * 1000,
+    staleTime:         90 * 1000,
     gcTime:            24 * 60 * 60 * 1000,
-    refetchInterval:        30 * 1000,
+    refetchInterval:        false,
     refetchIntervalInBackground: false,
-    refetchOnMount:       "always",
+    refetchOnMount:       true,
     refetchOnWindowFocus: true,
     refetchOnReconnect:   true,
   });

@@ -19,10 +19,10 @@ export function useAllSecondaryClaims() {
     enabled: hasMondayToken(),
     // 30s staleTime + always-refetch-on-mount: live updates within
     // ~30s, no manual refresh needed.
-    staleTime:         30 * 1000,
-    refetchInterval:        30 * 1000,
+    staleTime:         90 * 1000,
+    refetchInterval:        false,
     refetchIntervalInBackground: false,
-    refetchOnMount:       "always",
+    refetchOnMount:       true,
     // 24h gcTime so the persister in App.tsx can rehydrate this
     // across page reloads without React Query GC'ing the entry first.
     // See useAllClaims for the full rationale.

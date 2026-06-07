@@ -33,6 +33,7 @@ import ClaimDetail from "./pages/ClaimDetail.tsx";
 import ReplayEra from "./pages/ReplayEra.tsx";
 import { ThreadClaimsProvider } from "@/lib/claims/threadStore";
 import { BuildBadge } from "@/components/BuildBadge";
+import { VersionCheck } from "@/components/VersionCheck";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -101,6 +102,7 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
           </Routes>
           <BuildBadge />
+          <VersionCheck />
         </ThreadClaimsProvider>
       </BrowserRouter>
     </TooltipProvider>
