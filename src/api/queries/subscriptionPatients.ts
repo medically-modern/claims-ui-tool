@@ -352,16 +352,23 @@ function deriveAuth(item: MondayItem, subType: string): Checkpoint {
 function deriveLastPaid(item: MondayItem): Checkpoint {
   const pri = get(item, SUB_COL.primary_claim_paid);
   const sec = get(item, SUB_COL.secondary_claim_paid);
-  // Treat blank as pending; "Paid" / "Fully Paid" as ok; anything else
-  // (Denied, Partially Paid, Underpaid, Patient Paid, etc.) as warn/bad.
+  // Verified Monday labels 2026-06-07:
+  //   Primary Claim Paid?:   Denied / Fully Paid / Partial
+  //   Secondary Claim Paid?: Fully Paid / None / Outstanding
+  // 'None' on Secondary = patient has no secondary insurance, which is
+  // a fully-resolved state — green, not yellow. Treat it the same as
+  // a blank cell.
   function statusToTone(v: string): CheckpointTone {
     if (!v) return "pending";
+    if (/^none$/i.test(v)) return "ok";  // explicit "no secondary"
     if (/(Paid|Fully Paid|Patient Paid)/i.test(v)) return "ok";
     if (/Denied/i.test(v)) return "bad";
-    return "warn";
+    return "warn";  // Partial / Outstanding / Underpaid / etc.
   }
   const priTone = statusToTone(pri);
-  const secTone = sec ? statusToTone(sec) : "ok"; // empty secondary = no secondary needed
+  // Empty Secondary = no claim sent yet (could be pending OR no secondary).
+  // Explicit "None" = no secondary insurance at all. Both → ok.
+  const secTone: CheckpointTone = !sec ? "ok" : statusToTone(sec);
   const tones: CheckpointTone[] = [priTone, secTone];
   let tone: CheckpointTone = "ok";
   if (tones.includes("bad")) tone = "bad";
@@ -371,7 +378,9 @@ function deriveLastPaid(item: MondayItem): Checkpoint {
   return {
     tone,
     label: pri || "Not run",
-    detail: sec ? `Secondary: ${sec}` : undefined,
+    // Only surface Secondary in hover when it's a real status to look at —
+    // "None" is implicit context, no point cluttering the tooltip.
+    detail: sec && !/^none$/i.test(sec) ? `Secondary: ${sec}` : undefined,
   };
 }
 
