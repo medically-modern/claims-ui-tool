@@ -697,7 +697,9 @@ function OrderCycleWorkflow() {
   // want to see what's coming due first; that's the whole point of Order
   // Prep. Column headers in both OverviewTable and PhaseTable are
   // clickable to re-sort.
-  type SortKey = "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer";
+  type SortKey =
+    | "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer"
+    | "confirmation" | "benefits" | "auth" | "lastPaid";
   const [sortKey, setSortKey] = useState<SortKey>("nextOrderDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const toggleSort = (k: SortKey) => {
@@ -834,7 +836,21 @@ function OrderCycleWorkflow() {
     // chronologically correct ("2026-06-15" < "2026-06-20"). Empty
     // dates sort to the bottom regardless of direction so they don't
     // hide what's coming due.
+    // Checkpoint columns (Conf / Elig / Auth / Paid) sort by tone severity:
+    //   asc  = worst-first  (bad → warn → pending → ok)  — most urgent on top
+    //   desc = best-first   (ok  → pending → warn → bad)
+    // Text columns use locale-aware natural-number compare so '10' > '2'.
+    // nextOrderDate uses ISO lexical compare which is chronologically correct;
+    // empty dates always pin to the bottom so they can't hide an upcoming order.
+    const TONE_RANK: Record<string, number> = { bad: 0, warn: 1, pending: 2, ok: 3 };
+    const CHECKPOINT_KEYS = new Set(["confirmation", "benefits", "auth", "lastPaid"]);
     const sorted = [...base].sort((a, b) => {
+      if (CHECKPOINT_KEYS.has(sortKey)) {
+        const ac = (a as unknown as Record<string, { tone: string }>)[sortKey]?.tone ?? "ok";
+        const bc = (b as unknown as Record<string, { tone: string }>)[sortKey]?.tone ?? "ok";
+        const diff = (TONE_RANK[ac] ?? 99) - (TONE_RANK[bc] ?? 99);
+        return sortDir === "asc" ? diff : -diff;
+      }
       const av = String((a as unknown as Record<string, unknown>)[sortKey] ?? "");
       const bv = String((b as unknown as Record<string, unknown>)[sortKey] ?? "");
       if (sortKey === "nextOrderDate") {
@@ -1047,7 +1063,9 @@ function OrderCycleWorkflow() {
 
 const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_300px] gap-4";
 
-type OverviewSortKey = "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer";
+type OverviewSortKey =
+  | "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer"
+  | "confirmation" | "benefits" | "auth" | "lastPaid";
 
 function SortableLabel({
   label, k, sortKey, sortDir, onClick, align,
@@ -1095,10 +1113,10 @@ function OverviewTable({
         <div><SortableLabel label="Order"          k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Subscription"   k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Primary Payer"  k="primaryPayer"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
-        <div className="text-center">Conf</div>
-        <div className="text-center">Elig</div>
-        <div className="text-center">Auth</div>
-        <div className="text-center">Paid</div>
+        <div className="text-center"><SortableLabel label="Conf" k="confirmation" sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Elig" k="benefits"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Auth" k="auth"         sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Paid" k="lastPaid"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-right pr-2">Actions</div>
       </div>
       {rows.map((p) => (
