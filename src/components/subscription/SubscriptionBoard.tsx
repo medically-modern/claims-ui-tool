@@ -710,15 +710,29 @@ function OrderCycleWorkflow() {
   const all: SubscriptionPatient[] = liveAll ?? [];
 
   const counts = useMemo(() => {
-    const c = { overview: 0, confirmation: 0, benefits: 0, auth: 0, lastPaid: 0, ready: 0 };
+    // The 4 prep buckets are INDEPENDENT, not sequential. A patient
+    // with a bad Confirmation and a bad Eligibility appears in BOTH
+    // buckets — that's how the operator finds and resolves every
+    // failing check, not just the leftmost one. The primary "Order
+    // Prep" badge and the "All" sub-tab show the deduped count of
+    // patients with at least one non-OK check (prepUnique).
+    const c = {
+      overview: 0,
+      confirmation: 0, benefits: 0, auth: 0, lastPaid: 0,
+      ready: 0,
+      prepUnique: 0,
+    };
     for (const p of all) {
       c.overview++;
-      const phase = currentPhase(p);
-      if (phase === "ready") { c.ready++; continue; }
-      // Order Prep phase counts are scoped to the 21-day order horizon —
-      // anything further out isn't in Order Prep yet so it shouldn't
-      // appear in the primary or sub-tab badges.
-      if (withinOrderPrepWindow(p)) c[phase]++;
+      if (allChecksPass(p)) { c.ready++; continue; }
+      // Only patients within the 21-day order horizon land in Order Prep.
+      if (!withinOrderPrepWindow(p)) continue;
+      let anyFailing = false;
+      if (p.confirmation.tone !== "ok") { c.confirmation++; anyFailing = true; }
+      if (p.benefits.tone     !== "ok") { c.benefits++;     anyFailing = true; }
+      if (p.auth.tone         !== "ok") { c.auth++;         anyFailing = true; }
+      if (p.lastPaid.tone     !== "ok") { c.lastPaid++;     anyFailing = true; }
+      if (anyFailing) c.prepUnique++;
     }
     return c;
   }, [all]);
@@ -789,16 +803,19 @@ function OrderCycleWorkflow() {
   const rows = useMemo(() => {
     let base: SubscriptionPatient[];
     if (phase === "overview") {
-      // Order Prep "All" shows the full overview table filtered to non-ready
-      // patients (everyone the operator still has work to do on). Pure
-      // Overview tab shows the whole cohort.
+      // Order Prep "All" = anyone with at least one non-OK check (the
+      // union of the 4 buckets). Pure Overview tab = whole cohort.
       if (primary === "prep" && prepPhase === "all") {
-        base = filteredAll.filter((p) => currentPhase(p) !== "ready");
+        base = filteredAll.filter((p) => !allChecksPass(p));
       } else {
         base = filteredAll;
       }
+    } else if (phase === "ready") {
+      base = filteredAll.filter(allChecksPass);
     } else {
-      base = filteredAll.filter((p) => currentPhase(p) === phase);
+      // Independent-bucket semantics: a patient appears in Confirmation
+      // iff confirmation.tone !== "ok", regardless of other checkpoints.
+      base = filteredAll.filter((p) => getCheckpoint(p, phase).tone !== "ok");
     }
     // Order Prep 21-day horizon — only applies when the operator is in
     // the Order Prep primary tab. Overview shows the whole board; Order
@@ -836,8 +853,11 @@ function OrderCycleWorkflow() {
         { tone: "neutral" as const, label: "All Open",         value: counts.overview },
       ];
     }
+    // Independent-bucket KPIs: "in this phase" = checkpoint for this
+    // phase is non-OK, regardless of other phases' status.
+    const inPhase = (p: SubscriptionPatient) => getCheckpoint(p, phase as CheckpointKind).tone !== "ok";
     const blockedCount = (party: BlockedParty) =>
-      filteredAll.filter((p) => currentPhase(p) === phase && p.blockedBy === party).length;
+      filteredAll.filter((p) => inPhase(p) && p.blockedBy === party).length;
     return [
       { tone: "neutral" as const, label: `In ${PHASE_LABELS[phase]}`, value: rows.length },
       { tone: "warning" as const, label: "Blocked by patient",        value: blockedCount("patient") },
@@ -845,7 +865,7 @@ function OrderCycleWorkflow() {
       { tone: "danger"  as const, label: "Needs us to act",           value: blockedCount("us") },
       { tone: "neutral" as const, label: "System-paced",              value: blockedCount("system") },
       { tone: "success" as const, label: "Overrides applied",
-        value: filteredAll.filter((p) => currentPhase(p) === phase
+        value: filteredAll.filter((p) => inPhase(p)
           && (p.confirmation.overrideReason || p.benefits.overrideReason
               || p.auth.overrideReason || p.lastPaid.overrideReason)).length },
     ];
@@ -897,7 +917,7 @@ function OrderCycleWorkflow() {
           <TabsList className="bg-card border h-11 p-1">
             <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4">
               Order Prep
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.confirmation + counts.benefits + counts.auth + counts.lastPaid}</span>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.prepUnique}</span>
             </TabsTrigger>
             <TabsTrigger value="order" className="text-[15px] font-semibold gap-2 px-4">
               Order
@@ -936,7 +956,7 @@ function OrderCycleWorkflow() {
             <TabsTrigger value="all" className="gap-1.5">
               All
               <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
-                {counts.confirmation + counts.benefits + counts.auth + counts.lastPaid}
+                {counts.prepUnique}
               </span>
             </TabsTrigger>
             {renderPhaseTab("confirmation", "Confirmation",     counts.confirmation)}
