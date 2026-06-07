@@ -128,6 +128,10 @@ export const SUB_COL = {
   // Claims
   primary_claim_paid:   "color_mm33spks",
   secondary_claim_paid: "color_mm3aa9bx",
+  // "Secondary Amount" (numbers) — dollar amount still outstanding on
+  // the secondary claim. Surfaced in the Last Paid hover so the
+  // operator sees the size of the gap, not just that there is one.
+  secondary_amount:     "numeric_mm3hvtec",
 } as const;
 
 const READ_IDS = Object.values(SUB_COL);
@@ -349,9 +353,22 @@ function deriveAuth(item: MondayItem, subType: string): Checkpoint {
   return { tone, label, ...(medicaidDvs ? { medicaidDvs: true } : {}) };
 }
 
+function fmtMoney(raw: string): string | null {
+  if (!raw) return null;
+  const n = Number(raw);
+  if (Number.isNaN(n)) return null;
+  // 2 decimals when there's a fractional component, none otherwise — so
+  // $250 stays $250 and $250.50 stays $250.50.
+  return `$${n.toLocaleString(undefined, {
+    minimumFractionDigits: n % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 function deriveLastPaid(item: MondayItem): Checkpoint {
-  const pri = get(item, SUB_COL.primary_claim_paid);
-  const sec = get(item, SUB_COL.secondary_claim_paid);
+  const pri    = get(item, SUB_COL.primary_claim_paid);
+  const sec    = get(item, SUB_COL.secondary_claim_paid);
+  const secAmt = get(item, SUB_COL.secondary_amount);
   // Verified Monday labels 2026-06-07:
   //   Primary Claim Paid?:   Denied / Fully Paid / Partial
   //   Secondary Claim Paid?: Fully Paid / None / Outstanding
@@ -375,12 +392,24 @@ function deriveLastPaid(item: MondayItem): Checkpoint {
   else if (tones.includes("warn")) tone = "warn";
   else if (tones.includes("pending")) tone = "pending";
 
+  // Build a richer detail string: 'Primary: <status>; Secondary: <status>'
+  // — and when Secondary is Outstanding, inline the $ amount from the
+  // Secondary Amount column so ops know if it's $25 or $2,500 of gap
+  // before they open the row.
+  const parts: string[] = [];
+  if (pri) parts.push(`Primary: ${pri}`);
+  if (sec && !/^none$/i.test(sec)) {
+    const money = fmtMoney(secAmt);
+    if (/outstanding/i.test(sec) && money) {
+      parts.push(`Secondary: ${money} outstanding`);
+    } else {
+      parts.push(`Secondary: ${sec}`);
+    }
+  }
   return {
     tone,
     label: pri || "Not run",
-    // Only surface Secondary in hover when it's a real status to look at —
-    // "None" is implicit context, no point cluttering the tooltip.
-    detail: sec && !/^none$/i.test(sec) ? `Secondary: ${sec}` : undefined,
+    detail: parts.length ? parts.join("; ") : undefined,
   };
 }
 
