@@ -293,16 +293,30 @@ function deriveBenefits(item: MondayItem): Checkpoint {
     return { tone: "bad", label: active };
   }
   if (active) return { tone: "warn", label: active };
-  // Active is blank — distinguish "we tried and Stedi rejected it"
-  // from "we never tried". Failed check renders YELLOW with the
-  // Stedi reason on hover so ops know it's fixable on our end
-  // (typo'd MBI, wrong payer mapping, etc.) — not a denial.
+  // Active is blank — distinguish the three pending sub-states so the
+  // operator knows what (if anything) to do about each:
+  //   Failed   → tone:'warn', label:'Failed Check'  → YELLOW circle
+  //   Batch    → tone:'pending', label:'In Batch'   → gray pending
+  //   anything → tone:'pending', label:'Not run'    → outline (never tried)
   if (runCheck === "Failed") {
     return {
       tone: "warn",
       label: "Failed Check",
       detail: lastError || "Stedi rejected the request; no reason recorded.",
     };
+  }
+  // Run Check = "Batch" means the row is currently in flight inside
+  // a Stedi batch (either still being processed or in Stedi's internal
+  // RETRYING loop). Operator can't do anything until the poller writes
+  // a verdict back. Label is NOT in NOT_YET_LABELS so the circle renders
+  // gray, not outline.
+  if (runCheck === "Batch") {
+    return { tone: "pending", label: "In Batch", detail: "Awaiting Stedi batch result" };
+  }
+  // Run Check = "Run" means a real-time check is firing right now — same
+  // gray pending state, slightly different label so ops can tell.
+  if (runCheck === "Run") {
+    return { tone: "pending", label: "Checking…", detail: "Real-time check in flight" };
   }
   return { tone: "pending", label: "Not run" };
 }
