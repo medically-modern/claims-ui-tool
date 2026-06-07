@@ -836,19 +836,36 @@ function OrderCycleWorkflow() {
     // chronologically correct ("2026-06-15" < "2026-06-20"). Empty
     // dates sort to the bottom regardless of direction so they don't
     // hide what's coming due.
-    // Checkpoint columns (Conf / Elig / Auth / Paid) sort by tone severity:
-    //   asc  = worst-first  (bad → warn → pending → ok)  — most urgent on top
-    //   desc = best-first   (ok  → pending → warn → bad)
-    // Text columns use locale-aware natural-number compare so '10' > '2'.
-    // nextOrderDate uses ISO lexical compare which is chronologically correct;
-    // empty dates always pin to the bottom so they can't hide an upcoming order.
-    const TONE_RANK: Record<string, number> = { bad: 0, warn: 1, pending: 2, ok: 3 };
+    // Checkpoint columns (Conf / Elig / Auth / Paid) sort by display
+    // state. Order (asc, top→bottom) per Brandon's spec:
+    //   1. green  (ok)             — already resolved
+    //   2. yellow (warn)           — failed check / fixable on our end
+    //   3. red    (bad)            — real denial / blocker
+    //   4. gray   (pending, sent)  — awaiting patient response
+    //   5. blank  (pending, not yet) — Not sent / Not run, not our turn
+    // Reflects the "what should I action next" mental model: greens
+    // confirm work done, yellows are operator-fixable, reds need
+    // outside input, grays are time-based waiting, blanks are pre-work.
+    const CIRCLE_RANK: Record<string, number> = {
+      green: 0, yellow: 1, red: 2, gray: 3, outline: 4,
+    };
+    // Mirror SubscriptionBoard's circleStateFor() — kept inline so the
+    // sort stays in one place. Update both if circle-state rules change.
+    const NOT_YET = new Set(["Not sent", "Not run", "Not checked", "Not Serving", "Unknown"]);
+    function rankCheckpoint(c: { tone: string; label: string } | undefined): number {
+      if (!c) return 99;
+      if (c.tone === "ok") return CIRCLE_RANK.green;
+      if (c.tone === "bad") return CIRCLE_RANK.red;
+      if (c.tone === "warn") return CIRCLE_RANK.yellow;
+      if (NOT_YET.has(c.label)) return CIRCLE_RANK.outline;
+      return CIRCLE_RANK.gray;
+    }
     const CHECKPOINT_KEYS = new Set(["confirmation", "benefits", "auth", "lastPaid"]);
     const sorted = [...base].sort((a, b) => {
       if (CHECKPOINT_KEYS.has(sortKey)) {
-        const ac = (a as unknown as Record<string, { tone: string }>)[sortKey]?.tone ?? "ok";
-        const bc = (b as unknown as Record<string, { tone: string }>)[sortKey]?.tone ?? "ok";
-        const diff = (TONE_RANK[ac] ?? 99) - (TONE_RANK[bc] ?? 99);
+        const ac = (a as unknown as Record<string, { tone: string; label: string }>)[sortKey];
+        const bc = (b as unknown as Record<string, { tone: string; label: string }>)[sortKey];
+        const diff = rankCheckpoint(ac) - rankCheckpoint(bc);
         return sortDir === "asc" ? diff : -diff;
       }
       const av = String((a as unknown as Record<string, unknown>)[sortKey] ?? "");

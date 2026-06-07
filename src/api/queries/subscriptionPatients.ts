@@ -77,6 +77,13 @@ export const SUB_COL = {
   // open outline (not gray pending) so it's clear we haven't even
   // asked the patient yet.
   reorder_text_sent:          "text_mm3rzqks",
+  // Stedi check trigger + outcome. Populated by Josh's automation +
+  // Brandon's manual flips: 'Run' / 'Batch' / 'Pass' / 'Failed' / '' .
+  run_check:                  "color_mm2nnjam",
+  // Long-text. Populated by services/subscription_eligibility_monday_service
+  // on the Failed path with the Stedi AAA / validation reason.
+  // Cleared on success. Surfaced via Eligibility circle hover.
+  last_eligibility_error:     "long_text_mm438m3a",
   // Doctor
   doctor:           "text_mkxn3wza",
   npi:              "text_mkxnkgzg",
@@ -278,12 +285,26 @@ function deriveConfirmation(item: MondayItem): Checkpoint {
 
 function deriveBenefits(item: MondayItem): Checkpoint {
   const active = get(item, SUB_COL.active);
-  if (!active) return { tone: "pending", label: "Not run" };
+  const runCheck = get(item, SUB_COL.run_check);
+  const lastError = get(item, SUB_COL.last_eligibility_error);
+  // Active populated with a real verdict beats anything else.
   if (active === "Active") return { tone: "ok", label: "Active" };
   if (active === "Inactive" || active === "Medicare Advantage") {
     return { tone: "bad", label: active };
   }
-  return { tone: "warn", label: active };
+  if (active) return { tone: "warn", label: active };
+  // Active is blank — distinguish "we tried and Stedi rejected it"
+  // from "we never tried". Failed check renders YELLOW with the
+  // Stedi reason on hover so ops know it's fixable on our end
+  // (typo'd MBI, wrong payer mapping, etc.) — not a denial.
+  if (runCheck === "Failed") {
+    return {
+      tone: "warn",
+      label: "Failed Check",
+      detail: lastError || "Stedi rejected the request; no reason recorded.",
+    };
+  }
+  return { tone: "pending", label: "Not run" };
 }
 
 function deriveAuth(item: MondayItem, subType: string): Checkpoint {
