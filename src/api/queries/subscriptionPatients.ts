@@ -207,8 +207,17 @@ function deriveConfirmation(item: MondayItem): Checkpoint {
   const por = get(item, SUB_COL.patient_order_response);
   const pir = get(item, SUB_COL.patient_insurance_response);
   const msg = get(item, SUB_COL.patient_help_message);
+  // Patient Insurance Response column labels are: "Confirmed" / "Changed" /
+  // "Cancel" (verified via Monday API 2026-06-07).
+  //   - Confirmed = patient said insurance is the SAME — NOT a change.
+  //   - Changed   = patient flagged an actual insurance change — surface it.
+  //   - Cancel    = patient wants to cancel — out of scope for the
+  //                 "Changes" list (will likely get its own handling).
+  // Earlier logic flagged anything non-blank / non-"no" as a change, which
+  // mislabeled normal confirmations as "Insurance: Confirmed" in the
+  // hover popover.
   const changes: string[] = [];
-  if (pir && pir !== "" && pir.toLowerCase() !== "no") changes.push(`Insurance: ${pir}`);
+  if (pir === "Changed") changes.push(`Insurance: ${pir}`);
 
   let tone: CheckpointTone = "pending";
   let label = "Awaiting";
