@@ -279,6 +279,7 @@ function deriveBenefits(item: MondayItem): Checkpoint {
 function deriveAuth(item: MondayItem, subType: string): Checkpoint {
   const sensors  = get(item, SUB_COL.sensors_auth_status);
   const supplies = get(item, SUB_COL.supplies_auth_status);
+  const payer    = get(item, SUB_COL.primary_insurance);
   const needSensors  = subType !== "Supplies";
   const needSupplies = subType !== "Sensors";
   const sensorsOk  = !needSensors  || AUTH_OK.has(sensors);
@@ -291,10 +292,16 @@ function deriveAuth(item: MondayItem, subType: string): Checkpoint {
     needSensors  ? sensors  : "",
     needSupplies ? supplies : "",
   ].filter(Boolean);
-  return {
-    tone: labels.some((l) => /(Denied|Expired|Mismatch|Required)/i.test(l)) ? "bad" : "warn",
-    label: labels.join(" / ") || "Not set",
-  };
+  const label = labels.join(" / ") || "Not set";
+  const tone: CheckpointTone =
+    labels.some((l) => /(Denied|Expired|Mismatch|Required)/i.test(l)) ? "bad" : "warn";
+  // Medicaid DVS lapses look like "Auth Expired" but can only be re-issued
+  // on the day of service — there is nothing the operator can do about
+  // them before ship day. Flag so the circle gets a small "M" overlay and
+  // ops can skip these in their Auth-bucket triage.
+  const medicaidDvs =
+    /medicaid/i.test(payer) && /expired/i.test(label);
+  return { tone, label, ...(medicaidDvs ? { medicaidDvs: true } : {}) };
 }
 
 function deriveLastPaid(item: MondayItem): Checkpoint {

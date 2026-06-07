@@ -29,6 +29,11 @@ export type Checkpoint = {
    *  Help Message column on Monday). Renders a MessageSquare overlay on the
    *  Confirmation circle so ops can hover to read it. */
   patientMessage?: string;
+  /** Auth is expired specifically because of a Medicaid DVS lapse. DVS can
+   *  only be re-issued day-of-service, so this is "leave alone until ship
+   *  day", not a real action item. Renders a small "M" overlay on the Auth
+   *  circle so ops can ignore it at a glance. */
+  medicaidDvs?: boolean;
 };
 
 export type SubscriptionType = "Sensors" | "Supplies" | "Sensors & Supplies";
