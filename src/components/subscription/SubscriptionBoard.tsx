@@ -47,7 +47,7 @@ import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
-import { runEligibilityCheck } from "@/api/setSubscriptionPatient";
+import { runEligibilityCheck, sendToOrder } from "@/api/setSubscriptionPatient";
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
   currentPhase, ORDER_PREP_PATIENTS, PATIENT_STATUS_OPTIONS, PAUSE_REASON_OPTIONS,
@@ -762,8 +762,25 @@ function OrderCycleWorkflow() {
   const openCell = (p: SubscriptionPatient, kind: CheckpointKind) => { setActivePatient(p); setActiveKind(kind); };
   const openPatient = (p: SubscriptionPatient) => { setActivePatient(p); setActiveKind("patient"); };
   const closeDrawer = () => { setActivePatient(null); setActiveKind(null); };
-  const sendToOrderBoard = (_p: SubscriptionPatient) => {
-    // TODO: wire to backend /order/webhook when available.
+  // Flips Ordering Cycle -> 'Order' on the Subscription Board row.
+  // Brandon's existing Monday automation listens on that column-value
+  // change and spawns the actual order on the Order Board; we just
+  // own the trigger. Optimistic UX: surface the in-flight state via
+  // batchMsg so the operator gets feedback, then invalidate the
+  // cache so the row leaves Order Prep / Order tabs on the next fetch.
+  const sendToOrderBoard = async (p: SubscriptionPatient) => {
+    setBatchMsg(`Sending ${p.name} to Order…`);
+    try {
+      await sendToOrder(p.mondayItemId);
+      setBatchMsg(`${p.name} sent to Order ✓`);
+      invalidateSubscription();
+    } catch (e) {
+      setBatchMsg(
+        `Failed to send ${p.name}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setTimeout(() => setBatchMsg(null), 4000);
+    }
   };
 
   // ── Batch action state ──

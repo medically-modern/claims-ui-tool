@@ -154,3 +154,15 @@ export async function saveSubscriptionPatient(
 export async function runEligibilityCheck(mondayItemId: string): Promise<void> {
   await writeStatus(mondayItemId, "color_mm2nnjam", "Run");
 }
+
+/**
+ * Flip Ordering Cycle to "Order" — the operator's final action on a
+ * subscription row. Triggers Brandon's downstream Monday automation
+ * that spawns the actual order on the Order Board (Stedi claim
+ * pipeline + Monday claim row). After this, the row should leave
+ * both the Order Prep tab and the Order tab and reappear when the
+ * next reorder cycle starts.
+ */
+export async function sendToOrder(mondayItemId: string): Promise<void> {
+  await writeStatus(mondayItemId, "color_mkyjawhq", "Order");
+}
