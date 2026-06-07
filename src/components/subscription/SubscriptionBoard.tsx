@@ -103,6 +103,37 @@ function withinOrderPrepWindow(p: SubscriptionPatient): boolean {
 function ChangesPill(_props: { check: Checkpoint }) { return null; }
 
 /** Soft metadata pill (e.g. auth expiry date). Sits to the right of the circle. */
+/**
+ * Detect "auth is expired only because of a Medicaid DVS check".
+ *
+ * Medicaid DVS authorizations can only be re-issued on the day of
+ * service — there's literally nothing the operator can do about an
+ * expired DVS until day-of-order. Without a marker, an "Expired" red
+ * circle screams URGENT when the right answer is "ignore until ship
+ * day." A small Medicaid badge next to the Auth circle gives the
+ * operator a one-glance "skip this for now" cue.
+ *
+ * Heuristic: primary payer mentions Medicaid AND the auth label
+ * contains "Expired". Matches the strings deriveAuth produces in
+ * subscriptionPatients.ts.
+ */
+function isMedicaidDvsExpired(p: SubscriptionPatient): boolean {
+  if (!/medicaid/i.test(p.primaryPayer || "")) return false;
+  if (p.auth.tone !== "bad") return false;
+  return /expired/i.test(p.auth.label || "");
+}
+
+function MedicaidDvsBadge() {
+  return (
+    <span
+      title="Medicaid DVS — can only be re-issued day of service. Nothing to do until ship day."
+      className="ml-1 inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+    >
+      Medicaid
+    </span>
+  );
+}
+
 function MetaPill({ check }: { check: Checkpoint }) {
   if (!check.pill) return null;
   return (
@@ -1121,6 +1152,7 @@ function OverviewTable({
               <CheckpointCircle check={p.auth} />
             </CircleEditPopover>
             <MetaPill check={p.auth} />
+            {isMedicaidDvsExpired(p) && <MedicaidDvsBadge />}
           </div>
           <div className="flex items-center justify-center">
             <CircleEditPopover check={p.lastPaid} kind="lastPaid" patient={p}>
@@ -1183,6 +1215,7 @@ function PhaseTable({
                   <CheckpointCircle check={c} />
                 </CircleEditPopover>
                 {phase === "auth" && <MetaPill check={c} />}
+                {phase === "auth" && isMedicaidDvsExpired(p) && <MedicaidDvsBadge />}
               </div></TableCell>
               <TableCell><BlockedByPill value={p.blockedBy} /></TableCell>
               <TableCell><CheckInCell iso={p.nextCheckIn} stuckSince={p.stuckSince} /></TableCell>
