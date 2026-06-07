@@ -719,12 +719,20 @@ function OrderCycleWorkflow() {
   const all: SubscriptionPatient[] = liveAll ?? [];
 
   const counts = useMemo(() => {
-    // The 4 prep buckets are INDEPENDENT, not sequential. A patient
-    // with a bad Confirmation and a bad Eligibility appears in BOTH
-    // buckets — that's how the operator finds and resolves every
-    // failing check, not just the leftmost one. The primary "Order
-    // Prep" badge and the "All" sub-tab show the deduped count of
-    // patients with at least one non-OK check (prepUnique).
+    // Tab membership is driven by the Monday Ordering Cycle column —
+    // NOT a client-side derivation. Backend cron + webhook own the
+    // promotion from 'Order Prep' to 'Ready to Order' once all 4
+    // gates pass + eligibility is current for the order's month.
+    //
+    //   Order Prep tab  = ordering_cycle == 'Order Prep'
+    //   Order tab       = ordering_cycle == 'Ready to Order'
+    //   Overview tab    = whole cohort (any status)
+    //
+    // The 4 phase sub-tabs under Order Prep still use independent-
+    // bucket semantics: within the Order Prep cohort, count + show
+    // patients whose THAT specific checkpoint is non-OK. prepUnique
+    // is the deduped count of Order-Prep rows with at least one
+    // non-OK check (so we don't double-count multi-blocked rows).
     const c = {
       overview: 0,
       confirmation: 0, benefits: 0, auth: 0, lastPaid: 0,
@@ -733,14 +741,19 @@ function OrderCycleWorkflow() {
     };
     for (const p of all) {
       c.overview++;
-      if (allChecksPass(p)) { c.ready++; continue; }
-      // Only patients within the 21-day order horizon land in Order Prep.
-      if (!withinOrderPrepWindow(p)) continue;
+      const status = p.orderingCycle || "";
+      if (status === "Ready to Order") { c.ready++; continue; }
+      if (status !== "Order Prep") continue;
       let anyFailing = false;
       if (p.confirmation.tone !== "ok") { c.confirmation++; anyFailing = true; }
       if (p.benefits.tone     !== "ok") { c.benefits++;     anyFailing = true; }
       if (p.auth.tone         !== "ok") { c.auth++;         anyFailing = true; }
       if (p.lastPaid.tone     !== "ok") { c.lastPaid++;     anyFailing = true; }
+      // A patient in Order Prep with all 4 checks passing but not yet
+      // promoted to Ready (cron hasn't fired yet, or some other gate
+      // we don't render — last_eligibility_check currency) still
+      // belongs in the prep cohort count.
+      if (!anyFailing) anyFailing = true; // count them in prepUnique too
       if (anyFailing) c.prepUnique++;
     }
     return c;
@@ -811,26 +824,28 @@ function OrderCycleWorkflow() {
 
   const rows = useMemo(() => {
     let base: SubscriptionPatient[];
+    // Tab membership is sourced from the Monday Ordering Cycle column
+    // (color_mkyjawhq). Backend cron + webhook own the promotion to
+    // 'Ready to Order' once all 4 gates pass + eligibility is current.
+    // Client-side filters now mirror that single source of truth.
     if (phase === "overview") {
-      // Order Prep "All" = anyone with at least one non-OK check (the
-      // union of the 4 buckets). Pure Overview tab = whole cohort.
       if (primary === "prep" && prepPhase === "all") {
-        base = filteredAll.filter((p) => !allChecksPass(p));
+        // Order Prep > All: every row currently sitting in 'Order Prep'.
+        base = filteredAll.filter((p) => (p.orderingCycle || "") === "Order Prep");
       } else {
+        // Pure Overview tab: whole cohort regardless of status.
         base = filteredAll;
       }
     } else if (phase === "ready") {
-      base = filteredAll.filter(allChecksPass);
+      // Order tab: rows the backend has promoted to 'Ready to Order'.
+      base = filteredAll.filter((p) => (p.orderingCycle || "") === "Ready to Order");
     } else {
-      // Independent-bucket semantics: a patient appears in Confirmation
-      // iff confirmation.tone !== "ok", regardless of other checkpoints.
-      base = filteredAll.filter((p) => getCheckpoint(p, phase).tone !== "ok");
-    }
-    // Order Prep 21-day horizon — only applies when the operator is in
-    // the Order Prep primary tab. Overview shows the whole board; Order
-    // (ready-to-submit) is its own filter and stays unbounded.
-    if (primary === "prep") {
-      base = base.filter(withinOrderPrepWindow);
+      // Phase sub-tabs (Confirmation / Eligibility / Auth / Last Paid):
+      // patients in Order Prep AND with this specific checkpoint non-OK.
+      base = filteredAll.filter((p) =>
+        (p.orderingCycle || "") === "Order Prep" &&
+        getCheckpoint(p, phase).tone !== "ok",
+      );
     }
     // Apply sort. nextOrderDate uses lexical ISO compare which is
     // chronologically correct ("2026-06-15" < "2026-06-20"). Empty
