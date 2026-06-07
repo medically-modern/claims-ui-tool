@@ -71,6 +71,12 @@ export const SUB_COL = {
   //   Address changed from <X> to <Y>.
   //   CGM type changed from <A> to <B>.
   patient_change_summary:     "long_text_mm3k5y3n",
+  // Reorder text status: populated by Josh's reorder-patient-form cron
+  // with the SMS body / token URL when the text fires. Empty = text
+  // hasn't gone out yet → Confirmation circle should render as an
+  // open outline (not gray pending) so it's clear we haven't even
+  // asked the patient yet.
+  reorder_text_sent:          "text_mm3rzqks",
   // Doctor
   doctor:           "text_mkxn3wza",
   npi:              "text_mkxnkgzg",
@@ -241,6 +247,7 @@ function deriveConfirmation(item: MondayItem): Checkpoint {
   const pir = get(item, SUB_COL.patient_insurance_response);
   const msg = get(item, SUB_COL.patient_help_message);
   const summary = get(item, SUB_COL.patient_change_summary);
+  const reorderTextSent = get(item, SUB_COL.reorder_text_sent);
   // Source of truth for what the patient changed = the parsed change
   // summary written by Josh's reorder backend (covers address, order
   // date, CGM/pump type, infusion sets, insurance). The standalone
@@ -252,7 +259,10 @@ function deriveConfirmation(item: MondayItem): Checkpoint {
   }
 
   let tone: CheckpointTone = "pending";
-  let label = "Awaiting";
+  // Reorder text fired? "Awaiting" → gray pending circle (we asked, waiting).
+  // No text yet? "Not sent" → outline circle (it's not our turn yet, the
+  // reorder cron will fire at 20-days; nothing for ops to do until then).
+  let label = reorderTextSent ? "Awaiting" : "Not sent";
   const delayed = por === "Delayed";
   if (por === "Confirmed") { tone = "ok"; label = "Confirmed"; }
   else if (delayed)        { tone = "ok"; label = "Confirmed (delayed)"; }
