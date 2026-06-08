@@ -45,6 +45,7 @@ import { Financials } from "./Financials";
 import { PatientProfile } from "./PatientProfile";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
+import { NewOrders } from "./NewOrders";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { runEligibilityCheck, sendToOrder } from "@/api/setSubscriptionPatient";
@@ -676,7 +677,7 @@ function PatientDrawer({
 
 // ─── Component ───────────────────────────────────────────────────────────────
 function OrderCycleWorkflow() {
-  type PrimaryTab = "prep" | "order" | "overview";
+  type PrimaryTab = "prep" | "order" | "neworder" | "overview";
   const [primary, setPrimary] = useState<PrimaryTab>("prep");
   type PrepPhase = CheckpointKind | "all";
   const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
@@ -779,17 +780,23 @@ function OrderCycleWorkflow() {
   // batchMsg so the operator gets feedback, then invalidate the
   // cache so the row leaves Order Prep / Order tabs on the next fetch.
   const sendToOrderBoard = async (p: SubscriptionPatient) => {
-    setSendingId(p.mondayItemId);
+    const id = p.mondayItemId;
+    setSendingIds((prev) => new Set(prev).add(id));
     setBatchMsg(`Sending ${p.name} to Order…`);
     try {
-      await sendToOrder(p.mondayItemId);
-      setSendingId(null);
-      setSentId(p.mondayItemId);
+      await sendToOrder(id);
+      setSendingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+      setSentIds   ((prev) => new Set(prev).add(id));
       setBatchMsg(`${p.name} sent to Order ✓`);
       invalidateSubscription();
-      setTimeout(() => setSentId((cur) => (cur === p.mondayItemId ? null : cur)), 2000);
+      // Hold the green "Sent ✓" on the button for ~2s before the
+      // refetch removes the row from the tab so the operator sees
+      // clear confirmation.
+      setTimeout(() => {
+        setSentIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+      }, 2000);
     } catch (e) {
-      setSendingId(null);
+      setSendingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
       setBatchMsg(
         `Failed to send ${p.name}: ${e instanceof Error ? e.message : String(e)}`,
       );
@@ -807,8 +814,12 @@ function OrderCycleWorkflow() {
   // is the mondayItemId of the row currently being written; sentId is
   // the row that just completed (held ~2s for visible confirmation
   // before the refetch removes the row from the tab).
-  const [sendingId, setSendingId] = useState<string | null>(null);
-  const [sentId, setSentId] = useState<string | null>(null);
+  // Multi-row Send Order: operator can fire off Send on N rows in
+  // quick succession; each in-flight + freshly-sent row is tracked
+  // independently so only that ROW's button locks, not the entire
+  // table.
+  const [sendingIds, setSendingIds] = useState<Set<string>>(() => new Set());
+  const [sentIds, setSentIds]       = useState<Set<string>>(() => new Set());
 
   /**
    * Run Eligibility Batch — flips `Run Check` to "Run" for every patient
@@ -972,6 +983,36 @@ function OrderCycleWorkflow() {
     </TabsTrigger>
   );
 
+  // New 'Order' tab — independent view rendered from the New Order
+  // Board (18405457690). Skip all of the Order Prep / Ready-to-Order
+  // shared scaffolding for this tab; NewOrders renders its own header.
+  if (primary === "neworder") {
+    return (
+      <div className="space-y-4">
+        <Tabs value={primary} onValueChange={(v) => setPrimary(v as PrimaryTab)}>
+          <TabsList className="bg-card border h-11 p-1">
+            <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4">
+              Order Prep
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.prepUnique}</span>
+            </TabsTrigger>
+            <TabsTrigger value="order" className="text-[15px] font-semibold gap-2 px-4">
+              Ready to Order
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.ready}</span>
+            </TabsTrigger>
+            <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4">
+              Order
+            </TabsTrigger>
+            <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
+              Overview
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.overview}</span>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <NewOrders />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* Live data freshness + mock-data banner */}
@@ -1014,8 +1055,11 @@ function OrderCycleWorkflow() {
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.prepUnique}</span>
             </TabsTrigger>
             <TabsTrigger value="order" className="text-[15px] font-semibold gap-2 px-4">
-              Order
+              Ready to Order
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.ready}</span>
+            </TabsTrigger>
+            <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4">
+              Order
             </TabsTrigger>
             <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
               Overview
@@ -1102,11 +1146,11 @@ function OrderCycleWorkflow() {
             sortKey={sortKey}
             sortDir={sortDir}
             onSort={toggleSort}
-            sendingId={sendingId}
-            sentId={sentId}
+            sendingIds={sendingIds}
+            sentIds={sentIds}
           />
         ) : phase === "ready" ? (
-          <SubmitTable rows={rows} onPatientClick={openPatient} onSubmit={sendToOrderBoard} sendingId={sendingId} sentId={sentId} />
+          <SubmitTable rows={rows} onPatientClick={openPatient} onSubmit={sendToOrderBoard} sendingIds={sendingIds} sentIds={sentIds} />
         ) : (
           <PhaseTable
             rows={rows}
@@ -1117,8 +1161,8 @@ function OrderCycleWorkflow() {
             sortKey={sortKey}
             sortDir={sortDir}
             onSort={toggleSort}
-            sendingId={sendingId}
-            sentId={sentId}
+            sendingIds={sendingIds}
+            sentIds={sentIds}
           />
         )}
         {rows.length === 0 && (
@@ -1172,7 +1216,7 @@ function SortableLabel({
 
 function OverviewTable({
   rows, onCellClick, onPatientClick, onSubmit, sortKey, sortDir, onSort,
-  sendingId, sentId,
+  sendingIds, sentIds,
 }: {
   rows: SubscriptionPatient[];
   onCellClick: (p: SubscriptionPatient, k: CheckpointKind) => void;
@@ -1181,8 +1225,8 @@ function OverviewTable({
   sortKey: OverviewSortKey;
   sortDir: "asc" | "desc";
   onSort: (k: OverviewSortKey) => void;
-  sendingId: string | null;
-  sentId:    string | null;
+  sendingIds: Set<string>;
+  sentIds:    Set<string>;
 }) {
   return (
     <div className="text-[13px]">
@@ -1230,7 +1274,7 @@ function OverviewTable({
               <CheckpointCircle check={p.lastPaid} />
             </CircleEditPopover>
           </div>
-          <ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingId === p.mondayItemId} sent={sentId === p.mondayItemId} />
+          <ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} />
         </div>
       ))}
     </div>
@@ -1239,7 +1283,7 @@ function OverviewTable({
 
 function PhaseTable({
   rows, phase, onCellClick, onPatientClick, onSubmit, sortKey, sortDir, onSort,
-  sendingId, sentId,
+  sendingIds, sentIds,
 }: {
   rows: SubscriptionPatient[];
   phase: CheckpointKind;
@@ -1249,8 +1293,8 @@ function PhaseTable({
   sortKey: OverviewSortKey;
   sortDir: "asc" | "desc";
   onSort: (k: OverviewSortKey) => void;
-  sendingId: string | null;
-  sentId:    string | null;
+  sendingIds: Set<string>;
+  sentIds:    Set<string>;
 }) {
   return (
     <Table>
@@ -1293,7 +1337,7 @@ function PhaseTable({
               <TableCell><BlockedByPill value={p.blockedBy} /></TableCell>
               <TableCell><CheckInCell iso={p.nextCheckIn} stuckSince={p.stuckSince} /></TableCell>
               <TableCell className="text-[12px] text-muted-foreground max-w-[340px]">{p.stuckReason ?? "—"}</TableCell>
-              <TableCell><ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingId === p.mondayItemId} sent={sentId === p.mondayItemId} /></TableCell>
+              <TableCell><ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} /></TableCell>
             </TableRow>
           );
         })}
@@ -1303,13 +1347,13 @@ function PhaseTable({
 }
 
 function SubmitTable({
-  rows, onPatientClick, onSubmit, sendingId, sentId,
+  rows, onPatientClick, onSubmit, sendingIds, sentIds,
 }: {
   rows: SubscriptionPatient[];
   onPatientClick: (p: SubscriptionPatient) => void;
   onSubmit: (p: SubscriptionPatient) => void;
-  sendingId: string | null;
-  sentId:    string | null;
+  sendingIds: Set<string>;
+  sentIds:    Set<string>;
 }) {
   return (
     <Table>
@@ -1335,7 +1379,7 @@ function SubmitTable({
             </TableCell>
             <TableCell><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></TableCell>
             <TableCell>{p.primaryPayer}</TableCell>
-            <TableCell><ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingId === p.mondayItemId} sent={sentId === p.mondayItemId} /></TableCell>
+            <TableCell><ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} /></TableCell>
           </TableRow>
         ))}
       </TableBody>
