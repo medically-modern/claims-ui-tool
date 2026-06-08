@@ -17,8 +17,8 @@
 import { useMemo, useState } from "react";
 import {
   ArrowRight, Building2, Check, ClipboardCheck, Clock, ExternalLink, Heart, Loader2,
-  MessageSquare, Pencil, RefreshCw, RefreshCw as ReloadIcon, Search, Send, Server,
-  Shield, UserCog, Unlock, UserCircle, X,
+  MessageSquare, PauseCircle, Pencil, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
+  Server, Shield, UserCog, Unlock, UserCircle, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -426,9 +426,10 @@ function PauseBadge({ patient }: { patient: SubscriptionPatient }) {
   if (patient.patientStatus !== "Paused") return null;
   return (
     <span
-      className="ml-1.5 inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-tight text-amber-800"
+      className="ml-1.5 inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-tight text-rose-700"
       title={patient.pauseReason ? `Paused: ${patient.pauseReason}` : "Paused (no reason set)"}
     >
+      <PauseCircle className="h-3 w-3" />
       Paused{patient.pauseReason ? ` · ${patient.pauseReason}` : ""}
     </span>
   );
@@ -677,7 +678,7 @@ function PatientDrawer({
 
 // ─── Component ───────────────────────────────────────────────────────────────
 function OrderCycleWorkflow() {
-  type PrimaryTab = "prep" | "order" | "neworder" | "overview";
+  type PrimaryTab = "prep" | "paused" | "order" | "neworder" | "overview";
   const [primary, setPrimary] = useState<PrimaryTab>("prep");
   type PrepPhase = CheckpointKind | "all";
   const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
@@ -686,6 +687,7 @@ function OrderCycleWorkflow() {
   // every non-ready patient so the operator sees the whole Order Prep cohort.
   const phase: PhaseTab =
     primary === "overview" ? "overview"
+    : primary === "paused" ? "overview"
     : primary === "order"  ? "ready"
     : prepPhase === "all"  ? "overview"
     : prepPhase;
@@ -749,9 +751,14 @@ function OrderCycleWorkflow() {
       confirmation: 0, benefits: 0, auth: 0, lastPaid: 0,
       ready: 0,
       prepUnique: 0,
+      paused: 0,
     };
     for (const p of all) {
       c.overview++;
+      // Paused patients get pulled out of Order Prep so they don't
+      // clutter the happy-path queue. Counted in their own bucket so
+      // ops can find them when they need to.
+      if (p.patientStatus === "Paused") { c.paused++; continue; }
       const status = p.orderingCycle || "";
       if (status === "Ready to Order") { c.ready++; continue; }
       if (status !== "Order Prep") continue;
@@ -878,10 +885,18 @@ function OrderCycleWorkflow() {
     // (color_mkyjawhq). Backend cron + webhook own the promotion to
     // 'Ready to Order' once all 4 gates pass + eligibility is current.
     // Client-side filters now mirror that single source of truth.
-    if (phase === "overview") {
+    if (primary === "paused") {
+      // Paused tab: every paused patient regardless of ordering cycle
+      // status. Lives outside the Order Prep happy path so the operator
+      // can still find them when they need to act on a pause reason.
+      base = filteredAll.filter((p) => p.patientStatus === "Paused");
+    } else if (phase === "overview") {
       if (primary === "prep" && prepPhase === "all") {
-        // Order Prep > All: every row currently sitting in 'Order Prep'.
-        base = filteredAll.filter((p) => (p.orderingCycle || "") === "Order Prep");
+        // Order Prep > All: every row in 'Order Prep' EXCLUDING paused.
+        base = filteredAll.filter((p) =>
+          (p.orderingCycle || "") === "Order Prep" &&
+          p.patientStatus !== "Paused",
+        );
       } else {
         // Pure Overview tab: whole cohort regardless of status.
         base = filteredAll;
@@ -891,9 +906,11 @@ function OrderCycleWorkflow() {
       base = filteredAll.filter((p) => (p.orderingCycle || "") === "Ready to Order");
     } else {
       // Phase sub-tabs (Confirmation / Eligibility / Auth / Last Paid):
-      // patients in Order Prep AND with this specific checkpoint non-OK.
+      // patients in Order Prep AND with this specific checkpoint non-OK,
+      // also excluding paused so they don't clog the buckets.
       base = filteredAll.filter((p) =>
         (p.orderingCycle || "") === "Order Prep" &&
+        p.patientStatus !== "Paused" &&
         getCheckpoint(p, phase).tone !== "ok",
       );
     }
@@ -994,6 +1011,16 @@ function OrderCycleWorkflow() {
             <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4">
               Order Prep
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.prepUnique}</span>
+            </TabsTrigger>
+            <TabsTrigger value="paused" className="text-[15px] font-semibold gap-2 px-4">
+              <PauseCircle className="h-4 w-4 text-rose-600" />
+              Paused
+              <span className="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.paused}</span>
+            </TabsTrigger>
+            <TabsTrigger value="paused" className="text-[15px] font-semibold gap-2 px-4">
+              <PauseCircle className="h-4 w-4 text-rose-600" />
+              Paused
+              <span className="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.paused}</span>
             </TabsTrigger>
             <TabsTrigger value="order" className="text-[15px] font-semibold gap-2 px-4">
               Ready to Order
