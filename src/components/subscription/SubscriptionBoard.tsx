@@ -454,10 +454,12 @@ function CheckInCell({ iso, stuckSince }: { iso?: string; stuckSince?: string })
   );
 }
 
-function ReviewAndSubmit({ p, onReview, onSubmit }: {
+function ReviewAndSubmit({ p, onReview, onSubmit, sending, sent }: {
   p: SubscriptionPatient;
   onReview: () => void;
   onSubmit: () => void;
+  sending?: boolean;
+  sent?:    boolean;
 }) {
   const ready = allChecksPass(p);
   return (
@@ -470,23 +472,31 @@ function ReviewAndSubmit({ p, onReview, onSubmit }: {
         size="sm"
         className="h-7 px-2.5 text-[11px] font-semibold"
         onClick={onReview}
+        disabled={sending || sent}
       >
         Review<ArrowRight className="ml-1 h-3 w-3" />
       </Button>
       <Button
         size="sm"
         onClick={onSubmit}
+        disabled={sending || sent}
         className={cn(
-          "h-7 px-2.5 text-[11px] font-semibold text-white",
-          ready
-            ? "bg-emerald-700 hover:bg-emerald-800 shadow-sm"
-            : "bg-slate-400 hover:bg-slate-500",
+          "h-7 px-2.5 text-[11px] font-semibold text-white shadow-sm transition-colors",
+          sending ? "bg-blue-600"
+          : sent  ? "bg-emerald-600"
+          : ready ? "bg-emerald-700 hover:bg-emerald-800"
+                  : "bg-slate-400 hover:bg-slate-500",
         )}
-        title={ready
-          ? "All 4 checks passed — send order"
-          : "Not all 4 checks pass — confirm before submitting"}
+        title={
+          sending ? "Writing Ordering Cycle = Order on Monday…"
+          : sent   ? "Sent — Monday automation now spawns the order"
+          : ready  ? "All 4 checks passed — send order"
+                   : "Not all 4 checks pass — confirm before submitting"
+        }
       >
-        <Send className="mr-1 h-3 w-3" />Send Order
+        {sending ? (<><Loader2 className="mr-1 h-3 w-3 animate-spin" />Sending…</>)
+        : sent    ? (<><Check    className="mr-1 h-3 w-3" />Sent</>)
+        :           (<><Send     className="mr-1 h-3 w-3" />Send Order</>)}
       </Button>
     </div>
   );
@@ -769,12 +779,17 @@ function OrderCycleWorkflow() {
   // batchMsg so the operator gets feedback, then invalidate the
   // cache so the row leaves Order Prep / Order tabs on the next fetch.
   const sendToOrderBoard = async (p: SubscriptionPatient) => {
+    setSendingId(p.mondayItemId);
     setBatchMsg(`Sending ${p.name} to Order…`);
     try {
       await sendToOrder(p.mondayItemId);
+      setSendingId(null);
+      setSentId(p.mondayItemId);
       setBatchMsg(`${p.name} sent to Order ✓`);
       invalidateSubscription();
+      setTimeout(() => setSentId((cur) => (cur === p.mondayItemId ? null : cur)), 2000);
     } catch (e) {
+      setSendingId(null);
       setBatchMsg(
         `Failed to send ${p.name}: ${e instanceof Error ? e.message : String(e)}`,
       );
@@ -787,6 +802,13 @@ function OrderCycleWorkflow() {
   const { invalidate: invalidateSubscription } = useInvalidateSubscription();
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchMsg, setBatchMsg] = useState<string | null>(null);
+  // Per-row Send Order feedback: the header batchMsg pill is invisible
+  // when the operator's eyes are at the bottom of a long table. sendingId
+  // is the mondayItemId of the row currently being written; sentId is
+  // the row that just completed (held ~2s for visible confirmation
+  // before the refetch removes the row from the tab).
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [sentId, setSentId] = useState<string | null>(null);
 
   /**
    * Run Eligibility Batch — flips `Run Check` to "Run" for every patient
@@ -1080,6 +1102,8 @@ function OrderCycleWorkflow() {
             sortKey={sortKey}
             sortDir={sortDir}
             onSort={toggleSort}
+            sendingId={sendingId}
+            sentId={sentId}
           />
         ) : phase === "ready" ? (
           <SubmitTable rows={rows} onPatientClick={openPatient} onSubmit={sendToOrderBoard} sendingId={sendingId} sentId={sentId} />
@@ -1093,6 +1117,8 @@ function OrderCycleWorkflow() {
             sortKey={sortKey}
             sortDir={sortDir}
             onSort={toggleSort}
+            sendingId={sendingId}
+            sentId={sentId}
           />
         )}
         {rows.length === 0 && (
@@ -1146,6 +1172,7 @@ function SortableLabel({
 
 function OverviewTable({
   rows, onCellClick, onPatientClick, onSubmit, sortKey, sortDir, onSort,
+  sendingId, sentId,
 }: {
   rows: SubscriptionPatient[];
   onCellClick: (p: SubscriptionPatient, k: CheckpointKind) => void;
@@ -1154,6 +1181,8 @@ function OverviewTable({
   sortKey: OverviewSortKey;
   sortDir: "asc" | "desc";
   onSort: (k: OverviewSortKey) => void;
+  sendingId: string | null;
+  sentId:    string | null;
 }) {
   return (
     <div className="text-[13px]">
@@ -1201,7 +1230,7 @@ function OverviewTable({
               <CheckpointCircle check={p.lastPaid} />
             </CircleEditPopover>
           </div>
-          <ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} />
+          <ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingId === p.mondayItemId} sent={sentId === p.mondayItemId} />
         </div>
       ))}
     </div>
@@ -1210,6 +1239,7 @@ function OverviewTable({
 
 function PhaseTable({
   rows, phase, onCellClick, onPatientClick, onSubmit, sortKey, sortDir, onSort,
+  sendingId, sentId,
 }: {
   rows: SubscriptionPatient[];
   phase: CheckpointKind;
@@ -1219,6 +1249,8 @@ function PhaseTable({
   sortKey: OverviewSortKey;
   sortDir: "asc" | "desc";
   onSort: (k: OverviewSortKey) => void;
+  sendingId: string | null;
+  sentId:    string | null;
 }) {
   return (
     <Table>
@@ -1261,7 +1293,7 @@ function PhaseTable({
               <TableCell><BlockedByPill value={p.blockedBy} /></TableCell>
               <TableCell><CheckInCell iso={p.nextCheckIn} stuckSince={p.stuckSince} /></TableCell>
               <TableCell className="text-[12px] text-muted-foreground max-w-[340px]">{p.stuckReason ?? "—"}</TableCell>
-              <TableCell><ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} /></TableCell>
+              <TableCell><ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingId === p.mondayItemId} sent={sentId === p.mondayItemId} /></TableCell>
             </TableRow>
           );
         })}
@@ -1303,7 +1335,7 @@ function SubmitTable({
             </TableCell>
             <TableCell><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></TableCell>
             <TableCell>{p.primaryPayer}</TableCell>
-            <TableCell><ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} /></TableCell>
+            <TableCell><ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingId === p.mondayItemId} sent={sentId === p.mondayItemId} /></TableCell>
           </TableRow>
         ))}
       </TableBody>
