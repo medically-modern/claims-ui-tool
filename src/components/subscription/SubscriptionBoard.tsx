@@ -1271,11 +1271,13 @@ function PhaseTable({
 }
 
 function SubmitTable({
-  rows, onPatientClick, onSubmit,
+  rows, onPatientClick, onSubmit, sendingId, sentId,
 }: {
   rows: SubscriptionPatient[];
   onPatientClick: (p: SubscriptionPatient) => void;
   onSubmit: (p: SubscriptionPatient) => void;
+  sendingId: string | null;
+  sentId:    string | null;
 }) {
   return (
     <Table>
