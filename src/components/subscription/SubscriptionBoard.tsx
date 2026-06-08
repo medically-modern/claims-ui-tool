@@ -1082,7 +1082,7 @@ function OrderCycleWorkflow() {
             onSort={toggleSort}
           />
         ) : phase === "ready" ? (
-          <SubmitTable rows={rows} onPatientClick={openPatient} onSubmit={sendToOrderBoard} />
+          <SubmitTable rows={rows} onPatientClick={openPatient} onSubmit={sendToOrderBoard} sendingId={sendingId} sentId={sentId} />
         ) : (
           <PhaseTable
             rows={rows}
