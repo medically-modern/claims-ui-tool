@@ -109,8 +109,8 @@ export function BcbsSubmitGuardDialog({
                   >
                     <div className="font-medium text-amber-900">{w.message}</div>
                     <div className="mt-1 text-xs text-amber-800">
-                      Confirm with the home plan that auth was obtained, then
-                      submit anyway if it's good.
+                      {w.detail ??
+                        "Confirm with the home plan that auth was obtained, then submit anyway if it's good."}
                     </div>
                   </li>
                 ))}

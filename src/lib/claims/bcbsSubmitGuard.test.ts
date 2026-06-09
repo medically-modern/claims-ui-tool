@@ -290,6 +290,98 @@ describe("evaluateBcbsSubmit — soft warnings", () => {
   });
 });
 
+describe("evaluateBcbsSubmit — modifier mismatch", () => {
+  it("warns when a CareCentrix (NJ) line has KX instead of NU+SC (Esther Reich)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "Horizon BCBS",
+      payorId: CARECENTRIX_NJ_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "NJ",
+      lineAuthIds: ["AUTH-A", "AUTH-B"],
+      lineHcpcs: ["A4232", "A4230"],
+      lineModifiers: [["KX"], ["KX"]],
+    });
+    expect(r.hardStops).toEqual([]);
+    expect(r.warnings.some((w) => w.code === "MODIFIER_MISMATCH")).toBe(true);
+  });
+
+  it("no modifier warning when NJ lines carry NU+SC / NU", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "Horizon BCBS",
+      payorId: CARECENTRIX_NJ_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "NJ",
+      lineAuthIds: ["AUTH-A", "AUTH-B", "AUTH-C"],
+      lineHcpcs: ["A4230", "A4232", "A4239"],
+      lineModifiers: [["NU", "SC"], ["NU", "SC"], ["NU"]],
+    });
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("no modifier warning when NY (803) lines carry KX / KF+KX+CG", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "Anthem BCBS Co.",
+      payorId: ANTHEM_NY_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "NY",
+      lineAuthIds: ["AUTH"],
+      lineHcpcs: ["A4230", "A4232", "A4239"],
+      lineModifiers: [["KX"], ["KX"], ["KF", "KX", "CG"]],
+    });
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("flags NY (803) line carrying NU+SC (should be KX)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "Anthem BCBS Co.",
+      payorId: ANTHEM_NY_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "NY",
+      lineAuthIds: ["AUTH"],
+      lineHcpcs: ["A4230"],
+      lineModifiers: [["NU", "SC"]],
+    });
+    expect(r.warnings.some((w) => w.code === "MODIFIER_MISMATCH")).toBe(true);
+  });
+
+  it("flags 803 A4239 missing KF/CG", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "Anthem BCBS Co.",
+      payorId: ANTHEM_NY_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "NY",
+      lineAuthIds: ["AUTH"],
+      lineHcpcs: ["A4239"],
+      lineModifiers: [["KX"]],
+    });
+    expect(r.warnings.some((w) => w.code === "MODIFIER_MISMATCH")).toBe(true);
+  });
+
+  it("ignores HCPCS with no canonical expectation (E0784)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "Anthem BCBS Co.",
+      payorId: ANTHEM_NY_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "NY",
+      lineAuthIds: ["AUTH"],
+      lineHcpcs: ["E0784"],
+      lineModifiers: [["KX", "NU"]],
+    });
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("skips the modifier check entirely when lineModifiers not provided", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "Anthem BCBS Co.",
+      payorId: ANTHEM_NY_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "NY",
+      lineAuthIds: ["AUTH"],
+    });
+    expect(r.warnings).toEqual([]);
+  });
+});
+
 describe("evaluateBcbsSubmit — scope detection by payor ID alone", () => {
   it("fires for a generic payer label when payor ID is 803", () => {
     // Misrouting protection: even if the operator forgot to label this

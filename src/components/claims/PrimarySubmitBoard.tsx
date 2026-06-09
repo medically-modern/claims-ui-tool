@@ -90,7 +90,7 @@ const HCPC_OPTIONS = ["A4230", "A4232", "A4239", "E0784", "E2103"];
 // The Monday side accepts label-by-name writes (create_labels_if_missing)
 // so unknown modifiers always write successfully.
 const MODIFIER_OPTIONS = [
-  "KX", "NU", "RR", "RA", "RB", "GA", "GY", "GW", "KF", "CG",
+  "KX", "NU", "SC", "RR", "RA", "RB", "GA", "GY", "GW", "KF", "CG",
   "KH", "KI", "KJ",
 ];
 

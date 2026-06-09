@@ -100,6 +100,27 @@ If we expand to more Blues plans (Tennessee, Florida, Wyoming etc. — already i
 
 ---
 
+## Modifiers by billing route
+
+Modifiers are **route-specific**, not just code-specific. The same supply code carries *different* modifiers depending on which payer the claim goes to, so this must be set per billing route — never copied across from another claim. The billing route is itself determined by the address master switch (NY/other → 803, NJ → 11348).
+
+| HCPCS (product) | **803** — Anthem NY / Empire (NY + out-of-state) | **11348** — Horizon NJ via CareCentrix |
+|-----------------|--------------------------------------------------|----------------------------------------|
+| **A4230** (Infusion Sets) | `KX` | `NU` + `SC` |
+| **A4232** (Cartridges) | `KX` | `NU` + `SC` |
+| **A4239** (CGM Sensors) | `KF` + `KX` + `CG` | `NU` |
+
+`NU + SC` on the 11348 side is the set used once an auth is obtained from CareCentrix and the claim is submitted to them. `E0784` / `E2103` modifier conventions are not yet codified and are not policed by the guard.
+
+**Operator-facing rule:** the supply-line modifiers must match the row's billing route. Two bugs this catches:
+
+- **Esther Reich** — NJ resident correctly routed to **11348**, but the lines came over with `KX` instead of `NU + SC`.
+- A line built with `NU + SC` while routing to **803** is equally wrong — Empire expects `KX` (and `KF + KX + CG` on A4239).
+
+> **Now enforced (2026-06-09):** the pre-submit guard (`bcbsSubmitGuard.ts`, `EXPECTED_LINE_MODIFIERS_BY_PAYER`) raises a **soft warning** (`MODIFIER_MISMATCH`, "submit anyway?") when a supply line is missing the canonical modifiers for its billing route. It checks against the *required* payer for the patient's state, and only flags **missing** required modifiers (extras like ERA-derived codes don't trip it). `SC` was also missing from the modifier dropdown (`MODIFIER_OPTIONS` in `PrimarySubmitBoard.tsx`) and has been added so operators can actually select it.
+
+---
+
 ## Open questions for the next iteration
 
 1. **Auth-by-prefix table.** What's the canonical mapping from member-ID prefix → home plan → "is auth required for our HCPCS set"? Once we have that table, the soft warning becomes a hard check.
@@ -114,3 +135,5 @@ If we expand to more Blues plans (Tennessee, Florida, Wyoming etc. — already i
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-05-28 | Brandon (notes) + Claude (synthesis) | Initial draft from email exchange + routing rules |
+| 2026-06-09 | Brandon + Claude | Added "Modifiers by billing route" — 11348/CareCentrix requires NU + SC on supply lines; added SC to the UI modifier dropdown |
+| 2026-06-09 | Brandon + Claude | Completed the per-route modifier table (803 = KX / KX / KF+KX+CG; 11348 = NU+SC / NU+SC / NU) and wired the MODIFIER_MISMATCH soft warning into the pre-submit guard |

@@ -44,6 +44,11 @@ export interface BcbsSubmitGuardInput {
   /** Optional product labels paired 1:1 with lineAuthIds so the warning
    *  message can name which products are missing auth. */
   lineProducts?: Array<string | undefined>;
+  /** Per-line HCPCS codes (paired 1:1 with lineModifiers) for the
+   *  modifier-mismatch check. When omitted, that check is skipped. */
+  lineHcpcs?: Array<string | undefined>;
+  /** Per-line modifier arrays, paired 1:1 with lineHcpcs. */
+  lineModifiers?: Array<Array<string> | undefined>;
 }
 
 export interface BcbsHardStop {
@@ -59,10 +64,12 @@ export interface BcbsHardStop {
 }
 
 export interface BcbsWarning {
-  code: "CARECENTRIX_AUTH_GAP";
+  code: "CARECENTRIX_AUTH_GAP" | "MODIFIER_MISMATCH";
   message: string;
-  /** Product labels that are missing auth (for the dialog body). */
-  productsMissingAuth: string[];
+  /** Guidance line rendered under the message in the confirm dialog. */
+  detail?: string;
+  /** Product labels that are missing auth (CARECENTRIX_AUTH_GAP only). */
+  productsMissingAuth?: string[];
 }
 
 export interface BcbsGuardResult {
@@ -148,6 +155,63 @@ export function requiredPosFor(state: PatientStateBucket): "Home" | "Office" | n
   if (state === "NY" || state === "NJ") return "Home";
   if (state === "OTHER") return "Office";
   return null;
+}
+
+/** Canonical modifiers we expect on each supply line, keyed by the
+ *  billing payer ID and then by HCPCS. Modifiers are ROUTE-specific:
+ *  the same supply code carries different modifiers depending on whether
+ *  the claim goes to Anthem NY (803) or Horizon NJ via CareCentrix
+ *  (11348). Same-family HCPCS aliases (Aetna A4231, Medicare A4224 /
+ *  A4225) inherit their base code's expectation. E0784 / E2103 are not
+ *  policed yet — no entry here means "don't check". */
+export const EXPECTED_LINE_MODIFIERS_BY_PAYER: Record<
+  string,
+  Record<string, string[]>
+> = {
+  [ANTHEM_NY_PAYER_ID]: {
+    A4230: ["KX"],
+    A4231: ["KX"],
+    A4224: ["KX"],
+    A4232: ["KX"],
+    A4225: ["KX"],
+    A4239: ["KF", "KX", "CG"],
+  },
+  [CARECENTRIX_NJ_PAYER_ID]: {
+    A4230: ["NU", "SC"],
+    A4231: ["NU", "SC"],
+    A4224: ["NU", "SC"],
+    A4232: ["NU", "SC"],
+    A4225: ["NU", "SC"],
+    A4239: ["NU"],
+  },
+};
+
+/** Required modifiers that are absent from a line, given the billing
+ *  payer and the line's HCPCS. Returns [] when we have no canonical
+ *  expectation for that payer+code (so we don't police it). Conservative
+ *  by design: only flags MISSING required modifiers, not extra ones. */
+export function missingLineModifiers(
+  payerId: string | null | undefined,
+  hcpc: string | null | undefined,
+  modifiers: Array<string> | null | undefined,
+): string[] {
+  const table = EXPECTED_LINE_MODIFIERS_BY_PAYER[(payerId || "").trim()];
+  if (!table || !hcpc) return [];
+  const expected = table[hcpc.trim().toUpperCase()];
+  if (!expected) return [];
+  const have = new Set(
+    (modifiers ?? []).map((m) => (m || "").trim().toUpperCase()),
+  );
+  return expected.filter((m) => !have.has(m));
+}
+
+/** Human-readable summary of the expected modifier set for a payer,
+ *  used in the warning's detail line. */
+function expectedModifierSummary(payerId: string): string {
+  if (payerId === CARECENTRIX_NJ_PAYER_ID) {
+    return "CareCentrix / Horizon NJ (11348) expects A4230/A4232 → NU+SC, A4239 → NU.";
+  }
+  return "Anthem NY / Empire (803) expects A4230/A4232 → KX, A4239 → KF+KX+CG.";
 }
 
 /** Pure validator. No side effects, no I/O — feed in everything we
@@ -259,7 +323,44 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
           (missingProducts.length === input.lineAuthIds.length
             ? "any line."
             : missingProducts.join(", ") + "."),
+        detail:
+          "Confirm with the home plan that auth was obtained, then submit anyway if it's good.",
         productsMissingAuth: missingProducts,
+      });
+    }
+  }
+
+  // ---- Soft warning: supply lines missing the route's canonical modifiers ----
+  // Modifiers are route-specific (see EXPECTED_LINE_MODIFIERS_BY_PAYER):
+  //   803   → A4230/A4232 = KX, A4239 = KF+KX+CG
+  //   11348 → A4230/A4232 = NU+SC, A4239 = NU
+  // We check against the REQUIRED payer for the patient's state (the
+  // correct destination), so a line built with KX while routing to
+  // CareCentrix — or NU/SC while routing to Anthem NY — is flagged.
+  // Only runs when the caller hands us per-line HCPCS + modifiers.
+  if (input.lineHcpcs && input.lineModifiers && requiredPayer) {
+    const issues: string[] = [];
+    input.lineHcpcs.forEach((hcpc, idx) => {
+      const missing = missingLineModifiers(
+        requiredPayer,
+        hcpc,
+        input.lineModifiers?.[idx],
+      );
+      if (missing.length > 0) {
+        const code = (hcpc || `line ${idx + 1}`).toUpperCase();
+        const have = (input.lineModifiers?.[idx] ?? []).join("+") || "none";
+        issues.push(`${code} missing ${missing.join("+")} (has ${have})`);
+      }
+    });
+    if (issues.length > 0) {
+      warnings.push({
+        code: "MODIFIER_MISMATCH",
+        message:
+          "Supply line modifiers don't match the billing route: " +
+          issues.join("; ") + ".",
+        detail:
+          expectedModifierSummary(requiredPayer) +
+          " Fix the Modifiers on each flagged line, then submit.",
       });
     }
   }
@@ -281,5 +382,7 @@ export function evaluateBcbsSubmitForThreadClaim(
     patientState,
     lineAuthIds: c.items.map((i) => i.auth_id),
     lineProducts: c.items.map((i) => i.hcpc),
+    lineHcpcs: c.items.map((i) => i.hcpc),
+    lineModifiers: c.items.map((i) => i.modifiers),
   });
 }
