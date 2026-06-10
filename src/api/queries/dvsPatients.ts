@@ -23,7 +23,7 @@ export const SUB_DVS_COL = {
   primary_insurance:  "color_mm254qxj",
   subscription_type:  "color_mm273mv8",
   phone:              "phone_mkp0q3cw",
-  next_order:         "date_mkwr7spz",
+  next_order:         "date_mkp0nvf1",  // verified 2026-06-10 — was date_mkwr7spz which doesn't exist; every row's nextOrderDate was empty so the 'today-or-earlier' filter dropped them all
   trigger_dvs:        "color_mm2narpj",
   claims_status:      "color_mm2n5rkg",
   claim_paid_amount:  "text_mm2nxwze",
