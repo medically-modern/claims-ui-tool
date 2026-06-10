@@ -128,6 +128,15 @@ export const SUB_COL = {
   // for the upcoming order; OopBadge headline prefers this over a
   // deductible-only calc when populated.
   oop_estimate:         "text_mm404p7d",
+  // "Facility Flags" (dropdown) — populated by the Stedi eligibility
+  // parser when the 271 reports a recent Hospice election (STC 45) or
+  // a Hospital/SNF admission (STC 48/AH) within the 30-day recency
+  // window. Used by deriveBenefits to override the Eligibility tone:
+  //   contains 'Hospital/SNF' or 'SNF' -> red  (can't bill DME at all)
+  //   contains 'Hospice'               -> yellow (billable with GW
+  //                                       on Medicare A&B; warn for
+  //                                       all other payers)
+  facility_flags:       "dropdown_mm3gkcmc",
   qmb:                  "text_mm3gr7rh",
   // Claims
   primary_claim_paid:   "color_mm33spks",
@@ -176,6 +185,7 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   datePlanBegin: string; deductibleAmt: string; dedRemaining: string;
   coinsurancePct: string; oopMax: string; oopMaxRemaining: string;
   oopEstimate: string;
+  facilityFlags: string;
   // Claims
   primaryClaimPaid: string; secondaryClaimPaid: string;
   // Group membership (used to filter Not Active patients out by default)
@@ -296,6 +306,28 @@ function deriveBenefits(item: MondayItem): Checkpoint {
   const active = get(item, SUB_COL.active);
   const runCheck = get(item, SUB_COL.run_check);
   const lastError = get(item, SUB_COL.last_eligibility_error);
+  const facilityFlags = get(item, SUB_COL.facility_flags);
+  // Facility-flag overrides win before any Active value because they
+  // describe billing-impact states that hold regardless of the
+  // policy's eligibility verdict:
+  //   Hospital/SNF -> red (DME can't be separately billed)
+  //   Hospice      -> yellow (billable on Medicare A&B with GW; warn
+  //                    on every other payer so ops verify the path)
+  const ff = facilityFlags.toLowerCase();
+  if (ff.includes("hospital") || /\bsnf\b/.test(ff)) {
+    return {
+      tone: "bad",
+      label: "Hospital/SNF",
+      detail: "Active admission — DME can't be separately billed during the stay.",
+    };
+  }
+  if (ff.includes("hospice")) {
+    return {
+      tone: "warn",
+      label: "Hospice",
+      detail: "Active hospice election — Medicare A&B bills with GW modifier; non-Medicare may deny.",
+    };
+  }
   // Active populated with a real verdict beats anything else.
   if (active === "Active") return { tone: "ok", label: "Active" };
   if (active === "Inactive" || active === "Medicare Advantage") {
@@ -513,6 +545,7 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
     oopMax:              get(item, SUB_COL.oop_max),
     oopMaxRemaining:     get(item, SUB_COL.oop_max_remaining),
     oopEstimate:         get(item, SUB_COL.oop_estimate),
+    facilityFlags:       get(item, SUB_COL.facility_flags),
     primaryClaimPaid:    get(item, SUB_COL.primary_claim_paid),
     secondaryClaimPaid:  get(item, SUB_COL.secondary_claim_paid),
     groupId:             item.group?.id ?? "",
