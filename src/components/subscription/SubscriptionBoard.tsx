@@ -423,6 +423,74 @@ function BlockedByPill({ value }: { value?: BlockedParty }) {
 }
 
 
+/**
+ * Out-of-pocket pill — surfaces when the patient still owes meaningful
+ * money this cycle (deductible remaining + coinsurance gap).
+ *
+ * Heuristic:
+ *   totalOop = max(dedRemaining, 0) — first dollars the patient owes
+ *               before insurance kicks in fully. We don't have order
+ *               cost on this row so we can't include the coinsurance
+ *               contribution precisely; the hover surfaces coinsurance
+ *               % and OOP Max Remaining so the operator can do the
+ *               math when needed.
+ *
+ * Render gates:
+ *   - Pill shown only when totalOop >= 100 (per Brandon 2026-06-07).
+ *   - Colour scales with size: 100–499 amber, 500+ red.
+ *   - Hover shows the breakdown.
+ *
+ * Pulls extra fields via a cast — they exist on LiveSubscriptionPatient
+ * but not the mock SubscriptionPatient type.
+ */
+function parseMoney(raw: string | undefined | null): number | null {
+  if (!raw) return null;
+  const n = Number(String(raw).replace(/[^0-9.\-]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+function fmtMoneyAmt(n: number): string {
+  return `$${n.toLocaleString(undefined, {
+    minimumFractionDigits: n % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+function OopBadge({ patient }: { patient: SubscriptionPatient }) {
+  const live = patient as unknown as {
+    dedRemaining?: string; coinsurancePct?: string;
+    oopMaxRemaining?: string; deductibleAmt?: string; oopMax?: string;
+  };
+  const ded   = parseMoney(live.dedRemaining);
+  const coins = parseMoney(live.coinsurancePct);
+  const oopR  = parseMoney(live.oopMaxRemaining);
+  // Total OOP headline = remaining deductible. Anything below the
+  // threshold is irrelevant noise.
+  const totalOop = ded ?? 0;
+  if (totalOop < 100) return null;
+
+  const tone = totalOop >= 500
+    ? "border-rose-200 bg-rose-50 text-rose-700"
+    : "border-amber-200 bg-amber-50 text-amber-800";
+
+  const lines = [
+    `Total OOP: ${fmtMoneyAmt(totalOop)}`,
+    ded   != null ? `Deductible remaining: ${fmtMoneyAmt(ded)}`            : null,
+    coins != null ? `Coinsurance: ${coins}%`                                : null,
+    oopR  != null ? `OOP Max remaining: ${fmtMoneyAmt(oopR)}`               : null,
+  ].filter(Boolean).join("\n");
+
+  return (
+    <span
+      title={lines}
+      className={cn(
+        "ml-1.5 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
+        tone,
+      )}
+    >
+      {fmtMoneyAmt(totalOop)} OOP
+    </span>
+  );
+}
+
 function PauseBadge({ patient }: { patient: SubscriptionPatient }) {
   if (patient.patientStatus !== "Paused") return null;
   return (
@@ -1309,7 +1377,7 @@ function OverviewTable({
       {rows.map((p) => (
         <div key={p.id} className={cn(OVERVIEW_GRID, "border-b px-6 py-4 hover:bg-muted/30 transition-colors items-center")}>
           <button type="button" onClick={() => onPatientClick(p)} className="text-left">
-            <div className="text-[15px] font-semibold text-foreground flex items-center">{p.name}<PauseBadge patient={p} /></div>
+            <div className="text-[15px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /></div>
             <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">{p.phone}</div>
           </button>
           <div>
@@ -1383,7 +1451,7 @@ function PhaseTable({
             <TableRow key={p.id} className="align-top">
               <TableCell>
                 <button type="button" onClick={() => onPatientClick(p)} className="text-left">
-                  <div className="text-[13px] font-semibold flex items-center">{p.name}<PauseBadge patient={p} /></div>
+                  <div className="text-[13px] font-semibold flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /></div>
                   <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
                 </button>
               </TableCell>
@@ -1435,7 +1503,7 @@ function SubmitTable({
         {rows.map((p) => (
           <TableRow key={p.id}>
             <TableCell>
-              <div className="text-[13px] font-semibold flex items-center">{p.name}<PauseBadge patient={p} /></div>
+              <div className="text-[13px] font-semibold flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /></div>
               <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
             </TableCell>
             <TableCell>
