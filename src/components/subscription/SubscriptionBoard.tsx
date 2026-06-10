@@ -46,6 +46,7 @@ import { PatientProfile } from "./PatientProfile";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
 import { NewOrders } from "./NewOrders";
+import { DvsQueue } from "./DvsQueue";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { runEligibilityCheck, sendToOrder } from "@/api/setSubscriptionPatient";
@@ -827,6 +828,14 @@ function OrderCycleWorkflow() {
   // table.
   const [sendingIds, setSendingIds] = useState<Set<string>>(() => new Set());
   const [sentIds, setSentIds]       = useState<Set<string>>(() => new Set());
+  // Order Prep > Authorization sub-view toggle. When true, the
+  // Authorization tab swaps the default PhaseTable for the existing
+  // DvsQueue component — auto-filtered to Medicaid + non-Sensors-only
+  // patients, rendered in the DVS-shaped table with bulk Run DVS +
+  // per-row Run DVS actions. Brandon's mental model is "in Auth, I
+  // want to flip into DVS mode for Medicaid patients I can act on
+  // today, without leaving the order cycle."
+  const [dvsView, setDvsView] = useState(false);
 
   /**
    * Run Eligibility Batch — flips `Run Check` to "Run" for every patient
@@ -1111,12 +1120,34 @@ function OrderCycleWorkflow() {
               Run Eligibility Batch
             </Button>
           )}
+          {phase === "auth" && (
+            <Button
+              variant={dvsView ? "default" : "outline"}
+              size="sm"
+              onClick={() => setDvsView((v) => !v)}
+              className={cn(
+                dvsView && "bg-sky-700 hover:bg-sky-800 text-white",
+              )}
+              title={dvsView
+                ? "Switch back to the standard Auth view"
+                : "Show only Medicaid patients with the DVS workstation table"}
+            >
+              <Shield className="mr-2 h-4 w-4" />
+              {dvsView ? "Exit Medicaid DVS view" : "Medicaid DVS view"}
+            </Button>
+          )}
         </div>
       </div>
 
       {/* Sub-nav under Order Prep — the 4 readiness phases */}
       {primary === "prep" && (
-        <Tabs value={prepPhase} onValueChange={(v) => setPrepPhase(v as PrepPhase)}>
+        <Tabs value={prepPhase} onValueChange={(v) => {
+          setPrepPhase(v as PrepPhase);
+          // Reset the DVS sub-view toggle when navigating away from
+          // Authorization so a stale toggle doesn't show up on the
+          // next entry.
+          if (v !== "auth") setDvsView(false);
+        }}>
           <TabsList className="bg-card border">
             <TabsTrigger value="all" className="gap-1.5">
               All
@@ -1164,7 +1195,14 @@ function OrderCycleWorkflow() {
 
       {/* Table per phase */}
       <Card className="overflow-hidden">
-        {phase === "overview" ? (
+        {phase === "auth" && dvsView ? (
+          // DvsQueue ships with its own header / loading / refresh —
+          // mount inside the same Card so column alignment with the
+          // rest of the Order Prep workflow stays consistent.
+          <div className="p-4">
+            <DvsQueue />
+          </div>
+        ) : phase === "overview" ? (
           <OverviewTable
             rows={rows}
             onCellClick={openCell}
