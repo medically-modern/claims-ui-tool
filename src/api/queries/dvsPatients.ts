@@ -22,6 +22,11 @@ export const SUBSCRIPTION_BOARD_ID = 18407459988;
 export const SUB_DVS_COL = {
   primary_insurance:  "color_mm254qxj",
   subscription_type:  "color_mm273mv8",
+  // Patient Status (Active / Paused / Not Active). Used to exclude
+  // paused patients from the DVS queue — same happy-path rule as
+  // Order Prep: paused patients live in their own bucket, they shouldn't
+  // clutter views that are about taking action now.
+  patient_status:     "color_mm2t7tdy",
   phone:              "phone_mkp0q3cw",
   next_order:         "date_mkp0nvf1",  // verified 2026-06-10 — was date_mkwr7spz which doesn't exist; every row's nextOrderDate was empty so the 'today-or-earlier' filter dropped them all
   trigger_dvs:        "color_mm2narpj",
@@ -67,6 +72,7 @@ export interface DvsRow {
   nextOrderDate: string;      // YYYY-MM-DD
   primaryInsurance: string;   // raw label
   subscriptionType: string;
+  patientStatus:    string;
   triggerDvs: DvsTriggerLabel;
   claimsStatus: ClaimsStatusLabel;
   claimPaidAmount: string;
@@ -141,6 +147,7 @@ function mapItem(item: MondayItem): DvsRow {
     nextOrderDate:       get(item, SUB_DVS_COL.next_order),
     primaryInsurance:    get(item, SUB_DVS_COL.primary_insurance),
     subscriptionType:    get(item, SUB_DVS_COL.subscription_type),
+    patientStatus:       get(item, SUB_DVS_COL.patient_status),
     triggerDvs:          (get(item, SUB_DVS_COL.trigger_dvs) || "") as DvsTriggerLabel,
     claimsStatus:        (get(item, SUB_DVS_COL.claims_status) || "") as ClaimsStatusLabel,
     claimPaidAmount:     get(item, SUB_DVS_COL.claim_paid_amount),
@@ -184,6 +191,9 @@ export async function fetchDvsPatients(): Promise<DvsRow[]> {
 
   return out.filter((p) =>
     p.primaryInsurance === "Medicaid" &&
-    p.subscriptionType !== "Sensors",
+    p.subscriptionType !== "Sensors" &&
+    // Paused patients have their own bucket on Order Cycle; DVS view
+    // is for take-action-now rows, so they shouldn't appear here either.
+    p.patientStatus !== "Paused",
   );
 }
