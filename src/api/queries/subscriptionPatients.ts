@@ -124,6 +124,10 @@ export const SUB_COL = {
   coinsurance:          "text_mm3gphed",
   oop_max:              "text_mm3gh0q3",
   oop_max_remaining:    "text_mm3gs345",
+  // "OOP Estimate" (text) — separate automation precomputes total OOP
+  // for the upcoming order; OopBadge headline prefers this over a
+  // deductible-only calc when populated.
+  oop_estimate:         "text_mm404p7d",
   qmb:                  "text_mm3gr7rh",
   // Claims
   primary_claim_paid:   "color_mm33spks",
@@ -171,6 +175,7 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   stediMemberId: string; stediPayerName: string; stediPlanName: string;
   datePlanBegin: string; deductibleAmt: string; dedRemaining: string;
   coinsurancePct: string; oopMax: string; oopMaxRemaining: string;
+  oopEstimate: string;
   // Claims
   primaryClaimPaid: string; secondaryClaimPaid: string;
   // Group membership (used to filter Not Active patients out by default)
@@ -507,6 +512,7 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
     coinsurancePct:      get(item, SUB_COL.coinsurance),
     oopMax:              get(item, SUB_COL.oop_max),
     oopMaxRemaining:     get(item, SUB_COL.oop_max_remaining),
+    oopEstimate:         get(item, SUB_COL.oop_estimate),
     primaryClaimPaid:    get(item, SUB_COL.primary_claim_paid),
     secondaryClaimPaid:  get(item, SUB_COL.secondary_claim_paid),
     groupId:             item.group?.id ?? "",
