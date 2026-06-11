@@ -517,17 +517,22 @@ const ClaimDetail = () => {
   );
   // Per-line editable fields. Initialized from claim.lines when edit
   // mode opens; PR derives from Ded + Coins + Copay on save.
+  //
+  // Values are RAW STRINGS while editing — a controlled numeric input
+  // seeded with 0 can't be cleared (typing 480 next to the stuck 0
+  // produced 4800). Strings let the operator clear the field and type
+  // freely; eraNum() parses to numbers for the live diff and on save.
   const [eraEdits, setEraEdits] = useState<Record<string, {
-    primaryPaid: number; deductible: number; coinsurance: number; copay: number;
+    primaryPaid: string; deductible: string; coinsurance: string; copay: string;
   }>>({});
 
   function startEraEdit() {
     setEraEdits(Object.fromEntries(
       claim.lines.map((l) => [l.id, {
-        primaryPaid: l.primaryPaid || 0,
-        deductible: l.deductible || 0,
-        coinsurance: l.coinsurance || 0,
-        copay: l.copay || 0,
+        primaryPaid: String(l.primaryPaid || 0),
+        deductible: String(l.deductible || 0),
+        coinsurance: String(l.coinsurance || 0),
+        copay: String(l.copay || 0),
       }]),
     ));
     setEraEditDate(new Date().toISOString().slice(0, 10));
@@ -540,7 +545,7 @@ const ClaimDetail = () => {
   function setEraField(
     lineId: string,
     field: "primaryPaid" | "deductible" | "coinsurance" | "copay",
-    value: number,
+    value: string,
   ) {
     setEraEdits((prev) => ({
       ...prev,
@@ -558,18 +563,20 @@ const ClaimDetail = () => {
     setEraEditBusy(true);
     try {
       const lines = claim.lines.map((l) => {
-        const e = eraEdits[l.id] ?? {
-          primaryPaid: 0, deductible: 0, coinsurance: 0, copay: 0,
-        };
+        const e = eraEdits[l.id];
+        const paid = eraNum(e?.primaryPaid);
+        const ded = eraNum(e?.deductible);
+        const coins = eraNum(e?.coinsurance);
+        const cop = eraNum(e?.copay);
         return {
           subitemId: l.id,
-          primaryPaid: e.primaryPaid,
-          deductible: e.deductible,
-          coinsurance: e.coinsurance,
-          copay: e.copay,
+          primaryPaid: paid,
+          deductible: ded,
+          coinsurance: coins,
+          copay: cop,
           // PR auto-derived from D + C + Copay; backend uses this when
           // we don't override.
-          pr: e.deductible + e.coinsurance + e.copay,
+          pr: ded + coins + cop,
         };
       });
       const res = await applyManualEra({
@@ -585,16 +592,15 @@ const ClaimDetail = () => {
       // Optimistic local update so the table reflects the new values
       // immediately. A real refetch will fire on next bucket render.
       const updatedLines = claim.lines.map((l) => {
-        const e = eraEdits[l.id] ?? {
-          primaryPaid: 0, deductible: 0, coinsurance: 0, copay: 0,
-        };
+        const e = eraEdits[l.id];
         return {
           ...l,
-          primaryPaid: e.primaryPaid,
-          deductible: e.deductible,
-          coinsurance: e.coinsurance,
-          copay: e.copay,
-          patientResponsibility: e.deductible + e.coinsurance + e.copay,
+          primaryPaid: eraNum(e?.primaryPaid),
+          deductible: eraNum(e?.deductible),
+          coinsurance: eraNum(e?.coinsurance),
+          copay: eraNum(e?.copay),
+          patientResponsibility:
+            eraNum(e?.deductible) + eraNum(e?.coinsurance) + eraNum(e?.copay),
         };
       });
       setClaim({
@@ -1877,6 +1883,13 @@ function CodeChip({ code, meaning }: { code: string; meaning: string | null }) {
   );
 }
 
+// Parse an in-progress ERA edit value. Tolerates "", ".", "12." and any
+// other partial keystroke state; anything unparseable counts as 0.
+function eraNum(s: string | null | undefined): number {
+  const n = parseFloat(s ?? "");
+  return Number.isFinite(n) ? n : 0;
+}
+
 function LineRow({
   line, status, onStatusChange,
   eraEditing, eraEdit, onEraFieldChange,
@@ -1890,11 +1903,11 @@ function LineRow({
    *  just emits onEraFieldChange and the parent collects + dispatches. */
   eraEditing?: boolean;
   eraEdit?: {
-    primaryPaid: number; deductible: number; coinsurance: number; copay: number;
+    primaryPaid: string; deductible: string; coinsurance: string; copay: string;
   };
   onEraFieldChange?: (
     field: "primaryPaid" | "deductible" | "coinsurance" | "copay",
-    value: number,
+    value: string,
   ) => void;
   /** Live Denial Playbook rows from usePlaybookCombos in the parent.
    *  LineRow is a top-level component (not nested inside ClaimDetail),
@@ -1907,13 +1920,13 @@ function LineRow({
   // When editing, use eraEdit values for the live diff so the operator
   // sees totals update as they type. Otherwise the persisted values.
   const editing = !!eraEditing && !!eraEdit;
-  const livePaid = editing ? eraEdit.primaryPaid : line.primaryPaid;
+  const livePaid = editing ? eraNum(eraEdit.primaryPaid) : line.primaryPaid;
   const liveCoinsCopay = editing
-    ? eraEdit.coinsurance + eraEdit.copay
+    ? eraNum(eraEdit.coinsurance) + eraNum(eraEdit.copay)
     : line.coinsurance + line.copay;
-  const liveDed = editing ? eraEdit.deductible : line.deductible;
+  const liveDed = editing ? eraNum(eraEdit.deductible) : line.deductible;
   const livePr = editing
-    ? eraEdit.deductible + eraEdit.coinsurance + eraEdit.copay
+    ? eraNum(eraEdit.deductible) + eraNum(eraEdit.coinsurance) + eraNum(eraEdit.copay)
     : line.patientResponsibility;
   const diff = line.estPay - livePaid - livePr;
   const diffTone =
@@ -1950,7 +1963,8 @@ function LineRow({
               type="number" min={0} step={0.01}
               className="h-7 w-24 text-right ml-auto"
               value={eraEdit!.primaryPaid}
-              onChange={(e) => onEraFieldChange?.("primaryPaid", Number(e.target.value) || 0)}
+              onFocus={(e) => e.currentTarget.select()}
+                  onChange={(e) => onEraFieldChange?.("primaryPaid", e.target.value)}
             />
           ) : (
             fmtMoney(line.primaryPaid)
@@ -1962,7 +1976,8 @@ function LineRow({
               type="number" min={0} step={0.01}
               className="h-7 w-24 text-right ml-auto"
               value={eraEdit!.deductible}
-              onChange={(e) => onEraFieldChange?.("deductible", Number(e.target.value) || 0)}
+              onFocus={(e) => e.currentTarget.select()}
+                  onChange={(e) => onEraFieldChange?.("deductible", e.target.value)}
             />
           ) : (
             fmtMoney(line.deductible)
@@ -1980,7 +1995,8 @@ function LineRow({
                   type="number" min={0} step={0.01}
                   className="h-6 w-20 text-right"
                   value={eraEdit!.coinsurance}
-                  onChange={(e) => onEraFieldChange?.("coinsurance", Number(e.target.value) || 0)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onChange={(e) => onEraFieldChange?.("coinsurance", e.target.value)}
                 />
               </div>
               <div className="flex items-center gap-1">
@@ -1989,7 +2005,8 @@ function LineRow({
                   type="number" min={0} step={0.01}
                   className="h-6 w-20 text-right"
                   value={eraEdit!.copay}
-                  onChange={(e) => onEraFieldChange?.("copay", Number(e.target.value) || 0)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onChange={(e) => onEraFieldChange?.("copay", e.target.value)}
                 />
               </div>
             </div>
