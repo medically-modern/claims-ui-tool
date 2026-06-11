@@ -638,9 +638,8 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
 
 /**
  * Fetch every item on the Secondary Claims Board, paginating until done.
- * By default filters out terminal/closed rows (Secondary Paid, Patient
- * Paid, Bad Debt) — the SecondaryBoard view only cares about in-flight
- * work. Pass `{ includeAll: true }` to override.
+ * By default filters out Bad Debt only. Pass `{ includeAll: true }` to
+ * include it too.
  */
 export async function fetchAllSecondaryClaims(opts?: {
   includeAll?: boolean;
@@ -659,12 +658,14 @@ export async function fetchAllSecondaryClaims(opts?: {
 
   if (opts?.includeAll) return all;
 
-  // 'Patient Paid' isn't really terminal — it's the verify step the
-  // Invoice Review bucket exists for. Filtering it out here means
-  // patient-paid rows never reach bucketOf and the operator can't see
-  // them to verify. 'Secondary Paid' and 'Bad Debt' stay terminal.
+  // 'Patient Paid' isn't terminal — it's the verify step the Invoice
+  // Review bucket exists for. 'Secondary Paid' isn't filtered either:
+  // it IS the Paid bucket's content — filtering it here meant the Paid
+  // tile was permanently 0 even though paid rows existed on Monday
+  // (the filter runs client-side after the full-board fetch, so
+  // including them costs nothing). Only Bad Debt stays excluded; no
+  // bucket renders it.
   const terminal = new Set<SecondaryStatus>([
-    "Secondary Paid",
     "Bad Debt",
   ]);
   return all.filter((c) => !terminal.has(c.status));
