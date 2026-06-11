@@ -1141,11 +1141,16 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
 
   /**
    * Patient bucket — stage 2: Mark as Paid. Patient has paid; flip the
-   * secondary's Monday status to Patient Paid. Doesn't fire the
-   * Subscription Board "Secondary Claim Paid? = Fully Paid" write —
-   * that's reserved for the ERA-driven mark-paid flow on the Secondary
-   * Mark Paid endpoint. Patient-side payment is recorded but the
-   * subscription propagation stays a separate decision.
+   * secondary's Monday status to Paid + move to Paid And Closed, THEN
+   * fire the backend Secondary Mark Paid endpoint so the Subscription
+   * Board's "Secondary Claim Paid?" flips to Fully Paid (and the
+   * outstanding PR amount clears) for patient-side payments too.
+   *
+   * Previously the propagation was reserved for the ERA-driven flow
+   * only, which left subscriptions stuck on Outstanding after a Stripe
+   * payment (Henry Gillin, 2026-06-11). The backend call is idempotent
+   * with the direct status write — it re-stamps Paid and queues the
+   * cross-board sync as a Railway background task.
    */
   async function markPatientPaid(c: SecClaim) {
     if (!c.mondayItemId) return;
@@ -1155,10 +1160,6 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
     // bucketOf routes to the Paid bucket instead of looping back to
     // invoiceReview, and move the row visually to Paid And Closed.
     //
-    // Note: this does NOT call the backend Mark Posted endpoint, so the
-    // Subscription Board 'Secondary Claim Paid?' write doesn't fire —
-    // patient-side payment is recorded as terminal Paid on the Secondary
-    // Board only. ERA-driven mark-paid is the path that propagates.
     updateClaim(c.id, { status: "Secondary Paid" });
     try {
       await setSecondaryStatusAndMove(
@@ -1166,6 +1167,24 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
         "Paid",
         "group_mkxsng4r",  // Paid And Closed
       );
+      // Cross-board propagation: Subscription "Secondary Claim Paid?"
+      // -> Fully Paid + clear the outstanding PR amount. Background
+      // task on the backend; failures land in Railway logs and the
+      // operator gets a soft toast (the Secondary Board flip above
+      // already succeeded either way).
+      if (isMarkSecondaryPaidConfigured()) {
+        try {
+          await apiMarkSecondaryPaid(c.mondayItemId);
+        } catch (syncErr) {
+          toast({
+            title: "Subscription sync didn't fire",
+            description:
+              `${c.patientName} is Paid on the Secondary Board, but the ` +
+              `Subscription Board may still show Outstanding. ` +
+              `(${(syncErr as Error).message})`,
+          });
+        }
+      }
       toast({ title: `Marked paid: ${c.patientName}`, description: "Row moved to Paid." });
       // Invalidate before refetch — the persisted localStorage cache
       // would otherwise serve the stale "Patient Paid" status when
