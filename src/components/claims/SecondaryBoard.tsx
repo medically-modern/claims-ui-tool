@@ -37,6 +37,10 @@ import {
   MarkSecondaryPaidError,
 } from "@/api/markSecondaryPaid";
 import { confirmSecondaryPayor } from "@/api/confirmSecondaryPayor";
+import {
+  waiveSecondarySync,
+  isWaiveSecondarySyncConfigured,
+} from "@/api/waiveSecondarySync";
 import { setSecondaryText, SECONDARY_PARENT_COL } from "@/api/setSecondaryText";
 import {
   submitSecondary as apiSubmitSecondary,
@@ -1266,6 +1270,24 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
     });
     try {
       await confirmSecondaryPayor(c.mondayItemId, dest);
+      // Waive = write-off: nothing collected, nothing left in flight.
+      // Propagate to the Subscription Board so Secondary Claim Paid?
+      // flips to "None" + the outstanding amount clears (it otherwise
+      // sits on Outstanding forever). Soft-fail: the waive itself
+      // already landed on the Secondary Board.
+      if (dest === "Waived" && isWaiveSecondarySyncConfigured()) {
+        try {
+          await waiveSecondarySync(c.mondayItemId);
+        } catch (syncErr) {
+          toast({
+            title: "Subscription sync didn't fire",
+            description:
+              `${c.patientName} is waived on the Secondary Board, but the ` +
+              `Subscription Board may still show Outstanding. ` +
+              `(${(syncErr as Error).message})`,
+          });
+        }
+      }
       const description =
         dest === "Insurance" ? `${c.patientName} → Submit to Insurance.` :
         dest === "Waived"    ? `${c.patientName} → Payment waived, row closed.` :
