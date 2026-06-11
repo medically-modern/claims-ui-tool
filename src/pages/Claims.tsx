@@ -62,6 +62,7 @@ import type { Claim } from "@/lib/claims/types";
 import { sendToDenial, isSendToDenialConfigured, SendToDenialError } from "@/api/sendToDenial";
 import { snoozeLateEra, isSnoozeLateEraConfigured, SnoozeLateEraError } from "@/api/snoozeLateEra";
 import { ActionItemsInbox } from "@/components/claims/ActionItemsInbox";
+import { ClaimNotePopover } from "@/components/claims/ClaimNotePopover";
 import {
   AlertTriangle, ArrowRight, Check, Clock, FileJson, FileSearch, MoreHorizontal, RefreshCw, Search, Send, Wallet, XCircle,
 } from "lucide-react";
@@ -367,13 +368,13 @@ type ColumnKey =
   | "patient" | "dos" | "products" | "payer" | "sent" | "age"
   | "primary" | "s277" | "claimStatus" | "claimStatusLate"
   | "estPay" | "paid" | "pr" | "difference"
-  | "issue" | "nextAction" | "action";
+  | "issue" | "nextAction" | "notes" | "action";
 
 const CATEGORY_COLUMNS: Record<CategoryKey, ColumnKey[]> = {
   era:        ["patient", "dos", "products", "payer", "estPay", "paid", "pr", "difference", "action"],
-  late:       ["patient", "dos", "products", "payer", "sent", "age", "s277", "estPay", "paid", "pr", "claimStatusLate"],
+  late:       ["patient", "dos", "products", "payer", "sent", "age", "s277", "estPay", "paid", "pr", "notes", "claimStatusLate"],
   denied:     ["patient", "dos", "products", "payer", "sent", "age", "estPay", "paid", "pr", "difference", "action"],
-  outstanding:["patient", "dos", "products", "payer", "sent", "age", "s277", "estPay", "paid", "pr", "action"],
+  outstanding:["patient", "dos", "products", "payer", "sent", "age", "s277", "estPay", "paid", "pr", "notes", "action"],
   paid:       ["patient", "dos", "products", "payer", "sent", "estPay", "paid", "pr", "difference", "action"],
   
   all:        ["patient", "dos", "products", "payer", "sent", "age", "primary", "s277", "claimStatus", "estPay", "paid", "pr", "difference", "issue", "nextAction", "action"],
@@ -396,6 +397,7 @@ const COLUMN_LABELS: Record<ColumnKey, { label: string; align?: "right" }> = {
   difference: { label: "Difference", align: "right" },
   issue: { label: "Issue" },
   nextAction: { label: "Next Action" },
+  notes: { label: "Notes" },
   action: { label: "Action", align: "right" },
 };
 
@@ -409,6 +411,7 @@ const NON_SORTABLE_COLUMNS: ReadonlySet<ColumnKey> = new Set([
   "products",
   "issue",
   "nextAction",
+  "notes",
   "action",
 ]);
 
@@ -578,6 +581,11 @@ const Claims = () => {
   // onto the primary's Secondary Payer column before the mark-paid call
   // so the backend spawn routes the secondary to the right destination.
   const [secPayerOverride, setSecPayerOverride] = useState<string | null>(null);
+
+  // Optimistic per-row note overrides (Action Context). Written by the
+  // Notes popover after a successful Monday save so the icon flips to
+  // "has note" immediately; the next fetchAllClaims refetch supersedes.
+  const [noteOverrides, setNoteOverrides] = useState<Record<string, string>>({});
 
   // Per-row "marking paid" state. After confirm fires, the backend
   // returns in ~1-2s but the Monday status propagation + our React Query
@@ -1435,6 +1443,22 @@ const Claims = () => {
                                     return <TableCell key={col} className="text-sm">{c.primaryPayor}</TableCell>;
                                   case "sent":
                                     return <TableCell key={col} className="text-sm">{fmtDate(c.claimSentDate)}</TableCell>;
+                                  case "notes": {
+                                    const note = noteOverrides[c.id] ?? c.actionContext ?? "";
+                                    return (
+                                      <TableCell key={col} className="w-10 text-center">
+                                        <ClaimNotePopover
+                                          mondayItemId={c.mondayItemId}
+                                          patientName={c.patientName}
+                                          value={note}
+                                          onSaved={(text) => {
+                                            setNoteOverrides((p) => ({ ...p, [c.id]: text }));
+                                            void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
+                                          }}
+                                        />
+                                      </TableCell>
+                                    );
+                                  }
                                   case "age": {
                                     if (age == null) return <TableCell key={col} className="text-sm">—</TableCell>;
                                     const tone =
