@@ -219,7 +219,16 @@ export function ActionItemsInbox({ onNavigate, className }: ActionItemsInboxProp
     if (secondaryClaims) {
       const confirm     = secondaryClaims.filter((c) => c.status === "Awaiting Payor Confirmation");
       const insurance   = secondaryClaims.filter((c) => c.status === "Primary Paid - Submit Secondary");
-      const patient     = secondaryClaims.filter((c) => c.status === "Sent to Patient");
+      // Stage 1 only — invoice NOT yet sent. SecondaryBoard.bucketOf
+      // splits "Sent to Patient" on sendInvoiceTriggered (the operator's
+      // own Send Invoice click): triggered rows live in Outstanding
+      // Invoices (awaiting payment — no action to take), untriggered
+      // ones are the actual "Send Secondary" work. Counting both
+      // inflated this chip (showed 15 when the board's Patient bucket
+      // had far fewer).
+      const patient     = secondaryClaims.filter(
+        (c) => c.status === "Sent to Patient" && !c.sendInvoiceTriggered,
+      );
       const awaiting    = secondaryClaims.filter(
         (c) => c.status === "Secondary Submitted" && c.status277 !== "Payer Accepted",
       );
