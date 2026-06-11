@@ -73,8 +73,12 @@ import {
   isForwardedByPrimary,
   MarkPaidError,
   secondaryItemUrl,
-  summarizeSecondary,
+  predictSubmissionType,
 } from "@/api/markPaid";
+import {
+  setSecondaryPayer as apiSetSecondaryPayer,
+  SECONDARY_PAYER_OPTIONS,
+} from "@/api/setSecondaryPayer";
 import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 import { setActionContext as apiSetActionContext } from "@/api/setActionContext";
 import { setDenialAction as apiSetDenialAction } from "@/api/setDenialAction";
@@ -338,6 +342,10 @@ const ClaimDetail = () => {
   // revert.
   const [markPaidOpen, setMarkPaidOpen] = useState(false);
   const [markPaidBusy, setMarkPaidBusy] = useState(false);
+  // Operator-selected Secondary Payer override for the Mark-fully-paid
+  // dialog (see Claims.tsx for the full rationale). Seeded from the
+  // claim's current Secondary Payer whenever the dialog opens.
+  const [secPayerOverride, setSecPayerOverride] = useState<string | null>(null);
 
   // ─── Denial workflow resolution ───────────────────────────────────────────
   // For claims already in "Denied (Or Partly)", the Final Decision section
@@ -810,6 +818,7 @@ const ClaimDetail = () => {
     // Variance-override gate disabled for now. Operators can mark any claim
     // paid regardless of how much variance from est. pay; the variance is
     // visible elsewhere in the row + difference column.
+    setSecPayerOverride(claim.secondaryPayer ?? null);
     setMarkPaidOpen(true);
   }
 
@@ -839,6 +848,14 @@ const ClaimDetail = () => {
 
     setMarkPaidBusy(true);
     try {
+      // Stamp an operator-chosen Secondary Payer override onto the primary
+      // before marking paid, so the backend spawn routes the secondary
+      // correctly. See Claims.tsx confirmMarkPaidFromRow for rationale.
+      const override = secPayerOverride?.trim() || null;
+      if (override && override !== (claim.secondaryPayer ?? null)) {
+        await apiSetSecondaryPayer(claim.mondayItemId, override);
+      }
+
       const result = await apiMarkPrimaryPaid(claim.mondayItemId);
       setMarkPaidOpen(false);
 
@@ -1750,17 +1767,44 @@ const ClaimDetail = () => {
             <AlertDialogDescription asChild>
               <div className="space-y-1 text-sm">
                 <p className="font-medium text-foreground">{claim.patientName}</p>
-                <p>
-                  Secondary:{" "}
-                  <span className="font-medium text-foreground">
-                    {summarizeSecondary(
-                      claim.prAmount,
-                      claim.primaryPayor,
-                      claim.secondaryPayer,
-                      claim.rawEraClaimStatus,
-                    )}
-                  </span>
-                </p>
+                {claim.prAmount > 0 ? (
+                  <div className="space-y-1.5 pt-1">
+                    <label className="block font-medium text-foreground">
+                      Secondary Payer
+                    </label>
+                    <Select
+                      value={secPayerOverride ?? undefined}
+                      onValueChange={(v) => setSecPayerOverride(v)}
+                      disabled={markPaidBusy}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select secondary payer…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SECONDARY_PAYER_OPTIONS.map((o) => (
+                          <SelectItem key={o.index} value={o.label}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Routes to:{" "}
+                      <span className="font-medium text-foreground">
+                        {predictSubmissionType(
+                          claim.primaryPayor,
+                          secPayerOverride,
+                          claim.rawEraClaimStatus,
+                        )}
+                      </span>
+                    </p>
+                  </div>
+                ) : (
+                  <p>
+                    Secondary:{" "}
+                    <span className="font-medium text-foreground">None</span>
+                  </p>
+                )}
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

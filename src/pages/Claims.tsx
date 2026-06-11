@@ -41,8 +41,12 @@ import {
   hasReversalInEra,
   MarkPaidError,
   secondaryItemUrl,
-  summarizeSecondary,
+  predictSubmissionType,
 } from "@/api/markPaid";
+import {
+  setSecondaryPayer as apiSetSecondaryPayer,
+  SECONDARY_PAYER_OPTIONS,
+} from "@/api/setSecondaryPayer";
 import {
   runClaimStatusCheck as apiRunClaimStatusCheck,
   isClaimStatusCheckConfigured,
@@ -568,6 +572,12 @@ const Claims = () => {
   // which claim is being confirmed and whether the request is in flight.
   const [markPaidTarget, setMarkPaidTarget] = useState<Claim | null>(null);
   const [markPaidBusy, setMarkPaidBusy] = useState(false);
+  // Operator-selected Secondary Payer override for the Mark-fully-paid
+  // dialog. Seeded from the claim's current Secondary Payer when the
+  // dialog opens; if the operator changes it, we stamp the new value
+  // onto the primary's Secondary Payer column before the mark-paid call
+  // so the backend spawn routes the secondary to the right destination.
+  const [secPayerOverride, setSecPayerOverride] = useState<string | null>(null);
 
   // Per-row "marking paid" state. After confirm fires, the backend
   // returns in ~1-2s but the Monday status propagation + our React Query
@@ -748,6 +758,16 @@ const Claims = () => {
 
     setMarkPaidBusy(true);
     try {
+      // If the operator picked a different Secondary Payer in the dialog,
+      // stamp it onto the primary BEFORE marking paid so the backend
+      // spawn classifies + routes the secondary correctly. Synchronous
+      // by design — Monday reads are immediately consistent, so the
+      // mark-paid call that follows sees the updated column.
+      const override = secPayerOverride?.trim() || null;
+      if (override && override !== (target.secondaryPayer ?? null)) {
+        await apiSetSecondaryPayer(target.mondayItemId, override);
+      }
+
       const result = await apiMarkPrimaryPaid(target.mondayItemId);
       setMarkPaidTarget(null);
 
@@ -1725,7 +1745,10 @@ const Claims = () => {
                                                   <button
                                                     type="button"
                                                     aria-label="Mark fully paid"
-                                                    onClick={() => setMarkPaidTarget(c)}
+                                                    onClick={() => {
+                                                      setMarkPaidTarget(c);
+                                                      setSecPayerOverride(c.secondaryPayer ?? null);
+                                                    }}
                                                     className="grid h-9 w-9 place-items-center rounded-md bg-success-soft text-success-soft-foreground hover:bg-success hover:text-success-foreground transition-colors shadow-sm"
                                                   >
                                                     <Check className="h-4 w-4" />
@@ -1835,19 +1858,44 @@ const Claims = () => {
                 <p className="font-medium text-foreground">
                   {markPaidTarget?.patientName}
                 </p>
-                <p>
-                  Secondary:{" "}
-                  <span className="font-medium text-foreground">
-                    {markPaidTarget
-                      ? summarizeSecondary(
-                          markPaidTarget.prAmount,
+                {markPaidTarget && markPaidTarget.prAmount > 0 ? (
+                  <div className="space-y-1.5 pt-1">
+                    <label className="block font-medium text-foreground">
+                      Secondary Payer
+                    </label>
+                    <Select
+                      value={secPayerOverride ?? undefined}
+                      onValueChange={(v) => setSecPayerOverride(v)}
+                      disabled={markPaidBusy}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select secondary payer…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SECONDARY_PAYER_OPTIONS.map((o) => (
+                          <SelectItem key={o.index} value={o.label}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Routes to:{" "}
+                      <span className="font-medium text-foreground">
+                        {predictSubmissionType(
                           markPaidTarget.primaryPayor,
-                          markPaidTarget.secondaryPayer,
+                          secPayerOverride,
                           markPaidTarget.rawEraClaimStatus,
-                        )
-                      : "None"}
-                  </span>
-                </p>
+                        )}
+                      </span>
+                    </p>
+                  </div>
+                ) : (
+                  <p>
+                    Secondary:{" "}
+                    <span className="font-medium text-foreground">None</span>
+                  </p>
+                )}
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
