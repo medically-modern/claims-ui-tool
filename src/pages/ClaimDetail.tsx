@@ -1579,6 +1579,51 @@ const ClaimDetail = () => {
           </Card>
         )}
 
+        {/* Notes — always-available operator notes (Action Context).
+            For denied claims the same textarea already lives inside the
+            Denial Analysis card above, so this standalone card renders
+            for every OTHER status (Outstanding / Check Status / ERA
+            Review …). Shares the actionContext state + autosave-on-blur
+            machinery, and it's the same note surfaced by the Notes
+            column on the Claims list. */}
+        {claim.primaryStatus !== "Denied (Or Partly)" && (
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-baseline justify-between gap-2">
+                <CardTitle className="text-base">Notes</CardTitle>
+                {actionContextSavedState === "saving" && (
+                  <span className="text-[11px] text-muted-foreground">
+                    Saving…
+                  </span>
+                )}
+                {actionContextSavedState === "saved" && (
+                  <span className="text-[11px] text-success-soft-foreground">
+                    ✓ Saved
+                  </span>
+                )}
+                {actionContextSavedState === "error" && (
+                  <span className="text-[11px] text-danger-soft-foreground">
+                    Couldn't save
+                  </span>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Textarea
+                placeholder="e.g. Called payer 6/11 — claim in process, check back Friday"
+                value={actionContext}
+                onChange={(e) => setActionContext(e.target.value)}
+                onBlur={() => void autosaveActionContext()}
+                rows={3}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Auto-saves to Monday (Action Context) when you click out of
+                the box. Same note as the Notes column on the Claims list.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Final decision panel */}
         <Card>
           <CardHeader>
