@@ -11,7 +11,7 @@ export interface SubRow {
 }
 export interface ClaimRow {
   claim_status: string; est_pay: number; dos: string; claim_sent_date: string;
-  primary_payor: string; claim_name?: string;
+  primary_payor: string; claim_name?: string; primary_paid: number; primary_paid_date: string;
 }
 export interface UAssumptions {
   primaryLag: number; secondaryLag: number; dosLag: number; resentLag: number;
@@ -55,7 +55,7 @@ export interface UEvent { dateISO: string; dos: string; kind: string; amount: nu
 export interface UResult {
   weekly: Array<{ wk: number; mon: string; primary: number; secondary: number; inflight: number; rev: number; cost: number; supplier: number; burn: number; net: number; balance: number }>;
   dbal: number[]; firstMon: string; nweeks: number; events: UEvent[];
-  kpis: { bal30: number; bal60: number; bal90: number; minBal: number; minDay: number; runway: number | null; revenue: number; prod: number; supplier: number; burn: number; costTotal: number; netCash: number; flatBurn: number; maxBurn: number };
+  kpis: { bal30: number; bal60: number; bal90: number; minBal: number; minDay: number; runway: number | null; revenue: number; prod: number; supplier: number; burn: number; costTotal: number; netCash: number; flatBurn: number; maxBurn: number; denialTotal: number };
   totals: { primary: number; secondary: number; inflight: number; cost: number; rev: number };
 }
 
@@ -87,17 +87,31 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
       add(paySec, "secondary", sec * rm * cr, nm, payer, od_iso);
     }
   }
-  const INFLIGHT = new Set(["Outstanding", "Review", "Late", "Future Claim"]);
+  // Claims: include by PAYMENT STATE, not the status label, to avoid double-counting.
+  //   already received (paid date ≤ today) → exclude (in our bank)
+  //   known future EFT date           → include at that date (actual paid amt, else est, else $300)
+  //   unpaid                          → include at est cash date (cascade), est_pay else $300 conservative
+  //   denied / bad debt               → excluded from cash flow, totalled for display
+  const DENIAL = new Set(["Denied (Or Partly)", "Bad Debt"]);
+  let denialTotal = 0;
   for (const r of claims) {
-    if (!INFLIGHT.has((r.claim_status || "").trim())) continue;
-    let ep = r.est_pay || 0; if (ep <= 0) ep = 300; // conservative estimate (cashflow.ts E0784 Medicare $300/mo) when est_pay missing
-    const dos = pDate(r.dos), sent = pDate(r.claim_sent_date);
-    if (!dos && !sent) continue;
-    let cash: Date | null = null;
-    if (dos) { const d1 = addDays(dos, a.dosLag); if (d1 >= today) cash = d1; }
-    if (!cash && sent) { const d2 = addDays(sent, a.resentLag); if (d2 >= today) cash = d2; }
-    if (!cash) cash = addDays(today, 7);
-    add(cash, "inflight", ep * a.collectionRate, r.claim_name || "", r.primary_payor, dos ? iso(dos) : "");
+    const st = (r.claim_status || "").trim();
+    const ep = r.est_pay || 0, paid = r.primary_paid || 0, cr = a.collectionRate;
+    const nm = r.claim_name || "", payer = r.primary_payor;
+    const dosD = pDate(r.dos), sentD = pDate(r.claim_sent_date), dosISO = dosD ? iso(dosD) : "";
+    if (DENIAL.has(st)) { denialTotal += ep > 0 ? ep : 300; continue; }
+    const ppd = pDate(r.primary_paid_date);
+    if (ppd) {
+      if (ppd <= today) continue; // already received → in bank
+      add(ppd, "inflight", (paid > 0 ? paid : (ep > 0 ? ep : 300)) * cr, nm, payer, dosISO);
+    } else {
+      if (!dosD && !sentD) continue;
+      let cash: Date | null = null;
+      if (dosD) { const d1 = addDays(dosD, a.dosLag); if (d1 >= today) cash = d1; }
+      if (!cash && sentD) { const d2 = addDays(sentD, a.resentLag); if (d2 >= today) cash = d2; }
+      if (!cash) cash = addDays(today, 7);
+      add(cash, "inflight", (ep > 0 ? ep : 300) * cr, nm, payer, dosISO);
+    }
   }
 
   // Projected growth: N new patients each Monday (from today forward), at roster averages.
@@ -147,6 +161,6 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   const maxBurn = dbal0[a.horizon] / (k * a.horizon); // monthly burn at which the DAY-90 (ending) balance = 0
   const minBal = Math.min(...dbal), minDay = dbal.indexOf(minBal);
   const rw = dbal.findIndex((b) => b < 0);
-  const kpis = { bal30: dbal[30], bal60: dbal[60], bal90: dbal[90], minBal, minDay, runway: rw < 0 ? null : rw, revenue, prod, supplier: supT, burn: burnT, costTotal, netCash, flatBurn, maxBurn };
+  const kpis = { bal30: dbal[30], bal60: dbal[60], bal90: dbal[90], minBal, minDay, runway: rw < 0 ? null : rw, revenue, prod, supplier: supT, burn: burnT, costTotal, netCash, flatBurn, maxBurn, denialTotal };
   return { weekly, dbal, firstMon: iso(firstMon), nweeks, events: uevents, kpis, totals: { primary: T("primary"), secondary: T("secondary"), inflight: T("inflight"), cost: T("cost"), rev: revenue } };
 }
