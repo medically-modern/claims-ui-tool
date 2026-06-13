@@ -161,17 +161,18 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const { data: claims } = useAllClaims();
   const { data: secondaryClaims } = useAllSecondaryClaims();
   const todayForCf = useMemo(() => new Date(), []);
-  const pipeline: PipelineClaim[] = useMemo(() => {
+  const pipelineData = useMemo(() => {
     const cf = computeCashFlow(claims ?? [], secondaryClaims ?? [], todayForCf);
-    return [...cf.soon.entries, ...cf.expected.entries].map((e) => ({
+    const list: PipelineClaim[] = [...cf.soon.entries, ...cf.expected.entries].map((e) => ({
       id: e.id, patientName: e.name, payor: e.payor, kind: e.kind,
       dos: e.dos, sentDate: e.claimSentDate, payDate: e.payDate, amount: e.amount,
     }));
+    return { list, soonTotal: cf.soon.total, expectedTotal: cf.expected.total };
   }, [claims, secondaryClaims, todayForCf]);
 
   const filteredPipeline = useMemo(
-    () => pipeline.filter((c) => payerFilter === "All payers" || c.payor === payerFilter),
-    [pipeline, payerFilter],
+    () => pipelineData.list.filter((c) => payerFilter === "All payers" || c.payor === payerFilter),
+    [pipelineData, payerFilter],
   );
 
   const payerOptions = useMemo(() => {
@@ -200,12 +201,24 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
 
   const k = forecast.kpis;
 
+  // Near-term inflow (strictly after today), for tying to the Claims board.
+  const nearTerm = useMemo(() => {
+    const t0 = parseLocalDate(forecast.windowStart)!.getTime();
+    const inflowBy = (days: number) =>
+      forecast.events.filter((e) => e.kind !== "cost").filter((e) => {
+        const d = parseLocalDate(e.date)!.getTime();
+        return d > t0 && d <= addDays(parseLocalDate(forecast.windowStart)!, days).getTime();
+      }).reduce((s, e) => s + e.amount, 0);
+    return { d7: inflowBy(7), d21: inflowBy(21), d30: inflowBy(30) };
+  }, [forecast]);
+
   const chartData = useMemo(() => forecast.buckets.map((b) => ({
     label: b.label, key: b.key,
     Primary: Math.round(b.primaryIn),
     Secondary: Math.round(b.secondaryIn),
     Cost: -Math.round(b.costOut),
     Burn: -Math.round(b.burn),
+    Supplier: -Math.round(b.supplier),
     Balance: Math.round(b.endBalance),
   })), [forecast]);
 
@@ -224,6 +237,20 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
       .sort((a, b) => a.date.localeCompare(b.date) || Math.abs(b.amount) - Math.abs(a.amount));
     setDrill({ label, events });
   }
+
+  // Drill-down: collapse a bucket's events into ONE net row per patient order
+  // (revenue minus cost for that order), instead of separate rev/cost rows.
+  const drillRows = useMemo(() => {
+    if (!drill) return [];
+    const m = new Map<string, { patientName: string; payor: string; date: string; net: number; state: string }>();
+    for (const e of drill.events) {
+      const key = `${e.patientId}|${e.orderDate}`;
+      const g = m.get(key);
+      if (!g) m.set(key, { patientName: e.patientName, payor: e.payor, date: e.date, net: e.amount, state: e.state });
+      else { g.net += e.amount; if (e.kind !== "cost") g.date = e.date; }
+    }
+    return Array.from(m.values()).sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
+  }, [drill]);
 
   const runwayLabel = k.runwayDays === null ? "90+ days" : `${k.runwayDays} days`;
   const updated = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
@@ -255,7 +282,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         <Card className="p-4">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
             <MoneyInput label="Cash in bank" value={startingCash} onChange={setStartingCash} />
-            <MoneyInput label="Owed to supplier" value={supplierOwed} onChange={setSupplierOwed} hint="Netted from opening cash" />
+            <MoneyInput label="Owed to supplier" value={supplierOwed} onChange={setSupplierOwed} hint="Spread evenly over 30 days" />
             <MoneyInput label="Fixed costs / month" value={monthlyFixedCost} onChange={setMonthlyFixedCost} hint="Payroll, rent, etc." />
             <PctInput label="Reorder rate" value={reorderPct} onChange={setReorderPct} hint="% of orders that happen" />
             <PctInput label="Collection rate" value={collectionPct} onChange={setCollectionPct} hint="% of billings collected" />
@@ -355,13 +382,20 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
               <Bar yAxisId="cash" dataKey="Primary" stackId="a" fill="#0EA5E9" radius={[3, 3, 0, 0]} />
               <Bar yAxisId="cash" dataKey="Secondary" stackId="a" fill="#10B981" radius={[3, 3, 0, 0]} />
               <Bar yAxisId="cash" dataKey="Cost" stackId="a" fill="#F87171" radius={[0, 0, 3, 3]} />
-              <Bar yAxisId="cash" dataKey="Burn" stackId="a" fill="#fbbf24" radius={[0, 0, 3, 3]} />
+              <Bar yAxisId="cash" dataKey="Burn" stackId="a" fill="#fbbf24" />
+              <Bar yAxisId="cash" dataKey="Supplier" stackId="a" fill="#a78bfa" radius={[0, 0, 3, 3]} />
               <Line yAxisId="bal" type="monotone" dataKey="Balance" stroke="#0f172a" strokeWidth={2.5} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
-          <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground">
-            <span>Locked (settled/in-flight) inflow: <b className="text-foreground tabular-nums">{fmtMoney(k.lockedInflow, true)}</b></span>
-            <span>Projected inflow: <b className="text-foreground tabular-nums">{fmtMoney(k.projectedInflow, true)}</b></span>
+          <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
+            <div className="flex items-center gap-4 flex-wrap">
+              <span>Claims A/R (from Claims board): Soon ≤7d <b className="text-foreground tabular-nums">{fmtMoney(pipelineData.soonTotal, true)}</b> · Expected <b className="text-foreground tabular-nums">{fmtMoney(pipelineData.expectedTotal, true)}</b> · Total <b className="text-foreground tabular-nums">{fmtMoney(pipelineData.soonTotal + pipelineData.expectedTotal, true)}</b></span>
+            </div>
+            <div className="flex items-center gap-4 flex-wrap">
+              <span>Inflow next 7d <b className="text-foreground tabular-nums">{fmtMoney(nearTerm.d7, true)}</b> · 21d <b className="text-foreground tabular-nums">{fmtMoney(nearTerm.d21, true)}</b> · 30d <b className="text-foreground tabular-nums">{fmtMoney(nearTerm.d30, true)}</b></span>
+              <span>Locked (settled/in-flight): <b className="text-foreground tabular-nums">{fmtMoney(k.lockedInflow, true)}</b> · Projected: <b className="text-foreground tabular-nums">{fmtMoney(k.projectedInflow, true)}</b></span>
+            </div>
+            <div className="text-[10px]">A/R total ties to the Claims board; it lands across ~30–40 days because Medicaid pays on the eMedNY cycle (often weeks 4–6), not all within 21 days.</div>
           </div>
         </Card>
 
@@ -380,7 +414,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
           <SheetHeader>
             <SheetTitle>{drill?.label} — cash events</SheetTitle>
             <SheetDescription>
-              {drill?.events.length ?? 0} events · net {fmtMoney((drill?.events ?? []).reduce((s, e) => s + e.amount, 0))}
+              {drillRows.length} patient orders · net {fmtMoney(drillRows.reduce((s, r) => s + r.net, 0))} (revenue − cost; excludes fixed burn &amp; supplier draw)
             </SheetDescription>
           </SheetHeader>
           <div className="mt-4">
@@ -389,24 +423,22 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
                 <TableRow>
                   <TableHead>Patient</TableHead>
                   <TableHead>Payer</TableHead>
-                  <TableHead>Kind</TableHead>
                   <TableHead>Date</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="text-right">Net cash</TableHead>
                   <TableHead>State</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(drill?.events ?? []).map((e, i) => (
-                  <TableRow key={`${e.patientId}-${e.kind}-${e.date}-${i}`}>
-                    <TableCell className="text-[13px] font-medium">{e.patientName}</TableCell>
-                    <TableCell className="text-[12px]">{e.payor}</TableCell>
-                    <TableCell className="text-[12px]">{KIND_LABEL[e.kind]}</TableCell>
-                    <TableCell className="text-[12px] tabular-nums">{e.date}</TableCell>
-                    <TableCell className={cn("text-right text-[13px] tabular-nums font-semibold", e.amount < 0 ? "text-rose-600" : "text-emerald-700")}>
-                      {fmtMoney(e.amount)}
+                {drillRows.map((r, i) => (
+                  <TableRow key={`${r.patientName}-${r.date}-${i}`}>
+                    <TableCell className="text-[13px] font-medium">{r.patientName}</TableCell>
+                    <TableCell className="text-[12px]">{r.payor}</TableCell>
+                    <TableCell className="text-[12px] tabular-nums">{r.date}</TableCell>
+                    <TableCell className={cn("text-right text-[13px] tabular-nums font-semibold", r.net < 0 ? "text-rose-600" : "text-emerald-700")}>
+                      {fmtMoney(r.net)}
                     </TableCell>
                     <TableCell>
-                      <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold", STATE_PILL[e.state])}>{e.state}</span>
+                      <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold", STATE_PILL[r.state])}>{r.state}</span>
                     </TableCell>
                   </TableRow>
                 ))}

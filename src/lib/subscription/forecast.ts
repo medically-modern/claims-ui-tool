@@ -126,6 +126,7 @@ export interface ForecastAssumptions {
   collectionRate: number; // 0..1 — % of billed revenue actually collected
   startingCash: number; // cash in bank today
   supplierOwed: number; // amount currently owed to supplier (a payable)
+  supplierSpreadDays: number; // spread the payable evenly over this many days (30)
   monthlyFixedCost: number; // operating burn / month
   granularity: "week" | "month";
   includePaused: boolean; // include Paused-status patients (default true)
@@ -141,6 +142,7 @@ export const DEFAULT_ASSUMPTIONS: ForecastAssumptions = {
   collectionRate: 1,
   startingCash: 0,
   supplierOwed: 0,
+  supplierSpreadDays: 30,
   monthlyFixedCost: 0,
   granularity: "week",
   includePaused: true,
@@ -199,7 +201,8 @@ export interface TimeBucket {
   secondaryIn: number;
   costOut: number; // positive number
   burn: number; // positive number
-  net: number; // primaryIn + secondaryIn − costOut − burn
+  supplier: number; // supplier-payable draw this bucket (positive number)
+  net: number; // primaryIn + secondaryIn − costOut − burn − supplier
   endBalance: number; // running bank balance at the end of this bucket
 }
 
@@ -225,6 +228,7 @@ export interface ForecastKpis {
   secondaryIn: number;
   costOut: number;
   burnOut: number;
+  supplierOut: number; // supplier payable drawn down within the window
   /** Largest additional monthly fixed cost we could add and still keep the
    *  balance ≥ 0 for the whole window. Directly answers "can I hire / absorb
    *  +$20k?". Infinity-safe: returns a large number if never binding. */
@@ -483,11 +487,18 @@ export function buildForecast(
 
   // ─── Daily balance curve over [windowStart, windowEnd] ──────────────────────
   const dailyBurn = (a.monthlyFixedCost * 12) / 365;
-  const netStartingCash = a.startingCash - a.supplierOwed;
+  // Open at actual cash in bank. The supplier payable is NOT netted at day 0;
+  // it's paid down evenly over `supplierSpreadDays` (e.g. $300k over 30 days =
+  // $10k/day), shown as an outflow in both the bars and the balance.
+  const netStartingCash = a.startingCash;
+  const supplierDays = Math.max(1, a.supplierSpreadDays);
+  const dailySupplier = a.supplierOwed / supplierDays;
   const dayNet = new Map<string, number>(); // ymd → signed cash (events only)
   for (const e of events) {
     const d = parseLocalDate(e.date)!;
-    if (d.getTime() < windowStart.getTime() || d.getTime() > windowEnd.getTime()) continue;
+    // Strictly AFTER today: the curve opens at exactly cash-in-bank; money that
+    // moves today is treated as already realized in the opening balance.
+    if (d.getTime() <= windowStart.getTime() || d.getTime() > windowEnd.getTime()) continue;
     dayNet.set(e.date, (dayNet.get(e.date) ?? 0) + e.amount);
   }
   // balance[i] = netStartingCash + cumulative cash through day i − burn×i.
@@ -503,17 +514,19 @@ export function buildForecast(
     const d = addDays(windowStart, i);
     const key = ymd(d);
     cumCash += dayNet.get(key) ?? 0;
-    const b = netStartingCash + cumCash - dailyBurn * i;
+    const supplierPaid = dailySupplier * Math.min(i, supplierDays);
+    const b = netStartingCash + cumCash - dailyBurn * i - supplierPaid;
     balanceCurve.push({ date: key, balance: round2(b) });
     if (b < minBalance) { minBalance = b; minBalanceDate = key; }
     if (runwayDays === null && b < 0) runwayDays = i;
   }
-  const bal = netStartingCash + cumCash - dailyBurn * a.horizonDays;
+  const supplierOut = round2(dailySupplier * Math.min(a.horizonDays, supplierDays));
+  const bal = netStartingCash + cumCash - dailyBurn * a.horizonDays - supplierOut;
 
   // ─── Window KPIs ────────────────────────────────────────────────────────────
   const winEvents = events.filter((e) => {
     const d = parseLocalDate(e.date)!;
-    return d.getTime() >= windowStart.getTime() && d.getTime() <= windowEnd.getTime();
+    return d.getTime() > windowStart.getTime() && d.getTime() <= windowEnd.getTime();
   });
   const sum = (pred: (e: CashEvent) => boolean) =>
     winEvents.filter(pred).reduce((s, e) => s + e.amount, 0);
@@ -522,7 +535,7 @@ export function buildForecast(
   const costOut = -sum((e) => e.kind === "cost"); // positive
   const burnOut = round2(dailyBurn * a.horizonDays);
   const revenueIn = round2(primaryIn + secondaryIn);
-  const netOperatingCash = round2(revenueIn - costOut - burnOut);
+  const netOperatingCash = round2(revenueIn - costOut - burnOut - supplierOut);
   const lockedInflow = round2(
     winEvents.filter((e) => e.kind !== "cost" && (e.state === "settled" || e.state === "in-flight"))
       .reduce((s, e) => s + e.amount, 0),
@@ -549,7 +562,7 @@ export function buildForecast(
   if (!Number.isFinite(monthlyHeadroom)) monthlyHeadroom = balanceAt(a.horizonDays);
 
   // ─── Buckets (week/month) for the bar chart ─────────────────────────────────
-  const buckets = bucketize(winEvents, windowStart, windowEnd, a, netStartingCash, dailyBurn);
+  const buckets = bucketize(winEvents, windowStart, windowEnd, a, netStartingCash, dailyBurn, dailySupplier, supplierDays);
 
   // ─── Breakdowns (one order's economics per event-group; use primary+secondary
   //     revenue and cost, deduped by patient+orderDate so we don't double count) ─
@@ -568,6 +581,7 @@ export function buildForecast(
     secondaryIn: round2(secondaryIn),
     costOut: round2(costOut),
     burnOut,
+    supplierOut,
     monthlyHeadroom: round2(monthlyHeadroom),
     runwayDays,
     lockedInflow,
@@ -618,6 +632,8 @@ function bucketize(
   a: ForecastAssumptions,
   netStartingCash: number,
   dailyBurn: number,
+  dailySupplier: number,
+  supplierDays: number,
 ): TimeBucket[] {
   const map = new Map<string, TimeBucket>();
   const order: string[] = [];
@@ -625,7 +641,7 @@ function bucketize(
   for (let d = bucketStartFloor(windowStart, a.granularity); d.getTime() <= windowEnd.getTime(); d = nextBucket(d, a.granularity)) {
     const { key, label } = bucketStartKey(d, a.granularity);
     if (!map.has(key)) {
-      map.set(key, { key, label, primaryIn: 0, secondaryIn: 0, costOut: 0, burn: 0, net: 0, endBalance: 0 });
+      map.set(key, { key, label, primaryIn: 0, secondaryIn: 0, costOut: 0, burn: 0, supplier: 0, net: 0, endBalance: 0 });
       order.push(key);
     }
   }
@@ -648,6 +664,13 @@ function bucketize(
     const hi = Math.min(end.getTime(), windowEnd.getTime());
     const days = hi >= lo ? Math.round((hi - lo) / 86_400_000) + 1 : 0;
     b.burn = round2(dailyBurn * days);
+    // Supplier payable: spread over days 1..supplierDays (matches the curve).
+    const supStart = addDays(windowStart, 1);
+    const supEnd = addDays(windowStart, supplierDays);
+    const slo = Math.max(start.getTime(), supStart.getTime());
+    const shi = Math.min(end.getTime(), supEnd.getTime());
+    const sdays = shi >= slo ? Math.round((shi - slo) / 86_400_000) + 1 : 0;
+    b.supplier = round2(dailySupplier * sdays);
   }
   // Net + running balance.
   let bal = netStartingCash;
@@ -657,7 +680,7 @@ function bucketize(
     b.primaryIn = round2(b.primaryIn);
     b.secondaryIn = round2(b.secondaryIn);
     b.costOut = round2(b.costOut);
-    b.net = round2(b.primaryIn + b.secondaryIn - b.costOut - b.burn);
+    b.net = round2(b.primaryIn + b.secondaryIn - b.costOut - b.burn - b.supplier);
     bal = round2(bal + b.net);
     b.endBalance = bal;
     out.push(b);

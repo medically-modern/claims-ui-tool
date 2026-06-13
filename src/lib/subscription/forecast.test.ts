@@ -100,7 +100,7 @@ describe("splitRevenue", () => {
 // ─── Pay-date timing ──────────────────────────────────────────────────────────
 const A = (o: Partial<ForecastAssumptions> = {}) => ({ ...o });
 describe("primaryPayDate", () => {
-  const a = { primaryLagDays: 25, secondaryLagDays: 30, dosLagDays: 25, medicaidCycleDays: 60, horizonDays: 90, reorderRate: 1, collectionRate: 1, startingCash: 0, supplierOwed: 0, monthlyFixedCost: 0, granularity: "week" as const, includePaused: true };
+  const a = { primaryLagDays: 25, secondaryLagDays: 30, dosLagDays: 25, medicaidCycleDays: 60, horizonDays: 90, reorderRate: 1, collectionRate: 1, startingCash: 0, supplierOwed: 0, supplierSpreadDays: 30, monthlyFixedCost: 0, granularity: "week" as const, includePaused: true };
   it("non-Medicaid = order + 25 days", () => {
     const order = new Date(2026, 5, 1);
     expect(ymd(primaryPayDate(patient({ primaryPayer: "Cigna" }), order, a))).toBe(ymd(addDays(order, 25)));
@@ -114,7 +114,7 @@ describe("primaryPayDate", () => {
 
 // ─── Order generation / recurrence ──────────────────────────────────────────
 describe("orderDatesFor", () => {
-  const a = { primaryLagDays: 25, secondaryLagDays: 30, dosLagDays: 25, medicaidCycleDays: 60, horizonDays: 90, reorderRate: 1, collectionRate: 1, startingCash: 0, supplierOwed: 0, monthlyFixedCost: 0, granularity: "week" as const, includePaused: true };
+  const a = { primaryLagDays: 25, secondaryLagDays: 30, dosLagDays: 25, medicaidCycleDays: 60, horizonDays: 90, reorderRate: 1, collectionRate: 1, startingCash: 0, supplierOwed: 0, supplierSpreadDays: 30, monthlyFixedCost: 0, granularity: "week" as const, includePaused: true };
   it("non-Medicaid: single upcoming order", () => {
     const o = orderDatesFor(patient({ primaryPayer: "Cigna", nextOrderDate: ymd(addDays(TODAY, 10)) }), TODAY, a);
     expect(o.length).toBe(1);
@@ -157,9 +157,10 @@ describe("buildForecast — reconciliation invariants", () => {
     expect(f.kpis.balanceIn90).toBeCloseTo(f.kpis.netStartingCash + f.kpis.netOperatingCash, 1);
   });
 
-  it("netStartingCash = startingCash - supplierOwed", () => {
+  it("opens at cash in bank (supplier payable is NOT netted at day 0)", () => {
     const f = buildForecast([patient()], TODAY, { startingCash: 50000, supplierOwed: 12000 });
-    expect(f.kpis.netStartingCash).toBeCloseTo(38000);
+    expect(f.kpis.netStartingCash).toBeCloseTo(50000);
+    expect(f.balanceCurve[0].balance).toBeCloseTo(50000); // day 0 = full cash
   });
 
   it("bucket inflows/cost sum to KPI totals", () => {
@@ -289,5 +290,32 @@ describe("buildForecast — claims pipeline", () => {
     const reorder = buildForecast([], TODAY, { startingCash: 0, reorderRate: 0.5 }, pipe);
     expect(coll.kpis.primaryIn).toBeCloseTo(full.kpis.primaryIn * 0.9, 1);
     expect(reorder.kpis.primaryIn).toBeCloseTo(full.kpis.primaryIn, 1); // unaffected
+  });
+});
+
+// ─── Supplier payable spread over 30 days ───────────────────────────────────
+describe("buildForecast — supplier payable spread", () => {
+  it("$300k owed spreads to ~$10k/day over 30 days; balance opens at cash and draws down", () => {
+    const f = buildForecast([], TODAY, { startingCash: 200000, supplierOwed: 300000, supplierSpreadDays: 30, horizonDays: 90 });
+    expect(f.balanceCurve[0].balance).toBeCloseTo(200000);          // opens at cash in bank
+    expect(f.balanceCurve[30].balance).toBeCloseTo(200000 - 300000); // fully drawn by day 30 = -100k
+    expect(f.balanceCurve[60].balance).toBeCloseTo(-100000);        // flat after 30 (no other flows)
+    expect(f.kpis.supplierOut).toBeCloseTo(300000);
+    // ~$10k/day for first 30 days
+    expect(f.balanceCurve[1].balance).toBeCloseTo(190000);
+    expect(f.balanceCurve[15].balance).toBeCloseTo(200000 - 150000);
+  });
+  it("supplier draw shows in buckets and bucket burns/supplier sum to KPI", () => {
+    const f = buildForecast([], TODAY, { startingCash: 100000, supplierOwed: 60000, supplierSpreadDays: 30, monthlyFixedCost: 30000, granularity: "week" });
+    const sup = f.buckets.reduce((s, b) => s + b.supplier, 0);
+    expect(sup).toBeCloseTo(f.kpis.supplierOut, 0);
+    expect(sup).toBeCloseTo(60000, 0);
+  });
+  it("balanceIn90 == startingCash + netOperatingCash (with supplier in netOpCash)", () => {
+    const f = buildForecast(
+      [patient({ primaryPayer: "Medicare A&B", revenue: 954, cost: 500, nextOrderDate: ymd(addDays(TODAY, 3)) })],
+      TODAY, { startingCash: 200000, supplierOwed: 275000, supplierSpreadDays: 30, monthlyFixedCost: 25000 });
+    expect(f.kpis.balanceIn90).toBeCloseTo(f.kpis.netStartingCash + f.kpis.netOperatingCash, 0);
+    expect(f.kpis.netStartingCash).toBeCloseTo(200000);
   });
 });
