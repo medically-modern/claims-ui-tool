@@ -31,6 +31,7 @@ import NotFound from "./pages/NotFound.tsx";
 import Claims from "./pages/Claims.tsx";
 import ClaimDetail from "./pages/ClaimDetail.tsx";
 import ReplayEra from "./pages/ReplayEra.tsx";
+import Forecast from "./pages/Forecast.tsx";
 import { ThreadClaimsProvider } from "@/lib/claims/threadStore";
 import { BuildBadge } from "@/components/BuildBadge";
 import { VersionCheck } from "@/components/VersionCheck";
@@ -98,6 +99,7 @@ const App = () => (
             <Route path="/claims" element={<Claims />} />
             <Route path="/claims/:claimId" element={<ClaimDetail />} />
             <Route path="/replay-era" element={<ReplayEra />} />
+            <Route path="/forecast" element={<Forecast />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

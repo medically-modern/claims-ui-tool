@@ -29,7 +29,7 @@
 import { mondayQuery } from "../monday";
 import type {
   Checkpoint, CheckpointTone, SubscriptionPatient, SubscriptionType,
-  PatientStatus,
+  PatientStatus, PatientFinancials,
 } from "@/components/subscription/mockData";
 
 export const SUBSCRIPTION_BOARD_ID = 18407459988;
@@ -145,6 +145,30 @@ export const SUB_COL = {
   // the secondary claim. Surfaced in the Last Paid hover so the
   // operator sees the size of the gap, not just that there is one.
   secondary_amount:     "numeric_mm3hvtec",
+  // ─── Financials: per-order economics, recomputed by "Calculate Financials" ──
+  // These are the dollar figures the forecast is built from. Verified column
+  // ids 2026-06-13. All numeric columns; parsed via getNum (0 when blank).
+  calculate_financials: "color_mm2w74y8",  // status: triggers/flags the calc
+  sensors_revenue:      "numeric_mkxj6a3d",
+  sensors_cost:         "numeric_mkxjxmga",
+  sensors_gp:           "numeric_mkxjyw32",
+  supplies_revenue:     "numeric_mm27rypj",
+  supplies_cost:        "numeric_mm27hem2",
+  supplies_gp:          "numeric_mm2785ag",
+  total_revenue:        "numeric_mm2xsjm5",
+  total_cost:           "numeric_mm2xgvxx",
+  total_gp:             "numeric_mm2xvjc1",
+  shipping_cost:        "numeric_mm2xxmp4",
+  arr_value:            "numeric_mm2xsqyd",
+  arp_value:            "numeric_mm2xdsvh",
+  // ─── Claims actuals (subscription-side rollup) — for the forecast blend ─────
+  // NOTE 2026-06-13: claims_paid_amount is currently a uniform placeholder
+  // ("$564.30") on every paid row, so the forecast uses Total Revenue for the
+  // settled *amount* and only trusts claims_paid_date for settled *timing*.
+  claims_status_col:    "color_mm2n5rkg",
+  claims_paid_date:     "date_mm2nr2vz",
+  claims_paid_amount:   "text_mm2nxwze",
+  partial_approval_date:"date_mm2na60z",
 } as const;
 
 const READ_IDS = Object.values(SUB_COL);
@@ -188,6 +212,14 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   facilityFlags: string;
   // Claims
   primaryClaimPaid: string; secondaryClaimPaid: string;
+  secondaryAmount: string;
+  // Financials (per-order economics) + claims actuals for the forecast
+  financials: PatientFinancials;
+  calculateFinancials: string;
+  claimsStatusCol: string;
+  claimsPaidDate: string;
+  claimsPaidAmount: string;
+  partialApprovalDate: string;
   // Group membership (used to filter Not Active patients out by default)
   groupId: string;
   isNotActive: boolean;
@@ -237,6 +269,15 @@ const NEXT_QUERY = `
 // ─── Cell helpers ───────────────────────────────────────────────────────────
 function get(item: MondayItem, col: string): string {
   return (item.column_values.find((c) => c.id === col)?.text ?? "").trim();
+}
+
+/** Parse a numeric/text cell to a number. Strips $ and commas. Returns 0 for
+ *  blank / non-numeric so financial sums never produce NaN. */
+function getNum(item: MondayItem, col: string): number {
+  const raw = get(item, col).replace(/[^0-9.\-]/g, "");
+  if (raw === "" || raw === "-" || raw === ".") return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
 }
 
 // ─── Checkpoint derivation ──────────────────────────────────────────────────
@@ -548,6 +589,26 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
     facilityFlags:       get(item, SUB_COL.facility_flags),
     primaryClaimPaid:    get(item, SUB_COL.primary_claim_paid),
     secondaryClaimPaid:  get(item, SUB_COL.secondary_claim_paid),
+    secondaryAmount:     get(item, SUB_COL.secondary_amount),
+    financials: {
+      sensorsRevenue:  getNum(item, SUB_COL.sensors_revenue),
+      sensorsCost:     getNum(item, SUB_COL.sensors_cost),
+      sensorsGP:       getNum(item, SUB_COL.sensors_gp),
+      suppliesRevenue: getNum(item, SUB_COL.supplies_revenue),
+      suppliesCost:    getNum(item, SUB_COL.supplies_cost),
+      suppliesGP:      getNum(item, SUB_COL.supplies_gp),
+      shippingCost:    getNum(item, SUB_COL.shipping_cost),
+      totalRevenue:    getNum(item, SUB_COL.total_revenue),
+      totalCost:       getNum(item, SUB_COL.total_cost),
+      totalGP:         getNum(item, SUB_COL.total_gp),
+      arr:             getNum(item, SUB_COL.arr_value),
+      arp:             getNum(item, SUB_COL.arp_value),
+    },
+    calculateFinancials: get(item, SUB_COL.calculate_financials),
+    claimsStatusCol:     get(item, SUB_COL.claims_status_col),
+    claimsPaidDate:      get(item, SUB_COL.claims_paid_date),
+    claimsPaidAmount:    get(item, SUB_COL.claims_paid_amount),
+    partialApprovalDate: get(item, SUB_COL.partial_approval_date),
     groupId:             item.group?.id ?? "",
     isNotActive:         item.group?.id === NOT_ACTIVE_GROUP_ID,
   };
