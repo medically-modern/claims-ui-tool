@@ -73,9 +73,23 @@ function StatBox({ title, rows, tone = "neutral", icon }: { title: string; rows:
     </Card>
   );
 }
+function Metric({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div>
+      <div className="text-[22px] font-semibold tabular-nums">{value}</div>
+      <div className="text-[15px] text-muted-foreground">{label}</div>
+      {sub && <div className="text-[13px] text-muted-foreground tabular-nums">{sub}</div>}
+    </div>
+  );
+}
 function ChartTip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const d = payload[0]?.payload ?? {};
+  const rev = (d.Primary ?? 0) + (d.Secondary ?? 0) + (d["In-flight"] ?? 0);
+  const prod = -(d.Cost ?? 0);
+  const gm = rev - prod;
+  const gmP = rev ? Math.round((gm / rev) * 100) : 0;
+  const pmP = rev ? Math.round(((d.Net ?? 0) / rev) * 100) : 0;
   const row = (l: string, v: number, c: string) => (
     <div className="flex items-center justify-between gap-6 text-[14px]"><span style={{ color: c }}>{l}</span><span className="tabular-nums font-medium" style={{ color: c }}>{fmt(v)}</span></div>
   );
@@ -90,6 +104,10 @@ function ChartTip({ active, payload }: any) {
       {row("Fixed burn", d.Burn ?? 0, "#98A2B3")}
       <div className="mt-1 border-t pt-1">{row("Net cash flow", d.Net ?? 0, (d.Net ?? 0) >= 0 ? "#006383" : "#CC3366")}</div>
       {row("Bank balance (end)", d.Balance ?? 0, "#093E52")}
+      <div className="mt-1 border-t pt-1 text-[14px]">
+        <div className="flex items-center justify-between gap-6"><span className="text-muted-foreground">Gross margin</span><span className="tabular-nums font-medium">{fmt(gm)} · {gmP}%</span></div>
+        <div className="flex items-center justify-between gap-6"><span className="text-muted-foreground">Profit margin</span><span className="tabular-nums font-medium">{pmP}%</span></div>
+      </div>
     </div>
   );
 }
@@ -120,6 +138,24 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     ...UDEFAULT, startingCash, supplierOwed, monthlyFixedCost, supplierSpreadDays,
     reorderRate: reorderPct / 100, collectionRate: collectionPct / 100,
   }), [subs, claims, today, startingCash, supplierOwed, monthlyFixedCost, supplierSpreadDays, reorderPct, collectionPct]);
+
+  const fin = useMemo(() => {
+    const rows = (subData ?? []).filter((p: any) => !p.isNotActive && (p.financials?.totalRevenue ?? 0) > 0);
+    const N = rows.length;
+    const sum = (f: (p: any) => number) => rows.reduce((s, p) => s + f(p), 0);
+    const rev = sum((p) => p.financials?.totalRevenue ?? 0);
+    const gp = sum((p) => p.financials?.totalGP ?? 0);
+    const arr = sum((p) => p.financials?.arr ?? 0);
+    const arp = sum((p) => p.financials?.arp ?? 0);
+    const annualBurn = monthlyFixedCost * 12;
+    return {
+      N, arr, arp,
+      avgRev: N ? rev / N : 0, avgCost: N ? (rev - gp) / N : 0, avgGP: N ? gp / N : 0,
+      gmPct: rev ? (gp / rev) * 100 : 0,
+      netProfit: arp - annualBurn,
+      pmPct: arr ? ((arp - annualBurn) / arr) * 100 : 0,
+    };
+  }, [subData, monthlyFixedCost]);
 
   const chartData = res.weekly.map((w) => ({
     label: mLabel(w.mon), Primary: Math.round(w.primary), Secondary: Math.round(w.secondary),
@@ -157,6 +193,18 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             </Button>
           </div>
         </div>
+
+        <Card className="p-5">
+          <div className="text-[18px] font-semibold mb-3">Key financials</div>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-4 md:grid-cols-3 xl:grid-cols-6">
+            <Metric label="Active patients" value={fin.N.toLocaleString()} />
+            <Metric label="ARR (annual recurring rev)" value={fmt(fin.arr, true)} sub={`avg order rev ${fmt(fin.avgRev)}`} />
+            <Metric label="ARP (annual recurring profit)" value={fmt(fin.arp, true)} sub={`avg order cost ${fmt(fin.avgCost)}`} />
+            <Metric label="Gross margin" value={`${fin.gmPct.toFixed(1)}%`} sub={`avg GP/order ${fmt(fin.avgGP)}`} />
+            <Metric label="Profit margin (after fixed)" value={`${fin.pmPct.toFixed(1)}%`} sub={`net ${fmt(fin.netProfit, true)}/yr`} />
+            <Metric label="Avg order revenue" value={fmt(fin.avgRev)} sub={`avg cost ${fmt(fin.avgCost)}`} />
+          </div>
+        </Card>
 
         <Card className="p-4">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
