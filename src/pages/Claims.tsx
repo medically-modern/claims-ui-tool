@@ -29,6 +29,7 @@ import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
 import { hasMondayToken } from "@/api/monday";
 import { LoadingOverlay } from "@/components/claims/LoadingOverlay";
 import { CashFlowSummary } from "@/components/claims/CashFlowSummary";
+import { ForecastDashboard } from "@/pages/Forecast";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
@@ -457,7 +458,7 @@ function compareRows(a: Claim, b: Claim, col: ColumnKey, dir: "asc" | "desc"): n
 
 
 const Claims = () => {
-  const [topLevel, setTopLevel] = useState<"claims" | "subscription">("claims");
+  const [topLevel, setTopLevel] = useState<"claims" | "subscription" | "financials">("claims");
   const [board, setBoard] = useState<BoardKey>("primary");
   const [mode, setMode] = useState<ModeKey>("review");
   const [category, setCategory] = useState<CategoryKey>("era");
@@ -975,16 +976,17 @@ const Claims = () => {
 
       <main className="mx-auto max-w-[1920px] px-6 py-6 space-y-6">
         {/* Top-level: Claims Board (the original product) vs Subscription Board */}
-        <Tabs value={topLevel} onValueChange={(v) => setTopLevel(v as "claims" | "subscription")}>
+        <Tabs value={topLevel} onValueChange={(v) => setTopLevel(v as "claims" | "subscription" | "financials")}>
           <TabsList className="bg-card border h-10">
             <TabsTrigger value="claims" className="text-sm font-semibold">Claims Board</TabsTrigger>
             <TabsTrigger value="subscription" className="text-sm font-semibold">Subscription Board</TabsTrigger>
+            <TabsTrigger value="financials" className="text-sm font-semibold">Financials</TabsTrigger>
           </TabsList>
         </Tabs>
 
-        {topLevel === "subscription" ? (
-          <SubscriptionBoard />
-        ) : (
+        {topLevel === "subscription" && <SubscriptionBoard />}
+        {topLevel === "financials" && <ForecastDashboard embedded />}
+        {topLevel === "claims" && (
         <>
         {/* Top app row: Board tabs (left) | Action Items inbox
             (center, persistent across views) | Replay ERA (right).

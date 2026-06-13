@@ -41,7 +41,6 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-import { Financials } from "./Financials";
 import { PatientProfile } from "./PatientProfile";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
@@ -1564,7 +1563,6 @@ const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof RefreshCw }[
   { id: "patient-profile", label: "Patient Profile", icon: UserCircle },
   { id: "authorizations",  label: "Authorizations",  icon: Shield },
   { id: "medical-records", label: "Medical Records", icon: ClipboardCheck },
-  { id: "financials",      label: "Financials",      icon: Building2 },
 ];
 
 export function SubscriptionBoard() {
@@ -1591,7 +1589,6 @@ export function SubscriptionBoard() {
       {workflow === "patient-profile" && <PatientProfile />}
       {workflow === "authorizations"  && <Authorizations />}
       {workflow === "medical-records" && <MedicalRecords />}
-      {workflow === "financials"      && <Financials />}
     </div>
   );
 }

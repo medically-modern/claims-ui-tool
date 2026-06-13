@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, RefreshCw, Stethoscope, TrendingUp } from "lucide-react";
+import { ExternalLink, RefreshCw, Stethoscope } from "lucide-react";
 
 export function AppHeader({
   title,
@@ -31,11 +31,6 @@ export function AppHeader({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Link to="/forecast">
-            <Button variant="outline" size="sm">
-              <TrendingUp className="mr-2 h-4 w-4" /> Cash Forecast
-            </Button>
-          </Link>
           <Button variant="outline" size="sm">
             <RefreshCw className="mr-2 h-4 w-4" /> Refresh
           </Button>

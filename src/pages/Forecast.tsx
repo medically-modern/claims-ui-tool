@@ -128,7 +128,7 @@ const STATE_PILL: Record<string, string> = {
 const KIND_LABEL: Record<string, string> = { primary: "Primary", secondary: "Secondary", cost: "Cost" };
 
 // ─── Component ────────────────────────────────────────────────────────────────
-export default function Forecast() {
+export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) {
   const { data, loading, isFetching, usingMock, refetch, dataUpdatedAt } = useSubscriptionPatients();
 
   // Assumptions
@@ -205,12 +205,12 @@ export default function Forecast() {
   const updated = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
 
   return (
-    <div className="min-h-screen bg-muted/20">
-      <div className="mx-auto max-w-[1400px] px-6 py-6 space-y-4">
+    <div className={embedded ? "space-y-4" : "min-h-screen bg-muted/20"}>
+      <div className={embedded ? "space-y-4" : "mx-auto max-w-[1400px] px-6 py-6 space-y-4"}>
         {/* Header */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
-            <Link to="/claims"><Button variant="ghost" size="sm" className="gap-1.5"><ArrowLeft className="h-4 w-4" /> Back</Button></Link>
+            {!embedded && <Link to="/claims"><Button variant="ghost" size="sm" className="gap-1.5"><ArrowLeft className="h-4 w-4" /> Back</Button></Link>}
             <div>
               <h1 className="text-[22px] font-semibold tracking-tight">Cash Flow Forecast</h1>
               <p className="text-[13px] text-muted-foreground">
@@ -393,6 +393,10 @@ export default function Forecast() {
       </Sheet>
     </div>
   );
+}
+
+export default function Forecast() {
+  return <ForecastDashboard />;
 }
 
 function BreakdownCard({
