@@ -117,8 +117,9 @@ export interface ForecastPatient {
 }
 
 export interface ForecastAssumptions {
-  primaryLagDays: number; // 25
+  primaryLagDays: number; // 26 (order+26 == DOS+25, since order = DOS - 1)
   secondaryLagDays: number; // 30
+  dosLagDays: number; // 25 — claims-pipeline lag from DOS (== primaryLag - 1)
   medicaidCycleDays: number; // 60
   horizonDays: number; // 90
   reorderRate: number; // 0..1 — % of projected orders that actually happen
@@ -131,8 +132,9 @@ export interface ForecastAssumptions {
 }
 
 export const DEFAULT_ASSUMPTIONS: ForecastAssumptions = {
-  primaryLagDays: 25,
+  primaryLagDays: 26,
   secondaryLagDays: 30,
+  dosLagDays: 25,
   medicaidCycleDays: 60,
   horizonDays: 90,
   reorderRate: 1,
@@ -172,6 +174,22 @@ export interface RevenueSplit {
     | "coins_plus_deductible"
     | "no_pr_data_all_primary"
     | "no_revenue";
+}
+
+/** A claim already submitted to a payer (lives on the Claims board), awaiting
+ *  payment. These are the near-term A/R that lands ~DOS+25 — distinct from
+ *  future subscription orders (which haven't been placed yet). No cost is
+ *  attached: the product already shipped, so its COGS is historical / sits in
+ *  the "owed to supplier" figure, not a future outflow. */
+export interface PipelineClaim {
+  id: string;
+  patientName: string;
+  payor: string;
+  kind: "primary" | "secondary";
+  dos: string | null;        // date of service
+  sentDate: string | null;   // claim sent date
+  payDate: string | null;    // known/ERA pay date if any
+  amount: number;            // expected inflow (claims-side estimate)
 }
 
 export interface TimeBucket {
@@ -309,25 +327,21 @@ export function orderDatesFor(
   const base = parseLocalDate(p.nextOrderDate);
   if (!base) return [];
   const horizonEnd = addDays(today, a.horizonDays);
-  // An order placed up to ~ (primaryLag + a few) days ago can still pay in the
-  // future; older than that and its primary cash is already in the past.
-  const earliest = addDays(today, -(a.primaryLagDays + 7));
+  // FUTURE orders only. Orders already placed/shipped show up as submitted
+  // claims on the Claims board and are projected from the claims pipeline
+  // (DOS+25) instead — projecting them here too would double-count.
+  const t0 = startOfDay(today);
 
   if (!isPureMedicaid(p.primaryPayer)) {
-    // Single order. Include it if it's anywhere from `earliest` to horizonEnd;
-    // the windowing step keeps only cash that lands today-or-later.
-    if (base.getTime() < earliest.getTime() || base.getTime() > horizonEnd.getTime()) {
-      // Past order whose cash already landed, or beyond the window.
-      return base.getTime() > horizonEnd.getTime() ? [] : [{ date: base, occurrence: 0 }];
-    }
+    if (base.getTime() < t0.getTime() || base.getTime() > horizonEnd.getTime()) return [];
     return [{ date: base, occurrence: 0 }];
   }
 
-  // Medicaid: step by cycle from the first occurrence ≥ earliest.
+  // Medicaid: step by the 60-day cycle, keeping occurrences from today forward.
   const cycle = Math.max(1, a.medicaidCycleDays);
   let first = base;
-  if (first.getTime() < earliest.getTime()) {
-    const steps = Math.ceil(diffDays(earliest, first) / cycle);
+  if (first.getTime() < t0.getTime()) {
+    const steps = Math.ceil(diffDays(t0, first) / cycle);
     first = addDays(first, steps * cycle);
   }
   const out: Array<{ date: Date; occurrence: number }> = [];
@@ -338,6 +352,29 @@ export function orderDatesFor(
     if (out.length > 12) break; // safety
   }
   return out;
+}
+
+/** Expected pay date for a submitted claim in the A/R pipeline. Uses a known
+ *  ERA pay date if present; else the Medicaid eMedNY cycle from the sent date;
+ *  else DOS + dosLagDays (25). Secondary claims add the secondary lag when no
+ *  pay date is known. */
+export function pipelinePayDate(c: PipelineClaim, a: ForecastAssumptions): Date | null {
+  const known = parseLocalDate(c.payDate);
+  if (known) return known;
+  if (isPureMedicaid(c.payor)) {
+    const sent = parseLocalDate(c.sentDate);
+    if (sent) return startOfDay(medicaidPaymentDate(sent));
+  }
+  const dos = parseLocalDate(c.dos);
+  const sent = parseLocalDate(c.sentDate);
+  if (c.kind === "secondary") {
+    if (sent) return addDays(sent, a.secondaryLagDays);
+    if (dos) return addDays(dos, a.dosLagDays + a.secondaryLagDays);
+    return null;
+  }
+  if (dos) return addDays(dos, a.dosLagDays);
+  if (sent) return addDays(sent, a.dosLagDays);
+  return null;
 }
 
 /** Classify an order against the patient's claims actuals. Future orders are
@@ -358,6 +395,7 @@ export function buildForecast(
   patients: ForecastPatient[],
   today: Date = new Date(),
   partial: Partial<ForecastAssumptions> = {},
+  pipeline: PipelineClaim[] = [],
 ): ForecastResult {
   const a: ForecastAssumptions = { ...DEFAULT_ASSUMPTIONS, ...partial };
   const t0 = startOfDay(today);
@@ -423,6 +461,24 @@ export function buildForecast(
         });
       }
     }
+  }
+
+  // ─── Claims-board A/R pipeline (already-submitted claims awaiting payment) ──
+  // These land near-term (~DOS+25) and carry NO cost (product already shipped;
+  // its COGS is historical / in "owed to supplier"). Scaled by collectionRate
+  // only (already ordered, so reorderRate doesn't apply). State "in-flight".
+  for (const c of pipeline) {
+    if (c.amount <= 0) continue;
+    const d = pipelinePayDate(c, a);
+    if (!d) continue;
+    payerSet.add(c.payor || "—");
+    events.push({
+      patientId: c.id, patientName: c.patientName, payor: c.payor || "—",
+      kind: c.kind, amount: c.amount * a.collectionRate, date: ymd(d),
+      orderDate: c.dos ? ymd(parseLocalDate(c.dos)!) : ymd(d),
+      occurrence: 0, state: "in-flight", subscriptionType: "—",
+    });
+    if (d.getTime() >= windowStart.getTime() && d.getTime() <= windowEnd.getTime()) ordersInWindow += 1;
   }
 
   // ─── Daily balance curve over [windowStart, windowEnd] ──────────────────────

@@ -39,9 +39,12 @@ import {
 import { cn } from "@/lib/utils";
 
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
+import { useAllClaims } from "@/hooks/useAllClaims";
+import { useAllSecondaryClaims } from "@/hooks/useAllSecondaryClaims";
+import { computeCashFlow } from "@/lib/claims/cashflow";
 import {
   buildForecast, forecastPatientFromLive, parseLocalDate, ymd, addDays,
-  type CashEvent, type ForecastResult,
+  type CashEvent, type ForecastResult, type PipelineClaim,
 } from "@/lib/subscription/forecast";
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
@@ -139,7 +142,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const [collectionPct, setCollectionPct] = useState(100);
   const [granularity, setGranularity] = useState<"week" | "month">("week");
   const [includePaused, setIncludePaused] = useState(true);
-  const [primaryLag, setPrimaryLag] = useState(25);
+  const [primaryLag, setPrimaryLag] = useState(26);
   const [secondaryLag, setSecondaryLag] = useState(30);
   const [payerFilter, setPayerFilter] = useState("All payers");
   const [typeFilter, setTypeFilter] = useState("All types");
@@ -148,6 +151,27 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const patients = useMemo(
     () => (data ?? []).map(forecastPatientFromLive).filter((p) => !p.isNotActive),
     [data],
+  );
+
+  // Claims-board A/R pipeline: claims already submitted and awaiting payment.
+  // These are the near-term inflows (~DOS+25). We reuse the proven claims
+  // cash-flow classifier and take only the confident buckets (Soon = ERA in
+  // hand / Medicaid soon; Expected = submitted, in normal turnaround). High
+  // Risk (denials / late) and settled are excluded so we don't overstate.
+  const { data: claims } = useAllClaims();
+  const { data: secondaryClaims } = useAllSecondaryClaims();
+  const todayForCf = useMemo(() => new Date(), []);
+  const pipeline: PipelineClaim[] = useMemo(() => {
+    const cf = computeCashFlow(claims ?? [], secondaryClaims ?? [], todayForCf);
+    return [...cf.soon.entries, ...cf.expected.entries].map((e) => ({
+      id: e.id, patientName: e.name, payor: e.payor, kind: e.kind,
+      dos: e.dos, sentDate: e.claimSentDate, payDate: e.payDate, amount: e.amount,
+    }));
+  }, [claims, secondaryClaims, todayForCf]);
+
+  const filteredPipeline = useMemo(
+    () => pipeline.filter((c) => payerFilter === "All payers" || c.payor === payerFilter),
+    [pipeline, payerFilter],
   );
 
   const payerOptions = useMemo(() => {
@@ -170,8 +194,8 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
       reorderRate: reorderPct / 100, collectionRate: collectionPct / 100,
       primaryLagDays: primaryLag, secondaryLagDays: secondaryLag,
       granularity, includePaused, horizonDays: 90,
-    }),
-    [filteredPatients, today, startingCash, supplierOwed, monthlyFixedCost, reorderPct, collectionPct, primaryLag, secondaryLag, granularity, includePaused],
+    }, filteredPipeline),
+    [filteredPatients, filteredPipeline, today, startingCash, supplierOwed, monthlyFixedCost, reorderPct, collectionPct, primaryLag, secondaryLag, granularity, includePaused],
   );
 
   const k = forecast.kpis;
@@ -283,8 +307,8 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
               </div>
             </div>
             <div className="text-[11px] text-muted-foreground">
-              Model: primary +{primaryLag}d · secondary +{primaryLag + secondaryLag}d · Medicaid uses eMedNY cycle &amp; +60d reorder · cost at +{primaryLag}d.
-              <span className="block">Backtest: non-Medicaid claims historically pay ~14d sent→paid; Medicaid ~23d.</span>
+              Model: future orders pay at order +{primaryLag}d (= DOS+{primaryLag - 1}); submitted claims (A/R) land at DOS+{primaryLag - 1}; secondary +{secondaryLag}d later; Medicaid uses the eMedNY cycle &amp; a +60d reorder. Cost only on future orders.
+              <span className="block">Includes the live Claims-board A/R pipeline (submitted, awaiting payment) for near-term inflow.</span>
             </div>
           </div>
         </Card>

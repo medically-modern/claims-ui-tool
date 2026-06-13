@@ -100,7 +100,7 @@ describe("splitRevenue", () => {
 // ─── Pay-date timing ──────────────────────────────────────────────────────────
 const A = (o: Partial<ForecastAssumptions> = {}) => ({ ...o });
 describe("primaryPayDate", () => {
-  const a = { primaryLagDays: 25, secondaryLagDays: 30, medicaidCycleDays: 60, horizonDays: 90, reorderRate: 1, collectionRate: 1, startingCash: 0, supplierOwed: 0, monthlyFixedCost: 0, granularity: "week" as const, includePaused: true };
+  const a = { primaryLagDays: 25, secondaryLagDays: 30, dosLagDays: 25, medicaidCycleDays: 60, horizonDays: 90, reorderRate: 1, collectionRate: 1, startingCash: 0, supplierOwed: 0, monthlyFixedCost: 0, granularity: "week" as const, includePaused: true };
   it("non-Medicaid = order + 25 days", () => {
     const order = new Date(2026, 5, 1);
     expect(ymd(primaryPayDate(patient({ primaryPayer: "Cigna" }), order, a))).toBe(ymd(addDays(order, 25)));
@@ -114,7 +114,7 @@ describe("primaryPayDate", () => {
 
 // ─── Order generation / recurrence ──────────────────────────────────────────
 describe("orderDatesFor", () => {
-  const a = { primaryLagDays: 25, secondaryLagDays: 30, medicaidCycleDays: 60, horizonDays: 90, reorderRate: 1, collectionRate: 1, startingCash: 0, supplierOwed: 0, monthlyFixedCost: 0, granularity: "week" as const, includePaused: true };
+  const a = { primaryLagDays: 25, secondaryLagDays: 30, dosLagDays: 25, medicaidCycleDays: 60, horizonDays: 90, reorderRate: 1, collectionRate: 1, startingCash: 0, supplierOwed: 0, monthlyFixedCost: 0, granularity: "week" as const, includePaused: true };
   it("non-Medicaid: single upcoming order", () => {
     const o = orderDatesFor(patient({ primaryPayer: "Cigna", nextOrderDate: ymd(addDays(TODAY, 10)) }), TODAY, a);
     expect(o.length).toBe(1);
@@ -248,17 +248,46 @@ describe("buildForecast — scope & settled", () => {
     expect(buildForecast(pts, TODAY, { includePaused: true }).kpis.patientsInScope).toBe(1);
     expect(buildForecast(pts, TODAY, { includePaused: false }).kpis.patientsInScope).toBe(0);
   });
-  it("a settled order whose paid date is in the past adds no forward inflow", () => {
+  it("a past-dated subscription order is NOT projected (claims pipeline owns it)", () => {
     const f = buildForecast(
-      [patient({ primaryPayer: "Cigna", revenue: 1000, cost: 0, nextOrderDate: ymd(addDays(TODAY, -10)), claimsPaidDate: ymd(addDays(TODAY, -2)), primaryClaimPaid: "Fully Paid" })],
+      [patient({ primaryPayer: "Cigna", revenue: 1000, cost: 400, nextOrderDate: ymd(addDays(TODAY, -10)) })],
       TODAY, { startingCash: 0 });
-    expect(f.kpis.primaryIn).toBeCloseTo(0); // already landed before today
+    expect(f.kpis.primaryIn).toBeCloseTo(0); // future-only; already-placed orders come from claims
+    expect(f.kpis.costOut).toBeCloseTo(0);
   });
-  it("denied order: no inflow, but cost still hits", () => {
-    const f = buildForecast(
-      [patient({ primaryPayer: "Cigna", revenue: 1000, cost: 400, nextOrderDate: ymd(addDays(TODAY, -5)), primaryClaimPaid: "Denied" })],
-      TODAY, { startingCash: 0 });
-    expect(f.kpis.primaryIn).toBeCloseTo(0);
-    expect(f.kpis.costOut).toBeCloseTo(400, 0); // cost at order+25 = TODAY+20, in window
+});
+
+
+// ─── Claims A/R pipeline ────────────────────────────────────────────────────
+describe("buildForecast — claims pipeline", () => {
+  it("submitted claim lands at DOS + dosLag (25) with no cost", () => {
+    const pipe = [{ id: "c1", patientName: "Pipe Pt", payor: "Cigna", kind: "primary" as const, dos: ymd(addDays(TODAY, -5)), sentDate: ymd(addDays(TODAY, -4)), payDate: null, amount: 1000 }];
+    const f = buildForecast([], TODAY, { startingCash: 0 }, pipe);
+    // pay date = DOS-5 + 25 = TODAY+20, inside window
+    expect(f.kpis.primaryIn).toBeCloseTo(1000, 0);
+    expect(f.kpis.costOut).toBeCloseTo(0); // pipeline carries no cost
+    const ev = f.events.find((e) => e.patientId === "c1");
+    expect(ev?.date).toBe(ymd(addDays(TODAY, 20)));
+    expect(ev?.state).toBe("in-flight");
+  });
+  it("uses a known ERA pay date when present", () => {
+    const pipe = [{ id: "c2", patientName: "x", payor: "Aetna Commercial", kind: "primary" as const, dos: ymd(addDays(TODAY, -40)), sentDate: ymd(addDays(TODAY, -38)), payDate: ymd(addDays(TODAY, 3)), amount: 500 }];
+    const f = buildForecast([], TODAY, { startingCash: 0 }, pipe);
+    expect(f.events.find((e) => e.patientId === "c2")?.date).toBe(ymd(addDays(TODAY, 3)));
+  });
+  it("pipeline inflow + future-order projection do not double count (different orders)", () => {
+    const sub = [patient({ id: "p1", primaryPayer: "Cigna", revenue: 1000, cost: 400, nextOrderDate: ymd(addDays(TODAY, 5)) })];
+    const pipe = [{ id: "p1-claim", patientName: "n", payor: "Cigna", kind: "primary" as const, dos: ymd(addDays(TODAY, -3)), sentDate: null, payDate: null, amount: 900 }];
+    const f = buildForecast(sub, TODAY, { startingCash: 0, collectionRate: 1 }, pipe);
+    // future order primary (1000) + pipeline (900) both counted once
+    expect(f.kpis.primaryIn).toBeCloseTo(1900, 0);
+  });
+  it("collectionRate scales pipeline; reorderRate does not", () => {
+    const pipe = [{ id: "c3", patientName: "x", payor: "Cigna", kind: "primary" as const, dos: ymd(addDays(TODAY, -2)), sentDate: null, payDate: null, amount: 1000 }];
+    const full = buildForecast([], TODAY, { startingCash: 0 }, pipe);
+    const coll = buildForecast([], TODAY, { startingCash: 0, collectionRate: 0.9 }, pipe);
+    const reorder = buildForecast([], TODAY, { startingCash: 0, reorderRate: 0.5 }, pipe);
+    expect(coll.kpis.primaryIn).toBeCloseTo(full.kpis.primaryIn * 0.9, 1);
+    expect(reorder.kpis.primaryIn).toBeCloseTo(full.kpis.primaryIn, 1); // unaffected
   });
 });
