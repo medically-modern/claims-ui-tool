@@ -82,14 +82,14 @@ function ChartTip({ active, payload }: any) {
   return (
     <div className="rounded-lg border bg-white px-3 py-2 shadow-md">
       <div className="text-[15px] font-semibold mb-1">Week of {d.label}</div>
-      {row("Primary in", d.Primary ?? 0, "#0EA5E9")}
-      {row("Secondary in", d.Secondary ?? 0, "#10B981")}
-      {row("In-flight claims", d["In-flight"] ?? 0, "#6366F1")}
-      {row("Product cost", d.Cost ?? 0, "#F87171")}
-      {row("Supplier draw", d.Supplier ?? 0, "#a78bfa")}
-      {row("Fixed burn", d.Burn ?? 0, "#fbbf24")}
-      <div className="mt-1 border-t pt-1">{row("Net cash flow", d.Net ?? 0, (d.Net ?? 0) >= 0 ? "#059669" : "#dc2626")}</div>
-      {row("Bank balance (end)", d.Balance ?? 0, "#0f172a")}
+      {row("Primary in", d.Primary ?? 0, "#006383")}
+      {row("Secondary in", d.Secondary ?? 0, "#80ADAA")}
+      {row("In-flight claims", d["In-flight"] ?? 0, "#4C9A93")}
+      {row("Product cost", d.Cost ?? 0, "#CC3366")}
+      {row("Supplier draw", d.Supplier ?? 0, "#066FAC")}
+      {row("Fixed burn", d.Burn ?? 0, "#98A2B3")}
+      <div className="mt-1 border-t pt-1">{row("Net cash flow", d.Net ?? 0, (d.Net ?? 0) >= 0 ? "#006383" : "#CC3366")}</div>
+      {row("Bank balance (end)", d.Balance ?? 0, "#093E52")}
     </div>
   );
 }
@@ -132,11 +132,11 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   // net-cash-flow labels: green above the up-stack when ≥0, red below the down-stack when <0
   const NetTop = (p: any) => {
     const v = chartData[p.index]?.Net ?? 0; if (v < 0) return null;
-    return <text x={p.x + p.width / 2} y={p.y - 8} textAnchor="middle" fontSize={14} fontWeight={700} fill="#059669">{fmt(v, true)}</text>;
+    return <text x={p.x + p.width / 2} y={p.y - 8} textAnchor="middle" fontSize={14} fontWeight={700} fill="#006383">{fmt(v, true)}</text>;
   };
   const NetBottom = (p: any) => {
     const v = chartData[p.index]?.Net ?? 0; if (v >= 0) return null;
-    return <text x={p.x + p.width / 2} y={p.y + p.height + 20} textAnchor="middle" fontSize={14} fontWeight={700} fill="#dc2626">{fmt(v, true)}</text>;
+    return <text x={p.x + p.width / 2} y={p.y + p.height + 20} textAnchor="middle" fontSize={14} fontWeight={700} fill="#CC3366">{fmt(v, true)}</text>;
   };
 
   return (
@@ -175,7 +175,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
           <StatBox title="Runway" tone={k.runway === null ? "success" : "danger"} icon={<AlertTriangle className="h-4 w-4" />}
             rows={[{ label: "Runway", value: k.runway === null ? "90+ days" : `${k.runway} days` }, { label: `Min balance (day ${k.minDay})`, value: fmt(k.minBal, true) }]} />
           <StatBox title="Net operating cash (90d)" tone={k.netCash >= 0 ? "success" : "danger"} icon={<TrendingUp className="h-4 w-4" />}
-            rows={[{ label: "Revenue in", value: fmt(k.revenue, true), color: "#059669" }, { label: "Cash out", value: fmt(k.costTotal, true), color: "#dc2626" }, { label: "Net", value: fmt(k.netCash, true) }]} />
+            rows={[{ label: "Revenue in", value: fmt(k.revenue, true), color: "#006383" }, { label: "Cash out", value: fmt(k.costTotal, true), color: "#CC3366" }, { label: "Net", value: fmt(k.netCash, true) }]} />
           <StatBox title="Fixed-cost capacity / mo" tone="info" icon={<CalendarClock className="h-4 w-4" />}
             rows={[{ label: "Flat balance (end = start)", value: fmt(k.flatBurn, true) }, { label: "Max before $0", value: fmt(k.maxBurn, true) }]} />
         </div>
@@ -190,18 +190,18 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="label" stroke="#64748b" fontSize={14} />
               <YAxis yAxisId="c" stroke="#64748b" fontSize={14} tickFormatter={(v) => fmt(v, true)} />
-              <YAxis yAxisId="b" orientation="right" stroke="#0f172a" fontSize={14} tickFormatter={(v) => fmt(v, true)}
+              <YAxis yAxisId="b" orientation="right" stroke="#093E52" fontSize={14} tickFormatter={(v) => fmt(v, true)}
                 label={{ value: "line = projected bank balance", angle: -90, position: "insideRight", style: { fontSize: 13, fill: "#64748b" } }} />
               <Tooltip content={<ChartTip />} />
               <Legend wrapperStyle={{ fontSize: 14 }} />
               <ReferenceLine yAxisId="b" y={0} stroke="#ef4444" strokeDasharray="4 4" />
-              <Bar yAxisId="c" dataKey="Primary" stackId="a" fill="#0EA5E9" />
-              <Bar yAxisId="c" dataKey="Secondary" stackId="a" fill="#10B981" />
-              <Bar yAxisId="c" dataKey="In-flight" stackId="a" fill="#6366F1"><LabelList content={NetTop} /></Bar>
-              <Bar yAxisId="c" dataKey="Cost" stackId="a" fill="#F87171" />
-              <Bar yAxisId="c" dataKey="Supplier" stackId="a" fill="#a78bfa" />
-              <Bar yAxisId="c" dataKey="Burn" stackId="a" fill="#fbbf24"><LabelList content={NetBottom} /></Bar>
-              <Line yAxisId="b" type="monotone" dataKey="Balance" stroke="#0f172a" strokeWidth={2.5} dot={false} />
+              <Bar yAxisId="c" dataKey="Primary" stackId="a" fill="#006383" />
+              <Bar yAxisId="c" dataKey="Secondary" stackId="a" fill="#80ADAA" />
+              <Bar yAxisId="c" dataKey="In-flight" stackId="a" fill="#4C9A93"><LabelList content={NetTop} /></Bar>
+              <Bar yAxisId="c" dataKey="Cost" stackId="a" fill="#CC3366" />
+              <Bar yAxisId="c" dataKey="Supplier" stackId="a" fill="#066FAC" />
+              <Bar yAxisId="c" dataKey="Burn" stackId="a" fill="#98A2B3"><LabelList content={NetBottom} /></Bar>
+              <Line yAxisId="b" type="monotone" dataKey="Balance" stroke="#093E52" strokeWidth={2.5} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </Card>
@@ -224,7 +224,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
                       <td className="pr-3 capitalize">{e.kind}</td>
                       <td className="pr-3">{e.patient}</td>
                       <td className="pr-3">{e.payer}</td>
-                      <td className={cn("text-right font-medium", e.amount < 0 ? "text-rose-600" : "text-emerald-700")}>{fmt(e.amount)}</td>
+                      <td className="text-right font-medium" style={{ color: e.amount < 0 ? "#CC3366" : "#006383" }}>{fmt(e.amount)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -246,10 +246,10 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
                   <td className="text-right px-2">{fmt(w.primary)}</td>
                   <td className="text-right px-2">{fmt(w.secondary)}</td>
                   <td className="text-right px-2">{fmt(w.inflight)}</td>
-                  <td className="text-right px-2 text-rose-600">{fmt(w.cost)}</td>
-                  <td className="text-right px-2 text-violet-600">{fmt(w.supplier)}</td>
-                  <td className="text-right px-2 text-amber-600">{fmt(w.burn)}</td>
-                  <td className={cn("text-right px-2 font-medium", w.net < 0 ? "text-rose-600" : "text-emerald-700")}>{fmt(w.net)}</td>
+                  <td className="text-right px-2" style={{ color: "#CC3366" }}>{fmt(w.cost)}</td>
+                  <td className="text-right px-2" style={{ color: "#066FAC" }}>{fmt(w.supplier)}</td>
+                  <td className="text-right px-2" style={{ color: "#98A2B3" }}>{fmt(w.burn)}</td>
+                  <td className="text-right px-2 font-medium" style={{ color: w.net < 0 ? "#CC3366" : "#006383" }}>{fmt(w.net)}</td>
                   <td className="text-right pl-2 font-semibold">{fmt(w.balance)}</td>
                 </tr>
               ))}
