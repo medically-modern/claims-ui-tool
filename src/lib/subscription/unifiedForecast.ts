@@ -50,7 +50,7 @@ function splitRevenue(payer: string, rev: number, oop: number, coins: number, de
   return [rev, 0];
 }
 
-export interface UEvent { dateISO: string; kind: string; amount: number; patient: string; payer: string; week: number; }
+export interface UEvent { dateISO: string; dos: string; kind: string; amount: number; patient: string; payer: string; week: number; }
 export interface UResult {
   weekly: Array<{ wk: number; mon: string; primary: number; secondary: number; inflight: number; rev: number; cost: number; supplier: number; burn: number; net: number; balance: number }>;
   dbal: number[]; firstMon: string; nweeks: number; events: UEvent[];
@@ -61,9 +61,9 @@ export interface UResult {
 export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a: UAssumptions = UDEFAULT): UResult {
   const winEnd = addDays(today, a.horizon);
   const inWin = (d: Date) => d >= today && d <= winEnd;
-  type Ev = { day: number; dateISO: string; kind: string; amt: number; patient: string; payer: string };
+  type Ev = { day: number; dateISO: string; dos: string; kind: string; amt: number; patient: string; payer: string };
   const events: Ev[] = [];
-  const add = (d: Date, kind: string, amt: number, patient: string, payer: string) => { if (amt !== 0 && inWin(d)) events.push({ day: dayDiff(d, today), dateISO: iso(d), kind, amt, patient, payer }); };
+  const add = (d: Date, kind: string, amt: number, patient: string, payer: string, dos: string) => { if (amt !== 0 && inWin(d)) events.push({ day: dayDiff(d, today), dateISO: iso(d), dos, kind, amt, patient, payer }); };
 
   for (const r of subs) {
     if ((r.group_title || "").toLowerCase().includes("not active")) continue;
@@ -78,10 +78,10 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
     for (const od of ods) {
       const payP = isMedicaid(payer) ? emedny(od) : addDays(od, a.primaryLag);
       const paySec = addDays(payP, a.secondaryLag);
-      const rm = a.reorderRate, cr = a.collectionRate;
-      add(payP, "cost", -cost * rm, nm, payer);
-      add(payP, "primary", prim * rm * cr, nm, payer);
-      add(paySec, "secondary", sec * rm * cr, nm, payer);
+      const rm = a.reorderRate, cr = a.collectionRate, od_iso = iso(od);
+      add(payP, "cost", -cost * rm, nm, payer, od_iso);
+      add(payP, "primary", prim * rm * cr, nm, payer, od_iso);
+      add(paySec, "secondary", sec * rm * cr, nm, payer, od_iso);
     }
   }
   const INFLIGHT = new Set(["Outstanding", "Review", "Late", "Future Claim"]);
@@ -94,7 +94,7 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
     if (dos) { const d1 = addDays(dos, a.dosLag); if (d1 >= today) cash = d1; }
     if (!cash && sent) { const d2 = addDays(sent, a.resentLag); if (d2 >= today) cash = d2; }
     if (!cash) cash = addDays(today, 7);
-    add(cash, "inflight", ep * a.collectionRate, r.claim_name || "", r.primary_payor);
+    add(cash, "inflight", ep * a.collectionRate, r.claim_name || "", r.primary_payor, dos ? iso(dos) : "");
   }
 
   const todOff = (today.getDay() + 6) % 7;
@@ -105,7 +105,7 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   for (const e of events) {
     const w = Math.floor((e.day + todOff) / 7);
     if (w >= 0 && w < nweeks) { if (e.kind === "cost") wk[w].cost += -e.amt; else (wk[w] as any)[e.kind] += e.amt; }
-    uevents.push({ dateISO: e.dateISO, kind: e.kind, amount: e.amt, patient: e.patient, payer: e.payer, week: w });
+    uevents.push({ dateISO: e.dateISO, dos: e.dos, kind: e.kind, amount: e.amt, patient: e.patient, payer: e.payer, week: w });
   }
   const dailyBurn = a.monthlyFixedCost * 12 / 365;
   const dailySup = a.supplierOwed / a.supplierSpreadDays;
@@ -128,8 +128,7 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   const costTotal = prod + supT + burnT, netCash = revenue - costTotal;
   const k = 12 / 365;
   const flatBurn = (revenue - prod - supT) / (k * a.horizon);
-  let maxBurn = Infinity;
-  for (let i = 1; i <= a.horizon; i++) { const c = dbal0[i] / (k * i); if (c < maxBurn) maxBurn = c; }
+  const maxBurn = dbal0[a.horizon] / (k * a.horizon); // monthly burn at which the DAY-90 (ending) balance = 0
   const minBal = Math.min(...dbal), minDay = dbal.indexOf(minBal);
   const rw = dbal.findIndex((b) => b < 0);
   const kpis = { bal30: dbal[30], bal60: dbal[60], bal90: dbal[90], minBal, minDay, runway: rw < 0 ? null : rw, revenue, prod, supplier: supT, burn: burnT, costTotal, netCash, flatBurn, maxBurn };

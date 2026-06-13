@@ -136,7 +136,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   };
   const NetBottom = (p: any) => {
     const v = chartData[p.index]?.Net ?? 0; if (v >= 0) return null;
-    return <text x={p.x + p.width / 2} y={p.y + p.height + 20} textAnchor="middle" fontSize={14} fontWeight={700} fill="#CC3366">{fmt(v, true)}</text>;
+    return <text x={p.x + p.width / 2} y={p.y + 16} textAnchor="middle" fontSize={14} fontWeight={700} fill="#CC3366">{fmt(v, true)}</text>;
   };
 
   return (
@@ -182,25 +182,27 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
 
         <Card className="p-6">
           <h3 className="text-[20px] font-semibold">Projected cash &amp; bank balance</h3>
-          <p className="text-[15px] text-muted-foreground mt-1">Each bar covers Mon–Sun; the label is that Monday. Click a bar to drill in.</p>
-          <p className="text-[15px] text-muted-foreground">Bars (left axis) = weekly cash in/out · Line (right axis) = projected bank balance · number on each bar = that week's net cash flow.</p>
+          <p className="text-[15px] text-muted-foreground mt-1">Each bar covers Mon–Sun; the label is that Monday. Click a bar to drill in. Number on each bar = that week's net cash flow.</p>
+          <div className="flex items-center justify-between text-[14px] mt-1 mb-1">
+            <span className="text-muted-foreground">Bars (left axis) = weekly cash in/out</span>
+            <span className="font-medium" style={{ color: "#093E52" }}>Line (right axis) = projected bank balance</span>
+          </div>
           <ResponsiveContainer width="100%" height={460}>
             <ComposedChart data={chartData} stackOffset="sign" margin={{ top: 32, right: 24, bottom: 8, left: 8 }}
               onClick={(e: any) => { const i = e?.activeTooltipIndex; if (typeof i === "number") setDrill(i); }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="label" stroke="#64748b" fontSize={14} />
               <YAxis yAxisId="c" stroke="#64748b" fontSize={14} tickFormatter={(v) => fmt(v, true)} />
-              <YAxis yAxisId="b" orientation="right" stroke="#093E52" fontSize={14} tickFormatter={(v) => fmt(v, true)}
-                label={{ value: "line = projected bank balance", angle: -90, position: "insideRight", style: { fontSize: 13, fill: "#64748b" } }} />
+              <YAxis yAxisId="b" orientation="right" stroke="#093E52" fontSize={14} tickFormatter={(v) => fmt(v, true)} />
               <Tooltip content={<ChartTip />} />
               <Legend wrapperStyle={{ fontSize: 14 }} />
               <ReferenceLine yAxisId="b" y={0} stroke="#ef4444" strokeDasharray="4 4" />
               <Bar yAxisId="c" dataKey="Primary" stackId="a" fill="#006383" />
               <Bar yAxisId="c" dataKey="Secondary" stackId="a" fill="#80ADAA" />
-              <Bar yAxisId="c" dataKey="In-flight" stackId="a" fill="#4C9A93"><LabelList content={NetTop} /></Bar>
+              <Bar yAxisId="c" dataKey="In-flight" stackId="a" fill="#4C9A93"><LabelList position="top" content={NetTop} /></Bar>
               <Bar yAxisId="c" dataKey="Cost" stackId="a" fill="#CC3366" />
               <Bar yAxisId="c" dataKey="Supplier" stackId="a" fill="#066FAC" />
-              <Bar yAxisId="c" dataKey="Burn" stackId="a" fill="#98A2B3"><LabelList content={NetBottom} /></Bar>
+              <Bar yAxisId="c" dataKey="Burn" stackId="a" fill="#98A2B3"><LabelList position="bottom" content={NetBottom} /></Bar>
               <Line yAxisId="b" type="monotone" dataKey="Balance" stroke="#093E52" strokeWidth={2.5} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -215,12 +217,13 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             <div className="overflow-x-auto max-h-[360px] overflow-y-auto">
               <table className="w-full text-[12px] tabular-nums">
                 <thead className="sticky top-0 bg-white"><tr className="text-left text-muted-foreground border-b">
-                  <th className="py-1 pr-3">Date</th><th className="pr-3">Kind</th><th className="pr-3">Patient / claim</th><th className="pr-3">Payer</th><th className="text-right">Amount</th>
+                  <th className="py-1 pr-3">Est. cashflow date</th><th className="pr-3">DOS</th><th className="pr-3">Kind</th><th className="pr-3">Patient / claim</th><th className="pr-3">Payer</th><th className="text-right">Amount</th>
                 </tr></thead>
                 <tbody>
                   {res.events.filter((e) => e.week === drill).sort((a, b) => a.dateISO.localeCompare(b.dateISO) || Math.abs(b.amount) - Math.abs(a.amount)).map((e, i) => (
                     <tr key={i} className="border-b last:border-0">
                       <td className="py-1 pr-3">{e.dateISO}</td>
+                      <td className="pr-3">{e.dos || "—"}</td>
                       <td className="pr-3 capitalize">{e.kind}</td>
                       <td className="pr-3">{e.patient}</td>
                       <td className="pr-3">{e.payer}</td>
