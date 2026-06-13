@@ -90,7 +90,7 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   const INFLIGHT = new Set(["Outstanding", "Review", "Late", "Future Claim"]);
   for (const r of claims) {
     if (!INFLIGHT.has((r.claim_status || "").trim())) continue;
-    const ep = r.est_pay || 0; if (ep <= 0) continue;
+    let ep = r.est_pay || 0; if (ep <= 0) ep = 300; // conservative estimate (cashflow.ts E0784 Medicare $300/mo) when est_pay missing
     const dos = pDate(r.dos), sent = pDate(r.claim_sent_date);
     if (!dos && !sent) continue;
     let cash: Date | null = null;
