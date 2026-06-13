@@ -135,8 +135,8 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const { data, loading, isFetching, usingMock, refetch, dataUpdatedAt } = useSubscriptionPatients();
 
   // Assumptions
-  const [startingCash, setStartingCash] = useState(200000);
-  const [supplierOwed, setSupplierOwed] = useState(0);
+  const [startingCash, setStartingCash] = useState(210000);
+  const [supplierOwed, setSupplierOwed] = useState(288000);
   const [monthlyFixedCost, setMonthlyFixedCost] = useState(0);
   const [reorderPct, setReorderPct] = useState(100);
   const [collectionPct, setCollectionPct] = useState(100);
@@ -228,6 +228,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     Cost: -Math.round(b.costOut),
     Burn: -Math.round(b.burn),
     Supplier: -Math.round(b.supplier),
+    Net: Math.round(b.net),
     Balance: Math.round(b.endBalance),
   })), [forecast]);
 
@@ -536,7 +537,8 @@ function ForecastTooltip({ active, payload }: any) {
       {row("Product cost", d.Cost ?? 0, "#F87171")}
       {row("Fixed burn", d.Burn ?? 0, "#fbbf24")}
       {row("Supplier draw", d.Supplier ?? 0, "#a78bfa")}
-      <div className="mt-1 border-t pt-1">{row("Bank balance (end)", d.Balance ?? 0, "#0f172a")}</div>
+      <div className="mt-1 border-t pt-1">{row("Net cash flow", d.Net ?? 0, (d.Net ?? 0) >= 0 ? "#059669" : "#dc2626")}</div>
+      {row("Bank balance (end)", d.Balance ?? 0, "#0f172a")}
     </div>
   );
 }
