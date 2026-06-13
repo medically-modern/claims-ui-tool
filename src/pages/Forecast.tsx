@@ -10,7 +10,9 @@ import {
   Bar, CartesianGrid, ComposedChart, Legend, Line, ReferenceLine,
   ResponsiveContainer, Tooltip, XAxis, YAxis, LabelList,
 } from "recharts";
-import { ArrowLeft, RefreshCw, Wallet, CalendarClock, AlertTriangle, TrendingUp, X } from "lucide-react";
+import { ArrowLeft, RefreshCw, Wallet, CalendarClock, AlertTriangle, TrendingUp, X, ExternalLink } from "lucide-react";
+
+const SHEET_URL = "https://docs.google.com/spreadsheets/d/1Cn8GAAlMPB8Bc25Xc8CYKmT45a427tSZ0Ykseg7eEbA/edit";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -188,6 +190,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[11px] text-muted-foreground">Updated {updated}</span>
+            <a href={SHEET_URL} target="_blank" rel="noreferrer">
+              <Button variant="outline" size="sm" className="gap-1.5"><ExternalLink className="h-4 w-4" /> Open Sheet</Button>
+            </a>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { refetch(); claimsQ.refetch(); }} disabled={isFetching}>
               <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} /> Refresh
             </Button>
@@ -196,13 +201,12 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
 
         <Card className="p-5">
           <div className="text-[18px] font-semibold mb-3">Key financials</div>
-          <div className="grid grid-cols-2 gap-x-8 gap-y-4 md:grid-cols-3 xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-x-8 gap-y-4 md:grid-cols-3 xl:grid-cols-5">
             <Metric label="Active patients" value={fin.N.toLocaleString()} />
             <Metric label="ARR (annual recurring rev)" value={fmt(fin.arr, true)} sub={`avg order rev ${fmt(fin.avgRev)}`} />
             <Metric label="ARP (annual recurring profit)" value={fmt(fin.arp, true)} sub={`avg order cost ${fmt(fin.avgCost)}`} />
             <Metric label="Gross margin" value={`${fin.gmPct.toFixed(1)}%`} sub={`avg GP/order ${fmt(fin.avgGP)}`} />
             <Metric label="Profit margin (after fixed)" value={`${fin.pmPct.toFixed(1)}%`} sub={`net ${fmt(fin.netProfit, true)}/yr`} />
-            <Metric label="Avg order revenue" value={fmt(fin.avgRev)} sub={`avg cost ${fmt(fin.avgCost)}`} />
           </div>
         </Card>
 
@@ -231,8 +235,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         <Card className="p-6">
           <h3 className="text-[20px] font-semibold">Projected cash &amp; bank balance</h3>
           <p className="text-[15px] text-muted-foreground mt-1">Each bar covers Mon–Sun; the label is that Monday. Click a bar to drill in. Number on each bar = that week's net cash flow.</p>
-          <div className="flex items-center justify-between text-[14px] mt-1 mb-1">
+          <div className="flex items-center gap-2 text-[14px] mt-1 mb-1">
             <span className="text-muted-foreground">Bars (left axis) = weekly cash in/out</span>
+            <span className="text-muted-foreground">·</span>
             <span className="font-medium" style={{ color: "#093E52" }}>Line (right axis) = projected bank balance</span>
           </div>
           <ResponsiveContainer width="100%" height={460}>
