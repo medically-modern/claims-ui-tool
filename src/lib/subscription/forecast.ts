@@ -114,6 +114,11 @@ export interface ForecastPatient {
   secondaryClaimPaid: string; // Fully Paid | Outstanding | None | ""
   claimsPaidDate: string; // YYYY-MM-DD | ""
   claimsStatus: string; // Claims Paid | Claims Denied | ""
+  /** True when this patient already has an open claim on the Claims board
+   *  (set by the page from the pipeline). Used to suppress a near-term
+   *  subscription order that is really the same order already in claims —
+   *  the "ordered but Next Order not yet pushed +90" transition window. */
+  hasOpenClaim?: boolean;
 }
 
 export interface ForecastAssumptions {
@@ -196,7 +201,9 @@ export interface PipelineClaim {
 
 export interface TimeBucket {
   key: string; // ISO start of bucket
-  label: string;
+  label: string; // x-axis label (week: Monday date; month: "Jun '26")
+  rangeLabel: string; // human range for the tooltip (e.g. "Jun 8 – Jun 14")
+  rangeEnd: string; // ISO end of the bucket period
   primaryIn: number;
   secondaryIn: number;
   costOut: number; // positive number
@@ -318,6 +325,11 @@ export function primaryPayDate(p: ForecastPatient, orderDate: Date, a: ForecastA
   return addDays(orderDate, a.primaryLagDays);
 }
 
+/** Suppress subscription orders within this many days of today for patients
+ *  who already have an open claim (avoids double-counting the order that's
+ *  mid-transition from subscription → claims board). */
+const DEDUPE_NEAR_DAYS = 40;
+
 /** Generate the order dates a patient contributes within the window. Medicaid
  *  recurs every `medicaidCycleDays`; everyone else contributes one Next Order.
  *  We roll Medicaid forward so a stale past Next Order still yields the correct
@@ -335,9 +347,17 @@ export function orderDatesFor(
   // claims on the Claims board and are projected from the claims pipeline
   // (DOS+25) instead — projecting them here too would double-count.
   const t0 = startOfDay(today);
+  // De-dupe: if this patient already has an open claim, any near-term order is
+  // almost certainly that same just-placed order whose Next Order hasn't been
+  // pushed +90 yet — it's already counted in the claims pipeline. Suppress
+  // orders within this window so we never double-count the transition.
+  const dedupeCutoff = addDays(t0, DEDUPE_NEAR_DAYS);
+  const suppressNear = (d: Date) =>
+    !!p.hasOpenClaim && d.getTime() <= dedupeCutoff.getTime();
 
   if (!isPureMedicaid(p.primaryPayer)) {
     if (base.getTime() < t0.getTime() || base.getTime() > horizonEnd.getTime()) return [];
+    if (suppressNear(base)) return [];
     return [{ date: base, occurrence: 0 }];
   }
 
@@ -351,7 +371,7 @@ export function orderDatesFor(
   const out: Array<{ date: Date; occurrence: number }> = [];
   let occ = Math.max(0, Math.round(diffDays(first, base) / cycle));
   for (let d = first; d.getTime() <= horizonEnd.getTime(); d = addDays(d, cycle)) {
-    out.push({ date: d, occurrence: occ });
+    if (!suppressNear(d)) out.push({ date: d, occurrence: occ });
     occ += 1;
     if (out.length > 12) break; // safety
   }
@@ -613,7 +633,7 @@ function bucketStartKey(d: Date, granularity: "week" | "month"): { key: string; 
     const start = new Date(d.getFullYear(), d.getMonth(), 1);
     return {
       key: ymd(start),
-      label: start.toLocaleString("en-US", { month: "short", year: "2-digit" }),
+      label: `${start.toLocaleString("en-US", { month: "short" })} '${String(start.getFullYear()).slice(2)}`,
     };
   }
   // Week starting Monday.
@@ -641,7 +661,11 @@ function bucketize(
   for (let d = bucketStartFloor(windowStart, a.granularity); d.getTime() <= windowEnd.getTime(); d = nextBucket(d, a.granularity)) {
     const { key, label } = bucketStartKey(d, a.granularity);
     if (!map.has(key)) {
-      map.set(key, { key, label, primaryIn: 0, secondaryIn: 0, costOut: 0, burn: 0, supplier: 0, net: 0, endBalance: 0 });
+      const periodEnd = bucketEnd(d, a.granularity);
+      const rangeLabel = a.granularity === "month"
+        ? d.toLocaleString("en-US", { month: "long", year: "numeric" })
+        : `${d.toLocaleString("en-US", { month: "short", day: "numeric" })} – ${periodEnd.toLocaleString("en-US", { month: "short", day: "numeric" })}`;
+      map.set(key, { key, label, rangeLabel, rangeEnd: ymd(periodEnd), primaryIn: 0, secondaryIn: 0, costOut: 0, burn: 0, supplier: 0, net: 0, endBalance: 0 });
       order.push(key);
     }
   }

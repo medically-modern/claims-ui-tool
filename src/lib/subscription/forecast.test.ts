@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildForecast, splitRevenue, primaryPayDate, orderDatesFor, orderState,
-  coinsuranceFraction, isMedicareAB, parseLocalDate, addDays, ymd,
+  coinsuranceFraction, isMedicareAB, parseLocalDate, addDays, ymd, DEFAULT_ASSUMPTIONS,
   type ForecastPatient, type ForecastAssumptions,
 } from "./forecast";
 import { medicaidPaymentDate } from "@/lib/claims/cashflow";
@@ -28,6 +28,7 @@ function patient(over: Partial<ForecastPatient> = {}): ForecastPatient {
     secondaryClaimPaid: over.secondaryClaimPaid ?? "",
     claimsPaidDate: over.claimsPaidDate ?? "",
     claimsStatus: over.claimsStatus ?? "",
+    hasOpenClaim: over.hasOpenClaim,
   };
 }
 
@@ -317,5 +318,17 @@ describe("buildForecast — supplier payable spread", () => {
       TODAY, { startingCash: 200000, supplierOwed: 275000, supplierSpreadDays: 30, monthlyFixedCost: 25000 });
     expect(f.kpis.balanceIn90).toBeCloseTo(f.kpis.netStartingCash + f.kpis.netOperatingCash, 0);
     expect(f.kpis.netStartingCash).toBeCloseTo(200000);
+  });
+});
+describe("buildForecast — transition de-dupe", () => {
+  it("suppresses a near-term subscription order when the patient already has an open claim", () => {
+    const near = patient({ primaryPayer: "Cigna", revenue: 1000, cost: 400, nextOrderDate: ymd(addDays(TODAY, 3)), hasOpenClaim: true });
+    expect(orderDatesFor(near, TODAY, { ...DEFAULT_ASSUMPTIONS }).length).toBe(0);
+    // a far-future order (next cycle) is still kept
+    const far = patient({ primaryPayer: "Cigna", revenue: 1000, nextOrderDate: ymd(addDays(TODAY, 70)), hasOpenClaim: true });
+    expect(orderDatesFor(far, TODAY, { ...DEFAULT_ASSUMPTIONS }).length).toBe(1);
+    // without an open claim, the near-term order is kept
+    const noClaim = patient({ primaryPayer: "Cigna", revenue: 1000, nextOrderDate: ymd(addDays(TODAY, 3)) });
+    expect(orderDatesFor(noClaim, TODAY, { ...DEFAULT_ASSUMPTIONS }).length).toBe(1);
   });
 });

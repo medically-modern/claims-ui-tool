@@ -19,7 +19,7 @@ import {
 } from "recharts";
 import {
   ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Wallet, CalendarClock,
-  PiggyBank, AlertTriangle,
+  PiggyBank, AlertTriangle, Download,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -181,11 +181,20 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     return ["All payers", ...Array.from(s).sort()];
   }, [patients]);
 
+  // Flag patients who already have an open claim (by normalized name) so the
+  // engine can suppress a near-term subscription order that's really the same
+  // order already counted in the claims pipeline.
+  const flaggedPatients = useMemo(() => {
+    const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const names = new Set(pipelineData.list.map((c) => norm(c.patientName)));
+    return patients.map((p) => names.has(norm(p.name)) ? { ...p, hasOpenClaim: true } : p);
+  }, [patients, pipelineData]);
+
   const filteredPatients = useMemo(
-    () => patients.filter((p) =>
+    () => flaggedPatients.filter((p) =>
       (payerFilter === "All payers" || p.primaryPayer === payerFilter) &&
       (typeFilter === "All types" || p.subscriptionType === typeFilter)),
-    [patients, payerFilter, typeFilter],
+    [flaggedPatients, payerFilter, typeFilter],
   );
 
   const today = useMemo(() => new Date(), []);
@@ -213,7 +222,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   }, [forecast]);
 
   const chartData = useMemo(() => forecast.buckets.map((b) => ({
-    label: b.label, key: b.key,
+    label: b.label, key: b.key, range: b.rangeLabel,
     Primary: Math.round(b.primaryIn),
     Secondary: Math.round(b.secondaryIn),
     Cost: -Math.round(b.costOut),
@@ -252,6 +261,56 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     return Array.from(m.values()).sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
   }, [drill]);
 
+  // Export the financial model as CSV (imports cleanly into Google Sheets).
+  function exportCsv() {
+    const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
+    const r: string[] = [];
+    r.push(`Cash Flow Forecast,generated ${new Date().toLocaleString("en-US")}`);
+    r.push("");
+    r.push("ASSUMPTIONS");
+    r.push(`Cash in bank,${startingCash}`);
+    r.push(`Owed to supplier,${supplierOwed}`);
+    r.push(`Supplier spread (days),30`);
+    r.push(`Fixed costs / month,${monthlyFixedCost}`);
+    r.push(`Reorder rate %,${reorderPct}`);
+    r.push(`Collection rate %,${collectionPct}`);
+    r.push(`Primary lag (days from order),${primaryLag}`);
+    r.push(`Secondary lag (days after primary),${secondaryLag}`);
+    r.push(`Payer filter,${esc(payerFilter)}`);
+    r.push(`Type filter,${esc(typeFilter)}`);
+    r.push("");
+    r.push("SUMMARY (next 90 days)");
+    r.push(`Bank balance @ 30 days,${k.balanceIn30}`);
+    r.push(`Bank balance @ 60 days,${k.balanceIn60}`);
+    r.push(`Bank balance @ 90 days,${k.balanceIn90}`);
+    r.push(`Min balance,${k.minBalance}`);
+    r.push(`Runway (days; blank=none),${k.runwayDays ?? ""}`);
+    r.push(`Monthly hiring headroom,${k.monthlyHeadroom}`);
+    r.push(`Net operating cash,${k.netOperatingCash}`);
+    r.push(`Revenue in,${k.revenueIn}`);
+    r.push(`  Primary in,${k.primaryIn}`);
+    r.push(`  Secondary in,${k.secondaryIn}`);
+    r.push(`Product cost out,${k.costOut}`);
+    r.push(`Fixed burn out,${k.burnOut}`);
+    r.push(`Supplier paid out,${k.supplierOut}`);
+    r.push(`Inflow next 7d,${nearTerm.d7}`);
+    r.push(`Inflow next 21d,${nearTerm.d21}`);
+    r.push(`Inflow next 30d,${nearTerm.d30}`);
+    r.push("");
+    r.push(`Claims A/R (from Claims board) — Soon <=7d,${pipelineData.soonTotal}`);
+    r.push(`Claims A/R — Expected,${pipelineData.expectedTotal}`);
+    r.push("");
+    r.push(`${granularity.toUpperCase()} CASH FLOW`);
+    r.push("Period,Range,Primary In,Secondary In,Product Cost,Fixed Burn,Supplier Draw,Net,End Balance");
+    forecast.buckets.forEach((b) => r.push([b.label, b.rangeLabel, b.primaryIn, b.secondaryIn, b.costOut, b.burn, b.supplier, b.net, b.endBalance].map(esc).join(",")));
+    const csv = r.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `cash-forecast-${ymd(new Date())}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+  }
+
   const runwayLabel = k.runwayDays === null ? "90+ days" : `${k.runwayDays} days`;
   const updated = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
 
@@ -272,6 +331,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
           <div className="flex items-center gap-2">
             {usingMock && <span className="rounded-md bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-800">Mock data</span>}
             <span className="text-[11px] text-muted-foreground">Updated {updated}</span>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={exportCsv}>
+              <Download className="h-4 w-4" /> Export
+            </Button>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => refetch()} disabled={isFetching}>
               <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} /> Refresh
             </Button>
@@ -367,16 +429,18 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
           <div className="mb-3">
             <h3 className="text-[16px] font-semibold">Projected cash &amp; bank balance</h3>
             <p className="text-[12px] text-muted-foreground">
-              Bars: inflows (up) and cost + fixed-cost burn (down) per {granularity}. Line: projected bank balance. Click a bar to drill in.
+              <span className="font-medium text-sky-600">Bars (left axis)</span> = cash in/out per {granularity}; <span className="font-medium text-foreground">line (right axis)</span> = projected bank balance. {granularity === "week" ? "Each bar covers Mon–Sun; the label is that Monday." : "Each bar is a calendar month; the balance is end-of-month."} Click a bar to drill in.
             </p>
           </div>
           <ResponsiveContainer width="100%" height={360}>
             <ComposedChart data={chartData} onClick={(e: any) => { const p = e?.activePayload?.[0]?.payload; if (p) openBucket(p.key, p.label); }} stackOffset="sign">
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="label" stroke="#64748b" fontSize={12} />
-              <YAxis yAxisId="cash" stroke="#64748b" fontSize={12} tickFormatter={(v) => fmtMoney(v, true)} />
-              <YAxis yAxisId="bal" orientation="right" stroke="#0f172a" fontSize={12} tickFormatter={(v) => fmtMoney(v, true)} />
-              <Tooltip formatter={(v: number, name: string) => [fmtMoney(v), name]} labelStyle={{ color: "#0F172A", fontWeight: 600 }} />
+              <YAxis yAxisId="cash" stroke="#0EA5E9" fontSize={12} tickFormatter={(v) => fmtMoney(v, true)}
+                label={{ value: "Cash flow (bars)", angle: -90, position: "insideLeft", fill: "#0EA5E9", fontSize: 12, style: { textAnchor: "middle" } }} />
+              <YAxis yAxisId="bal" orientation="right" stroke="#0f172a" fontSize={12} tickFormatter={(v) => fmtMoney(v, true)}
+                label={{ value: "Bank balance (line)", angle: 90, position: "insideRight", fill: "#0f172a", fontSize: 12, style: { textAnchor: "middle" } }} />
+              <Tooltip content={<ForecastTooltip />} />
               <Legend />
               <ReferenceLine yAxisId="bal" y={0} stroke="#ef4444" strokeDasharray="4 4" />
               <Bar yAxisId="cash" dataKey="Primary" stackId="a" fill="#0EA5E9" radius={[3, 3, 0, 0]} />
@@ -453,6 +517,28 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
 
 export default function Forecast() {
   return <ForecastDashboard />;
+}
+
+function ForecastTooltip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0]?.payload ?? {};
+  const row = (label: string, val: number, color: string) => (
+    <div className="flex items-center justify-between gap-6 text-[12px]">
+      <span style={{ color }}>{label}</span>
+      <span className="tabular-nums font-medium" style={{ color }}>{fmtMoney(val)}</span>
+    </div>
+  );
+  return (
+    <div className="rounded-lg border bg-white px-3 py-2 shadow-md">
+      <div className="text-[13px] font-semibold mb-1">{d.range ?? d.label}</div>
+      {row("Primary in", d.Primary ?? 0, "#0EA5E9")}
+      {row("Secondary in", d.Secondary ?? 0, "#10B981")}
+      {row("Product cost", d.Cost ?? 0, "#F87171")}
+      {row("Fixed burn", d.Burn ?? 0, "#fbbf24")}
+      {row("Supplier draw", d.Supplier ?? 0, "#a78bfa")}
+      <div className="mt-1 border-t pt-1">{row("Bank balance (end)", d.Balance ?? 0, "#0f172a")}</div>
+    </div>
+  );
 }
 
 function BreakdownCard({
