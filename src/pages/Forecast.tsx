@@ -137,7 +137,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   // Assumptions
   const [startingCash, setStartingCash] = useState(210000);
   const [supplierOwed, setSupplierOwed] = useState(288000);
-  const [monthlyFixedCost, setMonthlyFixedCost] = useState(0);
+  const [monthlyFixedCost, setMonthlyFixedCost] = useState(30000);
   const [reorderPct, setReorderPct] = useState(100);
   const [collectionPct, setCollectionPct] = useState(100);
   const [granularity, setGranularity] = useState<"week" | "month">("week");
