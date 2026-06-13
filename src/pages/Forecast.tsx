@@ -108,7 +108,7 @@ function ChartTip({ active, payload }: any) {
       {row("Bank balance (end)", d.Balance ?? 0, "#093E52")}
       <div className="mt-1 border-t pt-1 text-[14px]">
         <div className="flex items-center justify-between gap-6"><span className="text-muted-foreground">Gross margin</span><span className="tabular-nums font-medium">{fmt(gm)} · {gmP}%</span></div>
-        <div className="flex items-center justify-between gap-6"><span className="text-muted-foreground">Profit margin</span><span className="tabular-nums font-medium">{pmP}%</span></div>
+        <div className="flex items-center justify-between gap-6"><span className="text-muted-foreground">Profit margin</span><span className="tabular-nums font-medium">{rev && pmP >= 0 ? `${pmP}%` : "n/a"}</span></div>
       </div>
     </div>
   );
