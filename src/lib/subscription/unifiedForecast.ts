@@ -17,12 +17,13 @@ export interface UAssumptions {
   primaryLag: number; secondaryLag: number; dosLag: number; resentLag: number;
   medicaidCycle: number; horizon: number; reorderRate: number; collectionRate: number;
   startingCash: number; supplierOwed: number; supplierSpreadDays: number;
-  monthlyFixedCost: number; staleDays: number;
+  monthlyFixedCost: number; staleDays: number; newPatientsPerWeek: number;
 }
 export const UDEFAULT: UAssumptions = {
   primaryLag: 26, secondaryLag: 30, dosLag: 26, resentLag: 25, medicaidCycle: 60,
   horizon: 90, reorderRate: 1, collectionRate: 1, startingCash: 210000,
   supplierOwed: 288000, supplierSpreadDays: 45, monthlyFixedCost: 30000, staleDays: 7,
+  newPatientsPerWeek: 0,
 };
 
 function pDate(s: string | null | undefined): Date | null {
@@ -65,12 +66,14 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   const events: Ev[] = [];
   const add = (d: Date, kind: string, amt: number, patient: string, payer: string, dos: string) => { if (amt !== 0 && inWin(d)) events.push({ day: dayDiff(d, today), dateISO: iso(d), dos, kind, amt, patient, payer }); };
 
+  let gN = 0, gCost = 0, gPrim = 0, gSec = 0; // roster averages for projected-growth cohorts
   for (const r of subs) {
     if ((r.group_title || "").toLowerCase().includes("not active")) continue;
     const rev = r.total_revenue || 0; if (rev <= 0) continue;
     const cost = r.total_gp !== 0 ? rev - r.total_gp : (r.total_cost || 0) + (r.shipping_cost || 0);
     const payer = r.primary_insurance, nm = r.patient_name || "";
     const [prim, sec] = splitRevenue(payer, rev, r.oop_estimate || 0, r.coinsurance || 0, r.ded_remaining || 0);
+    gN++; gCost += cost; gPrim += prim; gSec += sec;
     const base = pDate(r.next_order_date); if (!base) continue;
     if (dayDiff(base, today) < -a.staleDays) continue;
     const ods = [base];
@@ -95,6 +98,19 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
     if (!cash && sent) { const d2 = addDays(sent, a.resentLag); if (d2 >= today) cash = d2; }
     if (!cash) cash = addDays(today, 7);
     add(cash, "inflight", ep * a.collectionRate, r.claim_name || "", r.primary_payor, dos ? iso(dos) : "");
+  }
+
+  // Projected growth: N new patients each Monday (from today forward), at roster averages.
+  if (a.newPatientsPerWeek > 0 && gN > 0) {
+    const nP = a.newPatientsPerWeek, rm = a.reorderRate, cr = a.collectionRate;
+    const avgCost = gCost / gN, avgPrim = gPrim / gN, avgSec = gSec / gN;
+    for (let m = addDays(today, -((today.getDay() + 6) % 7)); m <= winEnd; m = addDays(m, 7)) {
+      if (m < today) continue;
+      const payP = addDays(m, a.primaryLag), paySec = addDays(payP, a.secondaryLag), mi = iso(m);
+      add(payP, "cost", -avgCost * nP * rm, `New patients (${nP})`, "Projected growth", mi);
+      add(payP, "primary", avgPrim * nP * rm * cr, `New patients (${nP})`, "Projected growth", mi);
+      add(paySec, "secondary", avgSec * nP * rm * cr, `New patients (${nP})`, "Projected growth", mi);
+    }
   }
 
   const todOff = (today.getDay() + 6) % 7;
