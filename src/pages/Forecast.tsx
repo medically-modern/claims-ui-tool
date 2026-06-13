@@ -59,13 +59,13 @@ function StatBox({ title, rows, tone = "neutral", icon }: { title: string; rows:
   return (
     <Card className="p-5">
       <div className="flex items-center gap-2">
-        <div className={cn("grid h-8 w-8 place-items-center rounded-lg", dot[tone] ?? dot.neutral)}>{icon ?? <Wallet className="h-4 w-4" />}</div>
-        <div className="text-[12px] font-medium text-muted-foreground">{title}</div>
+        <div className={cn("grid h-9 w-9 place-items-center rounded-lg", dot[tone] ?? dot.neutral)}>{icon ?? <Wallet className="h-5 w-5" />}</div>
+        <div className="text-[18px] font-medium text-muted-foreground">{title}</div>
       </div>
-      <div className="mt-3 space-y-1.5">
+      <div className="mt-3 space-y-2">
         {rows.map((r, i) => (
-          <div key={i} className="flex items-baseline justify-between gap-3">
-            <span className="text-[12px] text-muted-foreground">{r.label}</span>
+          <div key={i} className="flex items-baseline justify-between gap-4">
+            <span className="text-[18px] text-muted-foreground">{r.label}</span>
             <span className="text-[18px] font-semibold tabular-nums" style={r.color ? { color: r.color } : undefined}>{r.value}</span>
           </div>
         ))}
@@ -77,11 +77,11 @@ function ChartTip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const d = payload[0]?.payload ?? {};
   const row = (l: string, v: number, c: string) => (
-    <div className="flex items-center justify-between gap-6 text-[12px]"><span style={{ color: c }}>{l}</span><span className="tabular-nums font-medium" style={{ color: c }}>{fmt(v)}</span></div>
+    <div className="flex items-center justify-between gap-6 text-[14px]"><span style={{ color: c }}>{l}</span><span className="tabular-nums font-medium" style={{ color: c }}>{fmt(v)}</span></div>
   );
   return (
     <div className="rounded-lg border bg-white px-3 py-2 shadow-md">
-      <div className="text-[13px] font-semibold mb-1">Week of {d.label}</div>
+      <div className="text-[15px] font-semibold mb-1">Week of {d.label}</div>
       {row("Primary in", d.Primary ?? 0, "#0EA5E9")}
       {row("Secondary in", d.Secondary ?? 0, "#10B981")}
       {row("In-flight claims", d["In-flight"] ?? 0, "#6366F1")}
@@ -132,11 +132,11 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   // net-cash-flow labels: green above the up-stack when ≥0, red below the down-stack when <0
   const NetTop = (p: any) => {
     const v = chartData[p.index]?.Net ?? 0; if (v < 0) return null;
-    return <text x={p.x + p.width / 2} y={p.y - 4} textAnchor="middle" fontSize={10} fontWeight={600} fill="#059669">{fmt(v, true)}</text>;
+    return <text x={p.x + p.width / 2} y={p.y - 8} textAnchor="middle" fontSize={14} fontWeight={700} fill="#059669">{fmt(v, true)}</text>;
   };
   const NetBottom = (p: any) => {
     const v = chartData[p.index]?.Net ?? 0; if (v >= 0) return null;
-    return <text x={p.x + p.width / 2} y={p.y + p.height + 12} textAnchor="middle" fontSize={10} fontWeight={600} fill="#dc2626">{fmt(v, true)}</text>;
+    return <text x={p.x + p.width / 2} y={p.y + p.height + 20} textAnchor="middle" fontSize={14} fontWeight={700} fill="#dc2626">{fmt(v, true)}</text>;
   };
 
   return (
@@ -181,19 +181,19 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         </div>
 
         <Card className="p-6">
-          <h3 className="text-[16px] font-semibold">Projected cash &amp; bank balance</h3>
-          <p className="text-[12px] text-muted-foreground mt-0.5">Each bar covers Mon–Sun; the label is that Monday. Click a bar to drill in.</p>
-          <p className="text-[12px] text-muted-foreground">Bars (left axis) = weekly cash in/out · Line (right axis) = projected bank balance · number on each bar = that week's net cash flow.</p>
-          <ResponsiveContainer width="100%" height={400}>
-            <ComposedChart data={chartData} stackOffset="sign" margin={{ top: 24, right: 16, bottom: 4, left: 0 }}
+          <h3 className="text-[20px] font-semibold">Projected cash &amp; bank balance</h3>
+          <p className="text-[15px] text-muted-foreground mt-1">Each bar covers Mon–Sun; the label is that Monday. Click a bar to drill in.</p>
+          <p className="text-[15px] text-muted-foreground">Bars (left axis) = weekly cash in/out · Line (right axis) = projected bank balance · number on each bar = that week's net cash flow.</p>
+          <ResponsiveContainer width="100%" height={460}>
+            <ComposedChart data={chartData} stackOffset="sign" margin={{ top: 32, right: 24, bottom: 8, left: 8 }}
               onClick={(e: any) => { const i = e?.activeTooltipIndex; if (typeof i === "number") setDrill(i); }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey="label" stroke="#64748b" fontSize={11} />
-              <YAxis yAxisId="c" stroke="#64748b" fontSize={12} tickFormatter={(v) => fmt(v, true)} />
-              <YAxis yAxisId="b" orientation="right" stroke="#0f172a" fontSize={12} tickFormatter={(v) => fmt(v, true)}
-                label={{ value: "line = projected bank balance", angle: -90, position: "insideRight", style: { fontSize: 11, fill: "#64748b" } }} />
+              <XAxis dataKey="label" stroke="#64748b" fontSize={14} />
+              <YAxis yAxisId="c" stroke="#64748b" fontSize={14} tickFormatter={(v) => fmt(v, true)} />
+              <YAxis yAxisId="b" orientation="right" stroke="#0f172a" fontSize={14} tickFormatter={(v) => fmt(v, true)}
+                label={{ value: "line = projected bank balance", angle: -90, position: "insideRight", style: { fontSize: 13, fill: "#64748b" } }} />
               <Tooltip content={<ChartTip />} />
-              <Legend />
+              <Legend wrapperStyle={{ fontSize: 14 }} />
               <ReferenceLine yAxisId="b" y={0} stroke="#ef4444" strokeDasharray="4 4" />
               <Bar yAxisId="c" dataKey="Primary" stackId="a" fill="#0EA5E9" />
               <Bar yAxisId="c" dataKey="Secondary" stackId="a" fill="#10B981" />
