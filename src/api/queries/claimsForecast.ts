@@ -12,8 +12,10 @@ const COL = {
   status: "color_mkxmywtb",
   payor: "color_mkxmhypt",
   est: "numeric_mm2xdtk6",
+  paid: "numeric_mm115q76",       // Primary Paid (A) — actual paid amount
   dos: "date_mkwr7spz",
   sent: "date_mm14rk8d",
+  paidDate: "date_mm11zg2f",      // Primary Paid Date (D)
 } as const;
 const COLS = Object.values(COL);
 
@@ -33,8 +35,10 @@ function map(it: Item): ClaimRow {
     claim_status: get(it, COL.status),
     primary_payor: get(it, COL.payor),
     est_pay: num(get(it, COL.est)),
+    primary_paid: num(get(it, COL.paid)),
     dos: get(it, COL.dos),
     claim_sent_date: get(it, COL.sent),
+    primary_paid_date: get(it, COL.paidDate),
     claim_name: it.name,
   };
 }

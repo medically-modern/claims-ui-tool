@@ -202,12 +202,13 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
 
         <Card className="p-5">
           <div className="text-[18px] font-semibold mb-3">Key financials</div>
-          <div className="grid grid-cols-2 gap-x-8 gap-y-4 md:grid-cols-3 xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-x-8 gap-y-4 md:grid-cols-3 xl:grid-cols-6">
             <Metric label="Active patients" value={fin.N.toLocaleString()} />
             <Metric label="ARR (annual recurring rev)" value={fmt(fin.arr, true)} sub={`avg order rev ${fmt(fin.avgRev)}`} />
             <Metric label="ARP (annual recurring profit)" value={fmt(fin.arp, true)} sub={`avg order cost ${fmt(fin.avgCost)}`} />
             <Metric label="Gross margin" value={`${fin.gmPct.toFixed(1)}%`} sub={`avg GP/order ${fmt(fin.avgGP)}`} />
             <Metric label="Profit margin (after fixed)" value={`${fin.pmPct.toFixed(1)}%`} sub={`net ${fmt(fin.netProfit, true)}/yr`} />
+            <Metric label="Denials (not in forecast)" value={fmt(res.kpis.denialTotal, true)} sub="potential if overturned" />
           </div>
         </Card>
 
