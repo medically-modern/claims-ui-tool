@@ -147,7 +147,7 @@ export const DEFAULT_ASSUMPTIONS: ForecastAssumptions = {
   collectionRate: 1,
   startingCash: 0,
   supplierOwed: 0,
-  supplierSpreadDays: 30,
+  supplierSpreadDays: 45,
   monthlyFixedCost: 0,
   granularity: "week",
   includePaused: true,
