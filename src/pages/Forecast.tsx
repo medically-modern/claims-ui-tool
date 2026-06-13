@@ -124,6 +124,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const [supplierSpreadDays, setSupplierSpreadDays] = useState(45);
   const [reorderPct, setReorderPct] = useState(100);
   const [collectionPct, setCollectionPct] = useState(100);
+  const [newPerWeek, setNewPerWeek] = useState(0);
   const [drill, setDrill] = useState<number | null>(null);
 
   const subs: SubRow[] = useMemo(() => (subData ?? []).map((p: any) => ({
@@ -138,8 +139,8 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const today = useMemo(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }, []);
   const res = useMemo(() => buildUnified(subs, claims, today, {
     ...UDEFAULT, startingCash, supplierOwed, monthlyFixedCost, supplierSpreadDays,
-    reorderRate: reorderPct / 100, collectionRate: collectionPct / 100,
-  }), [subs, claims, today, startingCash, supplierOwed, monthlyFixedCost, supplierSpreadDays, reorderPct, collectionPct]);
+    reorderRate: reorderPct / 100, collectionRate: collectionPct / 100, newPatientsPerWeek: newPerWeek,
+  }), [subs, claims, today, startingCash, supplierOwed, monthlyFixedCost, supplierSpreadDays, reorderPct, collectionPct, newPerWeek]);
 
   const fin = useMemo(() => {
     const rows = (subData ?? []).filter((p: any) => !p.isNotActive && (p.financials?.totalRevenue ?? 0) > 0);
@@ -211,13 +212,14 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         </Card>
 
         <Card className="p-4">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
             <MoneyIn label="Cash in bank" value={startingCash} onChange={setStartingCash} />
             <MoneyIn label="Owed to supplier" value={supplierOwed} onChange={setSupplierOwed} />
             <MoneyIn label="Fixed costs / month" value={monthlyFixedCost} onChange={setMonthlyFixedCost} />
             <NumIn label="Supplier payoff" value={supplierSpreadDays} onChange={setSupplierSpreadDays} suffix="d" />
             <NumIn label="Reorder rate" value={reorderPct} onChange={setReorderPct} suffix="%" />
             <NumIn label="Collection rate" value={collectionPct} onChange={setCollectionPct} suffix="%" />
+            <NumIn label="New patients / wk" value={newPerWeek} onChange={setNewPerWeek} suffix="+" />
           </div>
         </Card>
 
