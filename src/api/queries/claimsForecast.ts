@@ -35,6 +35,7 @@ function map(it: Item): ClaimRow {
     est_pay: num(get(it, COL.est)),
     dos: get(it, COL.dos),
     claim_sent_date: get(it, COL.sent),
+    claim_name: it.name,
   };
 }
 
