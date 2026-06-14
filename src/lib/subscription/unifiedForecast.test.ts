@@ -30,25 +30,31 @@ describe("unifiedForecast — subscription", () => {
 });
 
 describe("unifiedForecast — claims by payment state", () => {
-  it("unpaid claim is valued by product HCPCS conservative, NEVER est_pay", () => {
-    // est_pay 4500 is ignored; A4239 ×3 commercial → 150×3 = 450
-    const r = buildUnified([], [claim({ est_pay: 4500, dos: "2026-06-01", primary_payor: "Magnacare", lines: [{ hcpcs: "A4239", units: 3 }] })], TODAY);
-    expect(Math.round(r.totals.inflight)).toBe(450);
-  });
-  it("E0784 pump: $300 for Medicare A&B, $2500 for commercial", () => {
-    const mc = buildUnified([], [claim({ dos: "2026-06-01", primary_payor: "Medicare A&B", lines: [{ hcpcs: "E0784", units: 1 }] })], TODAY);
-    const comm = buildUnified([], [claim({ dos: "2026-06-01", primary_payor: "Cigna", lines: [{ hcpcs: "E0784", units: 1 }] })], TODAY);
-    expect(Math.round(mc.totals.inflight)).toBe(300);
-    expect(Math.round(comm.totals.inflight)).toBe(2500);
-  });
-  it("patient actual-pay history wins over product conservative (Gary case)", () => {
-    // Gary: one received claim paid $533 (excluded) + one outstanding pump claim.
-    // The outstanding claim is valued at his actual $533, not E0784 commercial $2500.
+  it("unpaid claim valued by payer×product actual, NEVER est_pay", () => {
+    // A paid Fidelis pump ($4000) sets the payer×product rate; an unpaid Fidelis pump
+    // uses $4000 even though its est_pay says $4500. (Mordechai/Zachary case.)
     const r = buildUnified([], [
-      claim({ claim_name: "Gary", claim_status: "Review", primary_paid: 533, primary_paid_date: "2026-06-10" }), // received → excluded
-      claim({ claim_name: "Gary", claim_status: "Outstanding", est_pay: 4500, dos: "2026-06-01", primary_payor: "Magnacare", lines: [{ hcpcs: "E0784", units: 1 }] }),
+      claim({ claim_name: "PaidRef", claim_status: "Paid", primary_payor: "Fidelis Medicaid", primary_paid: 4000, primary_paid_date: "2026-05-01", lines: [{ hcpcs: "E0784", units: 1 }] }),
+      claim({ claim_name: "Mordechai", claim_status: "Outstanding", est_pay: 4500, dos: "2026-06-01", primary_payor: "Fidelis Medicaid", lines: [{ hcpcs: "E0784", units: 1 }] }),
     ], TODAY);
-    expect(Math.round(r.totals.inflight)).toBe(533);
+    expect(Math.round(r.totals.inflight)).toBe(4000);
+  });
+  it("product category is pump vs cgm — same payer pays each differently", () => {
+    const r = buildUnified([], [
+      claim({ claim_status: "Paid", primary_payor: "Fidelis Medicaid", primary_paid: 4000, primary_paid_date: "2026-05-01", lines: [{ hcpcs: "E0784", units: 1 }] }), // pump $4000
+      claim({ claim_status: "Paid", primary_payor: "Fidelis Medicaid", primary_paid: 560, primary_paid_date: "2026-05-01", lines: [{ hcpcs: "A4239", units: 3 }] }), // cgm $560
+      claim({ claim_status: "Outstanding", dos: "2026-06-01", primary_payor: "Fidelis Medicaid", lines: [{ hcpcs: "A4239", units: 3 }] }), // unpaid cgm → $560 not $4000
+    ], TODAY);
+    expect(Math.round(r.totals.inflight)).toBe(560);
+  });
+  it("no payer×product history → product HCPCS conservative ($2500 commercial pump)", () => {
+    // United Medicare pump: no prior payment for this combo → conservative.
+    const r = buildUnified([], [claim({ est_pay: 8000, dos: "2026-06-01", primary_payor: "United Medicare", lines: [{ hcpcs: "E0784", units: 1 }] })], TODAY);
+    expect(Math.round(r.totals.inflight)).toBe(2500);
+  });
+  it("E0784 conservative is $300 for Medicare A&B (no history)", () => {
+    const r = buildUnified([], [claim({ dos: "2026-06-01", primary_payor: "Medicare A&B", lines: [{ hcpcs: "E0784", units: 1 }] })], TODAY);
+    expect(Math.round(r.totals.inflight)).toBe(300);
   });
   it("future EFT-date claim included at paid date with ACTUAL amount", () => {
     const r = buildUnified([], [claim({ claim_status: "Review", est_pay: 900, primary_paid: 850, primary_paid_date: "2026-06-20" })], TODAY);

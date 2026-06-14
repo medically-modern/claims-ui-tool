@@ -38,6 +38,14 @@ function productConservative(r: ClaimRow): number | undefined {
   }
   return got ? tot : undefined;
 }
+/** Group a claim by product (claims carry pumps; the subscription board doesn't):
+ *  pump (E0784) > cgm (A4239) > supplies (other codes). */
+function productCategory(r: ClaimRow): string {
+  const hcs = (r.lines || []).map((l) => (l.hcpcs || "").trim().toUpperCase());
+  if (hcs.includes("E0784")) return "pump";
+  if (hcs.includes("A4239")) return "cgm";
+  return hcs.length ? "supplies" : "unknown";
+}
 const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 export interface UAssumptions {
   primaryLag: number; secondaryLag: number; dosLag: number; resentLag: number;
@@ -131,16 +139,19 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   //   denied / bad debt               → excluded from cash flow, totalled for display
   const DENIAL = new Set(["Denied (Or Partly)", "Bad Debt"]);
   let denialTotal = 0; const seenClaims = new Set<string>();
-  // Patient actual-pay history: median of primary_paid (>0) across that patient's claims.
-  const patHist: Record<string, number[]> = {};
-  for (const r of claims) { const p = r.primary_paid || 0; if (p > 0) (patHist[(r.claim_name || "").trim()] ??= []).push(p); }
-  const patActual: Record<string, number> = {};
-  for (const k in patHist) patActual[k] = median(patHist[k]);
-  // Expected pay for a claim with NO recorded payment (Brandon's rule): actual we got
-  // paid (patient history) → product-specific HCPCS conservative → $300. NEVER est_pay/charge.
+  // Payer × product actual-pay matrix: median of primary_paid (>0) for each
+  // (payer, product-category) — what we KNOW we'll get paid for that insurer+product
+  // (e.g. Fidelis pump = $4,000), per Brandon's rule.
+  const matHist: Record<string, number[]> = {};
+  for (const r of claims) { const p = r.primary_paid || 0; if (p > 0) (matHist[`${(r.primary_payor || "").trim()}|${productCategory(r)}`] ??= []).push(p); }
+  const payerProduct: Record<string, number> = {};
+  for (const k in matHist) payerProduct[k] = median(matHist[k]);
+  // Expected pay for a claim with NO recorded payment (Brandon's rule): what we actually
+  // get paid for this payer×product → product-specific HCPCS conservative (only for
+  // payer+product combos with no history, e.g. Magnacare/United pump) → $300. NEVER est_pay.
   const estimateUnpaid = (r: ClaimRow): number => {
-    const nm = (r.claim_name || "").trim();
-    if (patActual[nm]) return patActual[nm];
+    const key = `${(r.primary_payor || "").trim()}|${productCategory(r)}`;
+    if (payerProduct[key] !== undefined) return payerProduct[key];
     const pc = productConservative(r);
     return pc !== undefined ? pc : 300;
   };
