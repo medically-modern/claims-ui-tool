@@ -128,6 +128,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const [drill, setDrill] = useState<number | null>(null);
   const [mixOpen, setMixOpen] = useState<string | null>(null);
   const [combosOpen, setCombosOpen] = useState(false);
+  const [chartMode, setChartMode] = useState<"both" | "subs" | "claims">("both");
 
   const subs: SubRow[] = useMemo(() => (subData ?? []).map((p: any) => ({
     group_title: p.isNotActive ? "Not Active Patients" : "Subscriptions",
@@ -193,11 +194,24 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     return m;
   }, [subData]);
 
-  const chartData = res.weekly.map((w) => ({
-    label: mLabel(w.mon), Primary: Math.round(w.primary), Secondary: Math.round(w.secondary),
-    "In-flight": Math.round(w.inflight), Cost: -Math.round(w.cost), Supplier: -Math.round(w.supplier),
-    Burn: -Math.round(w.burn), Net: Math.round(w.net), Balance: Math.round(w.balance),
-  }));
+  // Source toggle: "both" (subs + claims), "subs" (Primary/Secondary + product cost),
+  // or "claims" (In-flight only). Net + balance recompute for the selected scope;
+  // supplier paydown + fixed burn always apply (they're ongoing cash out).
+  const showSubs = chartMode !== "claims", showClaims = chartMode !== "subs";
+  const chartData = (() => {
+    let bal = startingCash;
+    return res.weekly.map((w) => {
+      const rev = (showSubs ? w.primary + w.secondary : 0) + (showClaims ? w.inflight : 0);
+      const cost = showSubs ? w.cost : 0;                    // product cost belongs to subscriptions
+      const net = rev - cost - w.supplier - w.burn; bal += net;
+      return {
+        label: mLabel(w.mon),
+        Primary: showSubs ? Math.round(w.primary) : 0, Secondary: showSubs ? Math.round(w.secondary) : 0,
+        "In-flight": showClaims ? Math.round(w.inflight) : 0, Cost: -Math.round(cost),
+        Supplier: -Math.round(w.supplier), Burn: -Math.round(w.burn), Net: Math.round(net), Balance: Math.round(bal),
+      };
+    });
+  })();
   const k = res.kpis;
   const updated = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
 
@@ -324,7 +338,17 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         </div>
 
         <Card className="p-6">
-          <h3 className="text-[20px] font-semibold">Projected cash &amp; bank balance</h3>
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <h3 className="text-[20px] font-semibold">Projected cash &amp; bank balance</h3>
+            <div className="inline-flex rounded-lg border bg-muted/40 p-0.5 text-[13px] font-medium">
+              {([["both", "Both"], ["subs", "Subscriptions"], ["claims", "Claims (in-flight)"]] as const).map(([m, lbl]) => (
+                <button key={m} onClick={() => setChartMode(m)}
+                  className={cn("px-3 py-1 rounded-md transition-colors", chartMode === m ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
           <p className="text-[15px] text-muted-foreground mt-1">Each bar covers Mon–Sun; the label is that Monday. Click a bar to drill in. Number on each bar = that week's net cash flow.</p>
           <div className="flex items-center gap-2 text-[14px] mt-1 mb-1">
             <span className="text-muted-foreground">Bars (left axis) = weekly cash in/out</span>
@@ -341,10 +365,10 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
               <Tooltip content={<ChartTip />} />
               <Legend wrapperStyle={{ fontSize: 14 }} />
               <ReferenceLine yAxisId="b" y={0} stroke="#ef4444" strokeDasharray="4 4" />
-              <Bar yAxisId="c" dataKey="Primary" stackId="a" fill="#006383" />
-              <Bar yAxisId="c" dataKey="Secondary" stackId="a" fill="#80ADAA" />
-              <Bar yAxisId="c" dataKey="In-flight" stackId="a" fill="#4C9A93"><LabelList position="top" content={NetTop} /></Bar>
-              <Bar yAxisId="c" dataKey="Cost" stackId="a" fill="#CC3366" />
+              {showSubs && <Bar yAxisId="c" dataKey="Primary" stackId="a" fill="#006383" />}
+              {showSubs && <Bar yAxisId="c" dataKey="Secondary" stackId="a" fill="#80ADAA">{!showClaims && <LabelList position="top" content={NetTop} />}</Bar>}
+              {showClaims && <Bar yAxisId="c" dataKey="In-flight" stackId="a" fill="#4C9A93"><LabelList position="top" content={NetTop} /></Bar>}
+              {showSubs && <Bar yAxisId="c" dataKey="Cost" stackId="a" fill="#CC3366" />}
               <Bar yAxisId="c" dataKey="Supplier" stackId="a" fill="#066FAC" />
               <Bar yAxisId="c" dataKey="Burn" stackId="a" fill="#98A2B3"><LabelList position="bottom" content={NetBottom} /></Bar>
               <Line yAxisId="b" type="monotone" dataKey="Balance" stroke="#093E52" strokeWidth={2.5} dot={false} />
