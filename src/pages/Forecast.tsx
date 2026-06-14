@@ -385,13 +385,14 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             <div className="overflow-x-auto max-h-[360px] overflow-y-auto">
               <table className="w-full text-[12px] tabular-nums">
                 <thead className="sticky top-0 bg-white"><tr className="text-left text-muted-foreground border-b">
-                  <th className="py-1 pr-3">Est. cashflow date</th><th className="pr-3">DOS</th><th className="pr-3">Kind</th><th className="pr-3">Patient / claim</th><th className="pr-3">Payer</th><th className="text-right">Amount</th>
+                  <th className="py-1 pr-3">Est. cashflow date</th><th className="pr-3">DOS</th><th className="pr-3">Source</th><th className="pr-3">Kind</th><th className="pr-3">Patient / claim</th><th className="pr-3">Payer</th><th className="text-right">Amount</th>
                 </tr></thead>
                 <tbody>
                   {res.events.filter((e) => e.week === drill).sort((a, b) => a.dateISO.localeCompare(b.dateISO) || Math.abs(b.amount) - Math.abs(a.amount)).map((e, i) => (
                     <tr key={i} className="border-b last:border-0">
                       <td className="py-1 pr-3">{e.dateISO}</td>
                       <td className="pr-3">{e.dos || "—"}</td>
+                      <td className="pr-3">{e.kind === "inflight" ? "Claim (in-flight)" : "Subscription"}</td>
                       <td className="pr-3 capitalize">{e.kind}</td>
                       <td className="pr-3">{e.patient}</td>
                       <td className="pr-3">{e.payer}</td>
