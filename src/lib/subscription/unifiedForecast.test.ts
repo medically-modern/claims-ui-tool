@@ -30,25 +30,37 @@ describe("unifiedForecast — subscription", () => {
 });
 
 describe("unifiedForecast — claims by payment state", () => {
-  it("unpaid claim lands via DOS+26 at est_pay", () => {
-    const r = buildUnified([], [claim({ est_pay: 900, dos: "2026-06-01" })], TODAY);
-    expect(Math.round(r.totals.inflight)).toBe(900);
+  it("unpaid claim is valued by product HCPCS conservative, NEVER est_pay", () => {
+    // est_pay 4500 is ignored; A4239 ×3 commercial → 150×3 = 450
+    const r = buildUnified([], [claim({ est_pay: 4500, dos: "2026-06-01", primary_payor: "Magnacare", lines: [{ hcpcs: "A4239", units: 3 }] })], TODAY);
+    expect(Math.round(r.totals.inflight)).toBe(450);
   });
-  it("already-received claim (paid date in past) is EXCLUDED", () => {
-    const r = buildUnified([], [claim({ claim_status: "Review", est_pay: 4500, dos: "2026-05-19", primary_paid: 533, primary_paid_date: "2026-06-10" })], TODAY);
-    expect(Math.round(r.totals.inflight)).toBe(0); // Gary Bariatti case
+  it("E0784 pump: $300 for Medicare A&B, $2500 for commercial", () => {
+    const mc = buildUnified([], [claim({ dos: "2026-06-01", primary_payor: "Medicare A&B", lines: [{ hcpcs: "E0784", units: 1 }] })], TODAY);
+    const comm = buildUnified([], [claim({ dos: "2026-06-01", primary_payor: "Cigna", lines: [{ hcpcs: "E0784", units: 1 }] })], TODAY);
+    expect(Math.round(mc.totals.inflight)).toBe(300);
+    expect(Math.round(comm.totals.inflight)).toBe(2500);
+  });
+  it("patient actual-pay history wins over product conservative (Gary case)", () => {
+    // Gary: one received claim paid $533 (excluded) + one outstanding pump claim.
+    // The outstanding claim is valued at his actual $533, not E0784 commercial $2500.
+    const r = buildUnified([], [
+      claim({ claim_name: "Gary", claim_status: "Review", primary_paid: 533, primary_paid_date: "2026-06-10" }), // received → excluded
+      claim({ claim_name: "Gary", claim_status: "Outstanding", est_pay: 4500, dos: "2026-06-01", primary_payor: "Magnacare", lines: [{ hcpcs: "E0784", units: 1 }] }),
+    ], TODAY);
+    expect(Math.round(r.totals.inflight)).toBe(533);
   });
   it("future EFT-date claim included at paid date with ACTUAL amount", () => {
     const r = buildUnified([], [claim({ claim_status: "Review", est_pay: 900, primary_paid: 850, primary_paid_date: "2026-06-20" })], TODAY);
     expect(Math.round(r.totals.inflight)).toBe(850);
   });
-  it("denied claim is bucketed, not in cash flow", () => {
-    const r = buildUnified([], [claim({ claim_status: "Denied (Or Partly)", est_pay: 700, dos: "2026-06-01" })], TODAY);
+  it("denied claim is bucketed (at conservative), not in cash flow", () => {
+    const r = buildUnified([], [claim({ claim_status: "Denied (Or Partly)", est_pay: 700, dos: "2026-06-01", primary_payor: "Cigna", lines: [{ hcpcs: "E0784", units: 1 }] })], TODAY);
     expect(Math.round(r.totals.inflight)).toBe(0);
-    expect(Math.round(r.kpis.denialTotal)).toBe(700);
+    expect(Math.round(r.kpis.denialTotal)).toBe(2500);
   });
-  it("missing est_pay uses $300 conservative", () => {
-    const r = buildUnified([], [claim({ est_pay: 0, dos: "2026-06-01" })], TODAY);
+  it("no HCPCS lines and no history falls back to $300", () => {
+    const r = buildUnified([], [claim({ est_pay: 0, dos: "2026-06-01", lines: [] })], TODAY);
     expect(Math.round(r.totals.inflight)).toBe(300);
   });
 });

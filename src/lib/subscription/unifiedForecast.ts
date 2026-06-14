@@ -9,10 +9,36 @@ export interface SubRow {
   total_revenue: number; total_gp: number; total_cost: number; shipping_cost: number;
   oop_estimate: number; coinsurance: number; ded_remaining: number;
 }
+export interface ClaimLine { hcpcs: string; units: number; }
 export interface ClaimRow {
   claim_status: string; est_pay: number; dos: string; claim_sent_date: string;
   primary_payor: string; claim_name?: string; primary_paid: number; primary_paid_date: string;
+  item_id?: string; lines?: ClaimLine[];
 }
+
+// Conservative per-unit estimates by HCPCS (mirrors src/lib/claims/cashflow.ts +
+// engine.py). Used only when we have no actual reimbursement for a claim/patient.
+const CONSERVATIVE: Record<string, { medicare?: number; default: number }> = {
+  E0784: { medicare: 300, default: 2500 }, E2103: { default: 150 },
+  A4224: { default: 15 }, A4225: { default: 3 }, A4230: { default: 6 },
+  A4231: { default: 6 }, A4232: { default: 3 }, A4239: { default: 150 },
+};
+const payorClass = (p: string) => (/^medicare\s+a&?b$/i.test((p || "").trim()) ? "medicare" : "other");
+function conservativeFor(hcpcs: string, payor: string): number | undefined {
+  const e = CONSERVATIVE[(hcpcs || "").trim().toUpperCase()];
+  if (!e) return undefined;
+  return (payorClass(payor) === "medicare" ? e.medicare : undefined) ?? e.default;
+}
+/** Σ conservativeFor(line) over a claim's HCPCS lines; undefined if no recognized line. */
+function productConservative(r: ClaimRow): number | undefined {
+  let tot = 0, got = false;
+  for (const l of r.lines || []) {
+    const v = conservativeFor(l.hcpcs, r.primary_payor);
+    if (v !== undefined) { tot += v * (l.units || 1); got = true; }
+  }
+  return got ? tot : undefined;
+}
+const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 export interface UAssumptions {
   primaryLag: number; secondaryLag: number; dosLag: number; resentLag: number;
   medicaidCycle: number; horizon: number; reorderRate: number; collectionRate: number;
@@ -105,19 +131,32 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   //   denied / bad debt               → excluded from cash flow, totalled for display
   const DENIAL = new Set(["Denied (Or Partly)", "Bad Debt"]);
   let denialTotal = 0; const seenClaims = new Set<string>();
+  // Patient actual-pay history: median of primary_paid (>0) across that patient's claims.
+  const patHist: Record<string, number[]> = {};
+  for (const r of claims) { const p = r.primary_paid || 0; if (p > 0) (patHist[(r.claim_name || "").trim()] ??= []).push(p); }
+  const patActual: Record<string, number> = {};
+  for (const k in patHist) patActual[k] = median(patHist[k]);
+  // Expected pay for a claim with NO recorded payment (Brandon's rule): actual we got
+  // paid (patient history) → product-specific HCPCS conservative → $300. NEVER est_pay/charge.
+  const estimateUnpaid = (r: ClaimRow): number => {
+    const nm = (r.claim_name || "").trim();
+    if (patActual[nm]) return patActual[nm];
+    const pc = productConservative(r);
+    return pc !== undefined ? pc : 300;
+  };
   for (const r of claims) {
     const st = (r.claim_status || "").trim();
     const sig = [r.claim_name, r.dos, r.claim_sent_date, r.est_pay, r.primary_paid, r.primary_paid_date, st].join("|");
     if (seenClaims.has(sig)) continue;   // drop exact-duplicate claim rows (same claim entered multiple times)
     seenClaims.add(sig);
-    const ep = r.est_pay || 0, paid = r.primary_paid || 0, cr = a.collectionRate;
+    const paid = r.primary_paid || 0, cr = a.collectionRate;
     const nm = r.claim_name || "", payer = r.primary_payor;
     const dosD = pDate(r.dos), sentD = pDate(r.claim_sent_date), dosISO = dosD ? iso(dosD) : "";
-    if (DENIAL.has(st)) { denialTotal += ep > 0 ? ep : 300; continue; }
+    if (DENIAL.has(st)) { denialTotal += paid > 0 ? paid : estimateUnpaid(r); continue; }
     const ppd = pDate(r.primary_paid_date);
     if (ppd) {                                    // payment recorded → use paid amount + paid date (even if status=Review)
       if (ppd <= today) continue;                 // already in our bank → exclude
-      add(ppd, "inflight", (paid > 0 ? paid : (ep > 0 ? ep : 300)) * cr, nm, payer, dosISO); // future EFT date
+      add(ppd, "inflight", (paid > 0 ? paid : estimateUnpaid(r)) * cr, nm, payer, dosISO); // future EFT date
       continue;
     }
     if (st === "Paid") continue;                  // paid, no date recorded → already in bank
@@ -126,7 +165,7 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
     if (dosD) { const d1 = addDays(dosD, a.dosLag); if (d1 >= today) cash = d1; }
     if (!cash && sentD) { const d2 = addDays(sentD, a.resentLag); if (d2 >= today) cash = d2; }
     if (!cash) cash = addDays(today, 7);
-    add(cash, "inflight", (ep > 0 ? ep : 300) * cr, nm, payer, dosISO);   // unpaid → estimate
+    add(cash, "inflight", estimateUnpaid(r) * cr, nm, payer, dosISO);   // unpaid → actual/conservative estimate
   }
 
   // Projected growth: N new patients each Monday (from today forward), at roster averages.
