@@ -66,20 +66,31 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   const events: Ev[] = [];
   const add = (d: Date, kind: string, amt: number, patient: string, payer: string, dos: string) => { if (amt !== 0 && inWin(d)) events.push({ day: dayDiff(d, today), dateISO: iso(d), dos, kind, amt, patient, payer }); };
 
-  let gN = 0, gCost = 0, gPrim = 0, gSec = 0; // roster averages for projected-growth cohorts
-  for (const r of subs) {
-    if ((r.group_title || "").toLowerCase().includes("not active")) continue;
+  const active = subs.filter((r) => !(r.group_title || "").toLowerCase().includes("not active"));
+  // Pass 1: roster averages over rows WITH financials (used for growth + no-financials placeholders).
+  let gN = 0, gCost = 0, gPrim = 0, gSec = 0;
+  for (const r of active) {
     const rev = r.total_revenue || 0; if (rev <= 0) continue;
     const cost = r.total_gp !== 0 ? rev - r.total_gp : (r.total_cost || 0) + (r.shipping_cost || 0);
-    const payer = r.primary_insurance, nm = r.patient_name || "";
-    const [prim, sec] = splitRevenue(payer, rev, r.oop_estimate || 0, r.coinsurance || 0, r.ded_remaining || 0);
+    const [prim, sec] = splitRevenue(r.primary_insurance, rev, r.oop_estimate || 0, r.coinsurance || 0, r.ded_remaining || 0);
     gN++; gCost += cost; gPrim += prim; gSec += sec;
+  }
+  const avgCost = gN ? gCost / gN : 0, avgPrim = gN ? gPrim / gN : 0, avgSec = gN ? gSec / gN : 0;
+  // Pass 2: future orders. No order date → paused → exclude. >7d stale → exclude.
+  // Rows missing financials → roster-average placeholder so nothing is missed.
+  for (const r of active) {
     const base = pDate(r.next_order_date); if (!base) continue;
     if (dayDiff(base, today) < -a.staleDays) continue;
+    const rev = r.total_revenue || 0, payer = r.primary_insurance, nm = r.patient_name || "", hasFin = rev > 0;
+    let prim: number, sec: number, cost: number;
+    if (hasFin) {
+      cost = r.total_gp !== 0 ? rev - r.total_gp : (r.total_cost || 0) + (r.shipping_cost || 0);
+      [prim, sec] = splitRevenue(payer, rev, r.oop_estimate || 0, r.coinsurance || 0, r.ded_remaining || 0);
+    } else { prim = avgPrim; sec = avgSec; cost = avgCost; }
     const ods = [base];
-    if (isMedicaid(payer)) { let od = addDays(base, a.medicaidCycle); while (od <= winEnd) { ods.push(od); od = addDays(od, a.medicaidCycle); } }
+    if (hasFin && isMedicaid(payer)) { let od = addDays(base, a.medicaidCycle); while (od <= winEnd) { ods.push(od); od = addDays(od, a.medicaidCycle); } }
     for (const od of ods) {
-      const payP = isMedicaid(payer) ? emedny(od) : addDays(od, a.primaryLag);
+      const payP = (hasFin && isMedicaid(payer)) ? emedny(od) : addDays(od, a.primaryLag);
       const paySec = addDays(payP, a.secondaryLag);
       const rm = a.reorderRate, cr = a.collectionRate, od_iso = iso(od);
       add(payP, "cost", -cost * rm, nm, payer, od_iso);
@@ -103,25 +114,24 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
     const nm = r.claim_name || "", payer = r.primary_payor;
     const dosD = pDate(r.dos), sentD = pDate(r.claim_sent_date), dosISO = dosD ? iso(dosD) : "";
     if (DENIAL.has(st)) { denialTotal += ep > 0 ? ep : 300; continue; }
-    if (st === "Paid") continue;         // already received (in bank) regardless of paid_date
     const ppd = pDate(r.primary_paid_date);
-    if (ppd) {
-      if (ppd <= today) continue; // already received → in bank
-      add(ppd, "inflight", (paid > 0 ? paid : (ep > 0 ? ep : 300)) * cr, nm, payer, dosISO);
-    } else {
-      if (!dosD && !sentD) continue;
-      let cash: Date | null = null;
-      if (dosD) { const d1 = addDays(dosD, a.dosLag); if (d1 >= today) cash = d1; }
-      if (!cash && sentD) { const d2 = addDays(sentD, a.resentLag); if (d2 >= today) cash = d2; }
-      if (!cash) cash = addDays(today, 7);
-      add(cash, "inflight", (ep > 0 ? ep : 300) * cr, nm, payer, dosISO);
+    if (ppd) {                                    // payment recorded → use paid amount + paid date (even if status=Review)
+      if (ppd <= today) continue;                 // already in our bank → exclude
+      add(ppd, "inflight", (paid > 0 ? paid : (ep > 0 ? ep : 300)) * cr, nm, payer, dosISO); // future EFT date
+      continue;
     }
+    if (st === "Paid") continue;                  // paid, no date recorded → already in bank
+    if (!dosD && !sentD) continue;
+    let cash: Date | null = null;
+    if (dosD) { const d1 = addDays(dosD, a.dosLag); if (d1 >= today) cash = d1; }
+    if (!cash && sentD) { const d2 = addDays(sentD, a.resentLag); if (d2 >= today) cash = d2; }
+    if (!cash) cash = addDays(today, 7);
+    add(cash, "inflight", (ep > 0 ? ep : 300) * cr, nm, payer, dosISO);   // unpaid → estimate
   }
 
   // Projected growth: N new patients each Monday (from today forward), at roster averages.
   if (a.newPatientsPerWeek > 0 && gN > 0) {
     const nP = a.newPatientsPerWeek, rm = a.reorderRate, cr = a.collectionRate;
-    const avgCost = gCost / gN, avgPrim = gPrim / gN, avgSec = gSec / gN;
     for (let m = addDays(today, -((today.getDay() + 6) % 7)); m <= winEnd; m = addDays(m, 7)) {
       if (m < today) continue;
       const payP = addDays(m, a.primaryLag), paySec = addDays(payP, a.secondaryLag), mi = iso(m);
