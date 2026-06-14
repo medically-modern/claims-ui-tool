@@ -93,13 +93,17 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   //   unpaid                          → include at est cash date (cascade), est_pay else $300 conservative
   //   denied / bad debt               → excluded from cash flow, totalled for display
   const DENIAL = new Set(["Denied (Or Partly)", "Bad Debt"]);
-  let denialTotal = 0;
+  let denialTotal = 0; const seenClaims = new Set<string>();
   for (const r of claims) {
     const st = (r.claim_status || "").trim();
+    const sig = [r.claim_name, r.dos, r.claim_sent_date, r.est_pay, r.primary_paid, r.primary_paid_date, st].join("|");
+    if (seenClaims.has(sig)) continue;   // drop exact-duplicate claim rows (same claim entered multiple times)
+    seenClaims.add(sig);
     const ep = r.est_pay || 0, paid = r.primary_paid || 0, cr = a.collectionRate;
     const nm = r.claim_name || "", payer = r.primary_payor;
     const dosD = pDate(r.dos), sentD = pDate(r.claim_sent_date), dosISO = dosD ? iso(dosD) : "";
     if (DENIAL.has(st)) { denialTotal += ep > 0 ? ep : 300; continue; }
+    if (st === "Paid") continue;         // already received (in bank) regardless of paid_date
     const ppd = pDate(r.primary_paid_date);
     if (ppd) {
       if (ppd <= today) continue; // already received → in bank
