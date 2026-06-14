@@ -127,6 +127,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const [newPerWeek, setNewPerWeek] = useState(0);
   const [drill, setDrill] = useState<number | null>(null);
   const [mixOpen, setMixOpen] = useState<string | null>(null);
+  const [combosOpen, setCombosOpen] = useState(false);
 
   const subs: SubRow[] = useMemo(() => (subData ?? []).map((p: any) => ({
     group_title: p.isNotActive ? "Not Active Patients" : "Subscriptions",
@@ -275,29 +276,32 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
 
         {res.missingCombos.length > 0 && (
           <Card className="p-4 border-amber-300 bg-amber-50/60">
-            <div className="flex items-center gap-2 mb-2">
+            <button onClick={() => setCombosOpen((o) => !o)} className="flex items-center gap-2 w-full text-left">
+              <ChevronRight className={cn("h-4 w-4 text-amber-600 transition-transform", combosOpen && "rotate-90")} />
               <AlertTriangle className="h-4 w-4 text-amber-600" />
               <span className="text-[15px] font-semibold">Payer × product combos needing a real estimate</span>
-              <span className="text-[13px] text-muted-foreground">— no paid claim yet, using conservative fallback. Revisit once a few of these get paid.</span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-[13px]">
-                <thead><tr className="text-muted-foreground text-left border-b">
-                  <th className="py-1 pr-4 font-medium">Payer</th><th className="py-1 pr-4 font-medium">Product</th>
-                  <th className="py-1 pr-4 font-medium text-right">Claims</th><th className="py-1 pr-4 font-medium text-right">Conservative $ in forecast</th>
-                </tr></thead>
-                <tbody>
-                  {res.missingCombos.map((c, i) => (
-                    <tr key={i} className="border-b last:border-b-0">
-                      <td className="py-1 pr-4">{c.payer}</td>
-                      <td className="py-1 pr-4 capitalize">{c.category}</td>
-                      <td className="py-1 pr-4 text-right tabular-nums">{c.count}</td>
-                      <td className="py-1 pr-4 text-right tabular-nums">{fmt(c.amount)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+              <span className="text-[13px] text-muted-foreground">— {res.missingCombos.length} combos on conservative fallback. Revisit once a few get paid.</span>
+            </button>
+            {combosOpen && (
+              <div className="overflow-x-auto mt-3">
+                <table className="w-full text-[13px]">
+                  <thead><tr className="text-muted-foreground text-left border-b">
+                    <th className="py-1 pr-4 font-medium">Payer</th><th className="py-1 pr-4 font-medium">Product</th>
+                    <th className="py-1 pr-4 font-medium text-right">Claims</th><th className="py-1 pr-4 font-medium text-right">Conservative $ in forecast</th>
+                  </tr></thead>
+                  <tbody>
+                    {res.missingCombos.map((c, i) => (
+                      <tr key={i} className="border-b last:border-b-0">
+                        <td className="py-1 pr-4">{c.payer}</td>
+                        <td className="py-1 pr-4 capitalize">{c.category}</td>
+                        <td className="py-1 pr-4 text-right tabular-nums">{c.count}</td>
+                        <td className="py-1 pr-4 text-right tabular-nums">{fmt(c.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </Card>
         )}
 
