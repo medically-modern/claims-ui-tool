@@ -254,9 +254,6 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             </button>
             {mixOpen && (["sensors", "supplies"] as const).map((key) => {
               const b = mix[key];
-              const totArr = (mix.sensors.arr || 0) + (mix.supplies.arr || 0);
-              const burn = totArr ? monthlyFixedCost * 12 * (b.arr / totArr) : 0;   // fixed burn allocated by ARR share
-              const net = b.arp - burn;
               return (
                 <div key={key} className="mt-4">
                   <div className="text-[15px] font-semibold capitalize mb-2">{key} <span className="text-[13px] font-normal text-muted-foreground">· {b.subs.toLocaleString()} subscriptions</span></div>
@@ -265,8 +262,6 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
                     <Metric label="ARR (annual recurring rev)" value={fmt(b.arr, true)} sub={`avg order rev ${fmt(b.avgRev)}`} />
                     <Metric label="ARP (annual recurring profit)" value={fmt(b.arp, true)} sub={`avg order cost ${fmt(b.avgCost)}`} />
                     <Metric label="Gross margin" value={`${b.gmPct.toFixed(1)}%`} sub={`avg GP/order ${fmt(b.avgGP)}`} />
-                    <Metric label="Profit margin (after fixed)" value={b.arr ? `${((net / b.arr) * 100).toFixed(1)}%` : "n/a"} sub={`net ${fmt(net, true)}/yr`} />
-                    <Metric label="" value="" />
                   </div>
                 </div>
               );
