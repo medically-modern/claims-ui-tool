@@ -67,9 +67,9 @@ describe("unifiedForecast — claims by payment state", () => {
   });
   it("Fidelis plan variants share one rate; manual rate fills a no-history combo", () => {
     const r = buildUnified([], [
-      claim({ claim_status: "Paid", primary_payor: "Fidelis Low-Cost", primary_paid: 4000, primary_paid_date: "2026-05-01", lines: [{ hcpcs: "E0784", units: 1 }] }),
-      claim({ claim_status: "Outstanding", dos: "2026-06-01", primary_payor: "Fidelis Commercial", lines: [{ hcpcs: "E0784", units: 1 }] }), // merged → $4000
-      claim({ claim_status: "Outstanding", dos: "2026-06-01", primary_payor: "Cigna", lines: [{ hcpcs: "E0784", units: 1 }] }),           // manual → $4200
+      claim({ claim_name: "RefPaid", claim_status: "Paid", primary_payor: "Fidelis Low-Cost", primary_paid: 4000, primary_paid_date: "2026-05-01", lines: [{ hcpcs: "E0784", units: 1 }] }),
+      claim({ claim_name: "FidUnpaid", claim_status: "Outstanding", dos: "2026-06-01", primary_payor: "Fidelis Commercial", lines: [{ hcpcs: "E0784", units: 1 }] }), // merged → $4000
+      claim({ claim_name: "CignaUnpaid", claim_status: "Outstanding", dos: "2026-06-01", primary_payor: "Cigna", lines: [{ hcpcs: "E0784", units: 1 }] }),           // manual → $4200
     ], TODAY);
     expect(Math.round(r.totals.inflight)).toBe(8200);
     expect(r.missingCombos.length).toBe(0);
