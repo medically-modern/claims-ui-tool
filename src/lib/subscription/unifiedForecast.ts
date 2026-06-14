@@ -91,6 +91,7 @@ export interface UResult {
   dbal: number[]; firstMon: string; nweeks: number; events: UEvent[];
   kpis: { bal30: number; bal60: number; bal90: number; minBal: number; minDay: number; runway: number | null; revenue: number; prod: number; supplier: number; burn: number; costTotal: number; netCash: number; flatBurn: number; maxBurn: number; denialTotal: number };
   totals: { primary: number; secondary: number; inflight: number; cost: number; rev: number };
+  missingCombos: Array<{ payer: string; category: string; count: number; amount: number }>;
 }
 
 export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a: UAssumptions = UDEFAULT): UResult {
@@ -149,11 +150,16 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   // Expected pay for a claim with NO recorded payment (Brandon's rule): what we actually
   // get paid for this payer×product → product-specific HCPCS conservative (only for
   // payer+product combos with no history, e.g. Magnacare/United pump) → $300. NEVER est_pay.
-  const estimateUnpaid = (r: ClaimRow): number => {
-    const key = `${(r.primary_payor || "").trim()}|${productCategory(r)}`;
+  // `track` records combos that fell back to conservative so we can flag them for review.
+  const missing: Record<string, { payer: string; category: string; count: number; amount: number }> = {};
+  const estimateUnpaid = (r: ClaimRow, track = false): number => {
+    const cat = productCategory(r);
+    const key = `${(r.primary_payor || "").trim()}|${cat}`;
     if (payerProduct[key] !== undefined) return payerProduct[key];
     const pc = productConservative(r);
-    return pc !== undefined ? pc : 300;
+    const amt = pc !== undefined ? pc : 300;
+    if (track) { const m = (missing[key] ??= { payer: (r.primary_payor || "").trim(), category: cat, count: 0, amount: 0 }); m.count++; m.amount += amt; }
+    return amt;
   };
   for (const r of claims) {
     const st = (r.claim_status || "").trim();
@@ -167,7 +173,7 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
     const ppd = pDate(r.primary_paid_date);
     if (ppd) {                                    // payment recorded → use paid amount + paid date (even if status=Review)
       if (ppd <= today) continue;                 // already in our bank → exclude
-      add(ppd, "inflight", (paid > 0 ? paid : estimateUnpaid(r)) * cr, nm, payer, dosISO); // future EFT date
+      add(ppd, "inflight", (paid > 0 ? paid : estimateUnpaid(r, true)) * cr, nm, payer, dosISO); // future EFT date
       continue;
     }
     if (st === "Paid") continue;                  // paid, no date recorded → already in bank
@@ -176,7 +182,7 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
     if (dosD) { const d1 = addDays(dosD, a.dosLag); if (d1 >= today) cash = d1; }
     if (!cash && sentD) { const d2 = addDays(sentD, a.resentLag); if (d2 >= today) cash = d2; }
     if (!cash) cash = addDays(today, 7);
-    add(cash, "inflight", estimateUnpaid(r) * cr, nm, payer, dosISO);   // unpaid → actual/conservative estimate
+    add(cash, "inflight", estimateUnpaid(r, true) * cr, nm, payer, dosISO);   // unpaid → actual/conservative estimate
   }
 
   // Projected growth: N new patients each Monday (from today forward), at roster averages.
@@ -226,5 +232,6 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   const minBal = Math.min(...dbal), minDay = dbal.indexOf(minBal);
   const rw = dbal.findIndex((b) => b < 0);
   const kpis = { bal30: dbal[30], bal60: dbal[60], bal90: dbal[90], minBal, minDay, runway: rw < 0 ? null : rw, revenue, prod, supplier: supT, burn: burnT, costTotal, netCash, flatBurn, maxBurn, denialTotal };
-  return { weekly, dbal, firstMon: iso(firstMon), nweeks, events: uevents, kpis, totals: { primary: T("primary"), secondary: T("secondary"), inflight: T("inflight"), cost: T("cost"), rev: revenue } };
+  const missingCombos = Object.values(missing).sort((a, b) => b.amount - a.amount);
+  return { weekly, dbal, firstMon: iso(firstMon), nweeks, events: uevents, kpis, totals: { primary: T("primary"), secondary: T("secondary"), inflight: T("inflight"), cost: T("cost"), rev: revenue }, missingCombos };
 }

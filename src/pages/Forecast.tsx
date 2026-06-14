@@ -289,6 +289,34 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
           </div>
         </Card>
 
+        {res.missingCombos.length > 0 && (
+          <Card className="p-4 border-amber-300 bg-amber-50/60">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <span className="text-[15px] font-semibold">Payer × product combos needing a real estimate</span>
+              <span className="text-[13px] text-muted-foreground">— no paid claim yet, using conservative fallback. Revisit once a few of these get paid.</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[13px]">
+                <thead><tr className="text-muted-foreground text-left border-b">
+                  <th className="py-1 pr-4 font-medium">Payer</th><th className="py-1 pr-4 font-medium">Product</th>
+                  <th className="py-1 pr-4 font-medium text-right">Claims</th><th className="py-1 pr-4 font-medium text-right">Conservative $ in forecast</th>
+                </tr></thead>
+                <tbody>
+                  {res.missingCombos.map((c, i) => (
+                    <tr key={i} className="border-b last:border-b-0">
+                      <td className="py-1 pr-4">{c.payer}</td>
+                      <td className="py-1 pr-4 capitalize">{c.category}</td>
+                      <td className="py-1 pr-4 text-right tabular-nums">{c.count}</td>
+                      <td className="py-1 pr-4 text-right tabular-nums">{fmt(c.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
         <Card className="p-4">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
             <MoneyIn label="Cash in bank" value={startingCash} onChange={setStartingCash} />
