@@ -144,7 +144,8 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
 
   const fin = useMemo(() => {
     const rows = (subData ?? []).filter((p: any) => !p.isNotActive && (p.financials?.totalRevenue ?? 0) > 0);
-    const N = rows.length;
+    const orders = rows.length;
+    const N = new Set(rows.map((p: any) => (p.name || "").trim().toLowerCase())).size; // distinct patients
     const sum = (f: (p: any) => number) => rows.reduce((s, p) => s + f(p), 0);
     const rev = sum((p) => p.financials?.totalRevenue ?? 0);
     const gp = sum((p) => p.financials?.totalGP ?? 0);
@@ -153,7 +154,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     const annualBurn = monthlyFixedCost * 12;
     return {
       N, arr, arp,
-      avgRev: N ? rev / N : 0, avgCost: N ? (rev - gp) / N : 0, avgGP: N ? gp / N : 0,
+      avgRev: orders ? rev / orders : 0, avgCost: orders ? (rev - gp) / orders : 0, avgGP: orders ? gp / orders : 0,
       gmPct: rev ? (gp / rev) * 100 : 0,
       netProfit: arp - annualBurn,
       pmPct: arr ? ((arp - annualBurn) / arr) * 100 : 0,

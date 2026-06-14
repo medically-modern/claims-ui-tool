@@ -67,3 +67,31 @@ describe("unifiedForecast — growth + defaults", () => {
     expect(UDEFAULT.newPatientsPerWeek).toBe(0);
   });
 });
+
+describe("unifiedForecast — timing & placeholder edge cases", () => {
+  it("Medicaid primary uses eMedNY (next Wed + 22)", () => {
+    // order 2026-06-15 (Mon) → next Wed 6/17 + 22 = 2026-07-09
+    const r = buildUnified([sub({ primary_insurance: "Medicaid", next_order_date: "2026-06-15", total_revenue: 500, total_gp: 200 })], [], TODAY);
+    const prim = r.events.find((e) => e.kind === "primary");
+    expect(prim?.dateISO).toBe("2026-07-09");
+  });
+  it("eMedNY matches the documented cycle (cycle-end Wed 5/13 → EFT 6/4)", () => {
+    // a Medicaid order on 2026-05-11 would pay 2026-06-04; verify via a window where it lands
+    const r = buildUnified([sub({ primary_insurance: "Medicaid", next_order_date: "2026-06-17", total_revenue: 500, total_gp: 200 })], [], TODAY);
+    // 6/17 is a Wednesday → next Wed = same day → +22 = 2026-07-09
+    expect(r.events.find((e) => e.kind === "primary")?.dateISO).toBe("2026-07-09");
+  });
+  it("secondary lands +30 days after the primary pay date", () => {
+    const r = buildUnified([sub({ primary_insurance: "Medicare A&B", next_order_date: "2026-06-20", total_revenue: 1000, total_gp: 400 })], [], TODAY);
+    expect(r.events.find((e) => e.kind === "primary")?.dateISO).toBe("2026-07-16"); // +26
+    expect(r.events.find((e) => e.kind === "secondary")?.dateISO).toBe("2026-08-15"); // +56
+  });
+  it("no-financials order uses the roster-average placeholder", () => {
+    const subs = [
+      sub({ primary_insurance: "Medicare A&B", next_order_date: "2026-06-20", total_revenue: 1000, total_gp: 400 }), // avg primary 800
+      sub({ primary_insurance: "Cigna", next_order_date: "2026-06-20", total_revenue: 0, total_gp: 0 }),             // no financials → placeholder 800
+    ];
+    const r = buildUnified(subs, [], TODAY);
+    expect(Math.round(r.totals.primary)).toBe(1600); // 800 real + 800 placeholder
+  });
+});
