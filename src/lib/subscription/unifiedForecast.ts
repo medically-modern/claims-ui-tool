@@ -46,6 +46,16 @@ function productCategory(r: ClaimRow): string {
   if (hcs.includes("A4239")) return "cgm";
   return hcs.length ? "supplies" : "unknown";
 }
+// Collapse plan variants that share one rate. All Fidelis plans (Commercial,
+// Medicare, Medicaid, Low-Cost) reimburse the same → treat them as one payer.
+function normPayer(p: string): string {
+  const s = (p || "").trim();
+  return /^fidelis/i.test(s) ? "Fidelis" : s;
+}
+// Brandon-entered known rates for payer×product combos with NO paid history yet.
+// Add an entry once the rate is known; it then shows in the forecast and drops off
+// the "needs a real estimate" list. Keys are `${normPayer}|${category}`.
+const MANUAL_RATES: Record<string, number> = { "Cigna|pump": 4200 };
 const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 export interface UAssumptions {
   primaryLag: number; secondaryLag: number; dosLag: number; resentLag: number;
@@ -144,7 +154,7 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   // (payer, product-category) — what we KNOW we'll get paid for that insurer+product
   // (e.g. Fidelis pump = $4,000), per Brandon's rule.
   const matHist: Record<string, number[]> = {};
-  for (const r of claims) { const p = r.primary_paid || 0; if (p > 0) (matHist[`${(r.primary_payor || "").trim()}|${productCategory(r)}`] ??= []).push(p); }
+  for (const r of claims) { const p = r.primary_paid || 0; if (p > 0) (matHist[`${normPayer(r.primary_payor)}|${productCategory(r)}`] ??= []).push(p); }
   const payerProduct: Record<string, number> = {};
   for (const k in matHist) payerProduct[k] = median(matHist[k]);
   // Expected pay for a claim with NO recorded payment (Brandon's rule): what we actually
@@ -154,11 +164,13 @@ export function buildUnified(subs: SubRow[], claims: ClaimRow[], today: Date, a:
   const missing: Record<string, { payer: string; category: string; count: number; amount: number }> = {};
   const estimateUnpaid = (r: ClaimRow, track = false): number => {
     const cat = productCategory(r);
-    const key = `${(r.primary_payor || "").trim()}|${cat}`;
+    const payer = normPayer(r.primary_payor);
+    const key = `${payer}|${cat}`;
     if (payerProduct[key] !== undefined) return payerProduct[key];
+    if (MANUAL_RATES[key] !== undefined) return MANUAL_RATES[key];
     const pc = productConservative(r);
     const amt = pc !== undefined ? pc : 300;
-    if (track) { const m = (missing[key] ??= { payer: (r.primary_payor || "").trim(), category: cat, count: 0, amount: 0 }); m.count++; m.amount += amt; }
+    if (track) { const m = (missing[key] ??= { payer, category: cat, count: 0, amount: 0 }); m.count++; m.amount += amt; }
     return amt;
   };
   for (const r of claims) {

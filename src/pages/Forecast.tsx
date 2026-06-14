@@ -185,7 +185,8 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     }
     for (const k of ["sensors", "supplies"]) {
       const b = m[k];
-      b.avgRev = b.subs ? b.rev / b.subs : 0; b.gmPct = b.rev ? (b.gp / b.rev) * 100 : 0;
+      b.avgRev = b.subs ? b.rev / b.subs : 0; b.avgCost = b.subs ? (b.rev - b.gp) / b.subs : 0; b.avgGP = b.subs ? b.gp / b.subs : 0;
+      b.gmPct = b.rev ? (b.gp / b.rev) * 100 : 0;
       b.list.sort((a: any, c: any) => c.rev - a.rev);
     }
     return m;
@@ -242,47 +243,30 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             <Metric label="Denials (not in forecast)" value={fmt(res.kpis.denialTotal, true)} sub="potential if overturned" />
           </div>
 
-          {/* Alternative view: subscriptions split into sensors vs supplies (a combined patient = 2 subs) */}
-          <div className="mt-5 border-t pt-3">
-            <div className="text-[13px] font-medium text-muted-foreground mb-1">By subscription · sensors vs supplies (a sensors+supplies patient counts as 2)</div>
-            {(["sensors", "supplies"] as const).map((key) => {
-              const b = mix[key]; const open = mixOpen === key; const annualBurn = monthlyFixedCost * 12;
+          {/* Collapsed by default: break Key Financials into sensors-only vs supplies-only
+              (a single patient row covering both products counts as 2 subscriptions). */}
+          <div className="mt-4 border-t pt-3">
+            <button onClick={() => setMixOpen(mixOpen ? null : "open")}
+              className="flex items-center gap-1.5 text-[14px] font-medium text-muted-foreground hover:text-foreground">
+              <ChevronRight className={cn("h-4 w-4 transition-transform", mixOpen && "rotate-90")} />
+              Break down by subscription · sensors vs supplies
+            </button>
+            {mixOpen && (["sensors", "supplies"] as const).map((key) => {
+              const b = mix[key];
+              const totArr = (mix.sensors.arr || 0) + (mix.supplies.arr || 0);
+              const burn = totArr ? monthlyFixedCost * 12 * (b.arr / totArr) : 0;   // fixed burn allocated by ARR share
+              const net = b.arp - burn;
               return (
-                <div key={key} className="border-b last:border-b-0">
-                  <button onClick={() => setMixOpen(open ? null : key)}
-                    className="w-full grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-x-8 gap-y-1 items-center py-2.5 text-left hover:bg-muted/40 rounded px-1">
-                    <div className="flex items-center gap-1.5">
-                      <ChevronRight className={cn("h-4 w-4 text-muted-foreground transition-transform", open && "rotate-90")} />
-                      <span className="text-[15px] font-semibold capitalize">{key}</span>
-                      <span className="text-[13px] text-muted-foreground">· {b.subs.toLocaleString()} subs</span>
-                    </div>
-                    <Metric label="ARR" value={fmt(b.arr, true)} sub={`avg order ${fmt(b.avgRev)}`} />
-                    <Metric label="ARP" value={fmt(b.arp, true)} />
-                    <Metric label="Gross margin" value={`${b.gmPct.toFixed(1)}%`} />
-                    <Metric label="Profit margin" value={b.arr ? `${(((b.arp) / b.arr) * 100).toFixed(1)}%` : "n/a"} sub="before fixed" />
-                    <Metric label="# subscriptions" value={b.subs.toLocaleString()} />
-                  </button>
-                  {open && (
-                    <div className="overflow-x-auto pb-3">
-                      <table className="w-full text-[13px]">
-                        <thead><tr className="text-muted-foreground text-left border-b">
-                          <th className="py-1 pr-4 font-medium">Patient</th><th className="py-1 pr-4 font-medium">Payer</th>
-                          <th className="py-1 pr-4 font-medium text-right">Order rev</th><th className="py-1 pr-4 font-medium text-right">ARR</th>
-                          <th className="py-1 pr-4 font-medium text-right">GM %</th>
-                        </tr></thead>
-                        <tbody>
-                          {b.list.map((r: any, i: number) => (
-                            <tr key={i} className="border-b last:border-b-0">
-                              <td className="py-1 pr-4">{r.name}</td><td className="py-1 pr-4 text-muted-foreground">{r.payer}</td>
-                              <td className="py-1 pr-4 text-right tabular-nums">{fmt(r.rev)}</td>
-                              <td className="py-1 pr-4 text-right tabular-nums">{fmt(r.arr, true)}</td>
-                              <td className="py-1 pr-4 text-right tabular-nums">{r.gm.toFixed(0)}%</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                <div key={key} className="mt-4">
+                  <div className="text-[15px] font-semibold capitalize mb-2">{key} <span className="text-[13px] font-normal text-muted-foreground">· {b.subs.toLocaleString()} subscriptions</span></div>
+                  <div className="grid grid-cols-2 gap-x-8 gap-y-4 md:grid-cols-3 xl:grid-cols-6">
+                    <Metric label="Subscriptions" value={b.subs.toLocaleString()} />
+                    <Metric label="ARR (annual recurring rev)" value={fmt(b.arr, true)} sub={`avg order rev ${fmt(b.avgRev)}`} />
+                    <Metric label="ARP (annual recurring profit)" value={fmt(b.arp, true)} sub={`avg order cost ${fmt(b.avgCost)}`} />
+                    <Metric label="Gross margin" value={`${b.gmPct.toFixed(1)}%`} sub={`avg GP/order ${fmt(b.avgGP)}`} />
+                    <Metric label="Profit margin (after fixed)" value={b.arr ? `${((net / b.arr) * 100).toFixed(1)}%` : "n/a"} sub={`net ${fmt(net, true)}/yr`} />
+                    <Metric label="" value="" />
+                  </div>
                 </div>
               );
             })}
