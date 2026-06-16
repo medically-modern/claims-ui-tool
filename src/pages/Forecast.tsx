@@ -8,7 +8,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bar, CartesianGrid, ComposedChart, Legend, Line, ReferenceLine,
-  ResponsiveContainer, Tooltip, XAxis, YAxis, LabelList,
+  ResponsiveContainer, Tooltip, XAxis, YAxis, LabelList, PieChart, Pie, Cell,
 } from "recharts";
 import { ArrowLeft, RefreshCw, Wallet, CalendarClock, AlertTriangle, TrendingUp, X, ExternalLink, ChevronRight } from "lucide-react";
 
@@ -212,7 +212,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     for (const r of claims) {
       const amt = r.primary_paid || 0, ds = (r.primary_paid_date || "").trim();
       if (amt <= 0 || !/^\d{4}-\d{2}-\d{2}/.test(ds)) continue;
-      const mk = ds.slice(0, 7), c = catOf(r), payer = (r.primary_payor || "—").trim();
+      const mk = ds.slice(0, 7);
+      if (mk < "2026-04") continue;   // start at April; Jan–Mar are too sparse
+      const c = catOf(r), payer = (r.primary_payor || "—").trim();
       (prod[mk] ??= { month: mk, pump: 0, cgm: 0, supplies: 0, other: 0 })[c] += amt;
       (pay[mk] ??= { month: mk })[payer] = (pay[mk][payer] || 0) + amt;
       payTot[payer] = (payTot[payer] || 0) + amt;
@@ -227,8 +229,16 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
       if (other > 0) { row["Other"] = other; hasOther = true; }
       return row;
     });
-    return { byProduct, byPayer, payerKeys: [...topPayers, ...(hasOther ? ["Other"] : [])] };
+    // Totals across all months — for the header figures and the pie breakdowns.
+    const sumCat = (key: string) => months.reduce((s, m) => s + (prod[m]?.[key] || 0), 0);
+    const prodPie = [["Pump", "pump"], ["CGM", "cgm"], ["Supplies", "supplies"], ["Other", "other"]]
+      .map(([name, key]) => ({ name, value: sumCat(key) })).filter((d) => d.value > 0);
+    const otherTot = Object.entries(payTot).filter(([p]) => !topPayers.includes(p)).reduce((s, [, v]) => s + v, 0);
+    const payerPie = [...topPayers.map((p) => ({ name: p, value: payTot[p] })), ...(otherTot > 0 ? [{ name: "Other", value: otherTot }] : [])].filter((d) => d.value > 0);
+    const total = Object.values(payTot).reduce((s, v) => s + v, 0);
+    return { byProduct, byPayer, payerKeys: [...topPayers, ...(hasOther ? ["Other"] : [])], prodPie, payerPie, total };
   }, [claims]);
+  const PRODUCT_COLOR: Record<string, string> = { Pump: "#006383", CGM: "#4C9A93", Supplies: "#80ADAA", Other: "#B0B7C3" };
   const monLabel = (mk: string) => { const [y, m] = mk.split("-"); return new Date(+y, +m - 1, 1).toLocaleString("en-US", { month: "short" }) + " '" + y.slice(2); };
   const PAYER_COLORS = ["#006383", "#4C9A93", "#80ADAA", "#066FAC", "#093E52", "#CC3366", "#E8915B", "#98A2B3", "#B0B7C3"];
 
@@ -466,7 +476,10 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         {monthlyRev.byProduct.length > 0 && (
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <Card className="p-6">
-              <h3 className="text-[18px] font-semibold">Monthly revenue collected · by product</h3>
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-[18px] font-semibold">Monthly revenue collected · by product</h3>
+                <span className="text-[18px] font-semibold tabular-nums">{fmt(monthlyRev.total, true)} <span className="text-[13px] font-normal text-muted-foreground">total</span></span>
+              </div>
               <p className="text-[13px] text-muted-foreground mt-1">Actual paid amounts (incl. pumps) bucketed by pay date — captures pump revenue the subscription board doesn't track.</p>
               <ResponsiveContainer width="100%" height={300}>
                 <ComposedChart data={monthlyRev.byProduct} margin={{ top: 16, right: 16, bottom: 4, left: 8 }}>
@@ -483,7 +496,10 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
               </ResponsiveContainer>
             </Card>
             <Card className="p-6">
-              <h3 className="text-[18px] font-semibold">Monthly revenue collected · by payer</h3>
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-[18px] font-semibold">Monthly revenue collected · by payer</h3>
+                <span className="text-[18px] font-semibold tabular-nums">{fmt(monthlyRev.total, true)} <span className="text-[13px] font-normal text-muted-foreground">total</span></span>
+              </div>
               <p className="text-[13px] text-muted-foreground mt-1">Same actual collections, broken down by insurer (top 8 + Other).</p>
               <ResponsiveContainer width="100%" height={300}>
                 <ComposedChart data={monthlyRev.byPayer} margin={{ top: 16, right: 16, bottom: 4, left: 8 }}>
@@ -496,6 +512,34 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
                     <Bar key={p} dataKey={p} stackId="q" fill={PAYER_COLORS[i % PAYER_COLORS.length]} name={p} />
                   ))}
                 </ComposedChart>
+              </ResponsiveContainer>
+            </Card>
+            <Card className="p-6">
+              <h3 className="text-[18px] font-semibold">Revenue mix · by product</h3>
+              <p className="text-[13px] text-muted-foreground mt-1">Share of total collected (Apr onward).</p>
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie data={monthlyRev.prodPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100}
+                    label={(e: any) => `${e.name} ${(e.percent * 100).toFixed(0)}%`}>
+                    {monthlyRev.prodPie.map((d: any) => <Cell key={d.name} fill={PRODUCT_COLOR[d.name] || "#B0B7C3"} />)}
+                  </Pie>
+                  <Tooltip formatter={(v: any) => fmt(v as number)} />
+                  <Legend wrapperStyle={{ fontSize: 13 }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </Card>
+            <Card className="p-6">
+              <h3 className="text-[18px] font-semibold">Revenue mix · by payer</h3>
+              <p className="text-[13px] text-muted-foreground mt-1">Share of total collected (Apr onward), top 8 + Other.</p>
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie data={monthlyRev.payerPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100}
+                    label={(e: any) => `${(e.percent * 100).toFixed(0)}%`}>
+                    {monthlyRev.payerPie.map((d: any, i: number) => <Cell key={d.name} fill={PAYER_COLORS[i % PAYER_COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip formatter={(v: any) => fmt(v as number)} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                </PieChart>
               </ResponsiveContainer>
             </Card>
           </div>
