@@ -34,6 +34,44 @@ function fmt(n: number, abbr = false): string {
 const pnum = (s: unknown) => { const x = parseFloat(String(s ?? "").replace(/[$,]/g, "")); return isFinite(x) ? x : 0; };
 const mLabel = (isoStr: string) => { const p = isoStr.split("-"); return `${+p[1]}/${+p[2]}`; };
 
+// Product category from a claim's HCPCS lines (claims carry pumps; subs don't).
+const claimCat = (r: ClaimRow) => {
+  const h = (r.lines || []).map((l) => (l.hcpcs || "").toUpperCase());
+  return h.includes("E0784") ? "pump" : h.includes("A4239") ? "cgm" : h.length ? "supplies" : "other";
+};
+// Build month-by-month series (by product + by payer + pies + total) from collected
+// claims, using a value function (revenue = paid; gross profit = paid − cost). Starts Apr.
+function buildMonthly(claims: ClaimRow[], valueOf: (r: ClaimRow) => number) {
+  const prod: Record<string, any> = {}, pay: Record<string, any> = {}, payTot: Record<string, number> = {};
+  for (const r of claims) {
+    const ds = (r.primary_paid_date || "").trim();
+    if ((r.primary_paid || 0) <= 0 || !/^\d{4}-\d{2}-\d{2}/.test(ds)) continue;
+    const mk = ds.slice(0, 7); if (mk < "2026-04") continue;
+    const c = claimCat(r), payer = (r.primary_payor || "—").trim(), v = valueOf(r);
+    (prod[mk] ??= { month: mk, pump: 0, cgm: 0, supplies: 0, other: 0 })[c] += v;
+    (pay[mk] ??= { month: mk })[payer] = (pay[mk][payer] || 0) + v;
+    payTot[payer] = (payTot[payer] || 0) + v;
+  }
+  const months = Array.from(new Set([...Object.keys(prod), ...Object.keys(pay)])).sort();
+  const byProduct = months.map((m) => { const d = prod[m]; return { ...d, total: d.pump + d.cgm + d.supplies + d.other }; });
+  const topPayers = Object.entries(payTot).sort((a, b) => b[1] - a[1]).slice(0, 8).map((e) => e[0]);
+  let hasOther = false;
+  const byPayer = months.map((m) => {
+    const row: any = { month: m }; let other = 0, tot = 0;
+    for (const [p, v] of Object.entries(pay[m] || {})) { if (p === "month") continue; tot += v as number; if (topPayers.includes(p)) row[p] = v; else other += v as number; }
+    if (other !== 0) { row["Other"] = other; hasOther = true; }
+    row.total = tot; return row;
+  });
+  const sumCat = (key: string) => months.reduce((s, m) => s + (prod[m]?.[key] || 0), 0);
+  const prodPie = [["Pump", "pump"], ["CGM", "cgm"], ["Supplies", "supplies"], ["Other", "other"]]
+    .map(([name, key]) => ({ name, value: sumCat(key) })).filter((d) => d.value > 0);
+  const otherTot = Object.entries(payTot).filter(([p]) => !topPayers.includes(p)).reduce((s, [, v]) => s + v, 0);
+  const payerPie = [...topPayers.map((p) => ({ name: p, value: payTot[p] })), ...(otherTot > 0 ? [{ name: "Other", value: otherTot }] : [])].filter((d) => d.value > 0);
+  const total = Object.values(payTot).reduce((s, v) => s + v, 0);
+  return { byProduct, byPayer, payerKeys: [...topPayers, ...(hasOther ? ["Other"] : [])], prodPie, payerPie, total };
+}
+const PUMP_COST = 3800;  // flat pump COGS (not on the subscription board)
+
 function MoneyIn({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) {
   return (
     <div className="space-y-1">
@@ -200,45 +238,31 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   // or "claims" (In-flight only). Net + balance recompute for the selected scope;
   // supplier paydown + fixed burn always apply (they're ongoing cash out).
   const showSubs = chartMode !== "claims", showClaims = chartMode !== "subs";
-  // Monthly revenue actually collected from the CLAIMS board (incl. pumps, which aren't
-  // on the subscription board). Sum of actual primary-paid amounts bucketed by pay date,
-  // split by product and by payer.
-  const monthlyRev = useMemo(() => {
-    const catOf = (r: ClaimRow) => {
-      const h = (r.lines || []).map((l) => (l.hcpcs || "").toUpperCase());
-      return h.includes("E0784") ? "pump" : h.includes("A4239") ? "cgm" : h.length ? "supplies" : "other";
-    };
-    const prod: Record<string, any> = {}, pay: Record<string, any> = {}, payTot: Record<string, number> = {};
-    for (const r of claims) {
-      const amt = r.primary_paid || 0, ds = (r.primary_paid_date || "").trim();
-      if (amt <= 0 || !/^\d{4}-\d{2}-\d{2}/.test(ds)) continue;
-      const mk = ds.slice(0, 7);
-      if (mk < "2026-04") continue;   // start at April; Jan–Mar are too sparse
-      const c = catOf(r), payer = (r.primary_payor || "—").trim();
-      (prod[mk] ??= { month: mk, pump: 0, cgm: 0, supplies: 0, other: 0 })[c] += amt;
-      (pay[mk] ??= { month: mk })[payer] = (pay[mk][payer] || 0) + amt;
-      payTot[payer] = (payTot[payer] || 0) + amt;
+  // Monthly collected REVENUE from the claims board (incl. pumps), by product + payer.
+  const monthlyRev = useMemo(() => buildMonthly(claims, (r) => r.primary_paid || 0), [claims]);
+  // Per-product COGS: pumps $3,800 flat; sensors/supplies from the subscription board
+  // (this patient's cost when known, else the roster average for that product).
+  const subCost = useMemo(() => {
+    const byName: Record<string, { sensor: number; supplies: number }> = {};
+    let sS = 0, nS = 0, sU = 0, nU = 0;
+    for (const p of subData ?? []) {
+      const f = p.financials || {}, nm = (p.name || "").trim().toLowerCase();
+      if ((f.sensorsRevenue || 0) > 0) { (byName[nm] ??= { sensor: 0, supplies: 0 }).sensor = f.sensorsCost || 0; sS += f.sensorsCost || 0; nS++; }
+      if ((f.suppliesRevenue || 0) > 0) { (byName[nm] ??= { sensor: 0, supplies: 0 }).supplies = f.suppliesCost || 0; sU += f.suppliesCost || 0; nU++; }
     }
-    const months = Array.from(new Set([...Object.keys(prod), ...Object.keys(pay)])).sort();
-    const byProduct = months.map((m) => { const d = prod[m]; return { ...d, total: d.pump + d.cgm + d.supplies + d.other }; });
-    const topPayers = Object.entries(payTot).sort((a, b) => b[1] - a[1]).slice(0, 8).map((e) => e[0]);
-    let hasOther = false;
-    const byPayer = months.map((m) => {
-      const row: any = { month: m }; let other = 0, tot = 0;
-      for (const [p, v] of Object.entries(pay[m] || {})) { if (p === "month") continue; tot += v as number; if (topPayers.includes(p)) row[p] = v; else { other += v as number; } }
-      if (other > 0) { row["Other"] = other; hasOther = true; }
-      row.total = tot;
-      return row;
-    });
-    // Totals across all months — for the header figures and the pie breakdowns.
-    const sumCat = (key: string) => months.reduce((s, m) => s + (prod[m]?.[key] || 0), 0);
-    const prodPie = [["Pump", "pump"], ["CGM", "cgm"], ["Supplies", "supplies"], ["Other", "other"]]
-      .map(([name, key]) => ({ name, value: sumCat(key) })).filter((d) => d.value > 0);
-    const otherTot = Object.entries(payTot).filter(([p]) => !topPayers.includes(p)).reduce((s, [, v]) => s + v, 0);
-    const payerPie = [...topPayers.map((p) => ({ name: p, value: payTot[p] })), ...(otherTot > 0 ? [{ name: "Other", value: otherTot }] : [])].filter((d) => d.value > 0);
-    const total = Object.values(payTot).reduce((s, v) => s + v, 0);
-    return { byProduct, byPayer, payerKeys: [...topPayers, ...(hasOther ? ["Other"] : [])], prodPie, payerPie, total };
-  }, [claims]);
+    return { byName, avgSensor: nS ? sS / nS : 0, avgSupplies: nU ? sU / nU : 0 };
+  }, [subData]);
+  // Monthly GROSS PROFIT = collected revenue − COGS, same shape as revenue.
+  const monthlyGP = useMemo(() => {
+    const costOf = (r: ClaimRow) => {
+      const c = claimCat(r); if (c === "pump") return PUMP_COST;
+      const nm = (r.claim_name || "").trim().toLowerCase();
+      if (c === "cgm") return subCost.byName[nm]?.sensor || subCost.avgSensor;
+      if (c === "supplies") return subCost.byName[nm]?.supplies || subCost.avgSupplies;
+      return 0;
+    };
+    return buildMonthly(claims, (r) => (r.primary_paid || 0) - costOf(r));
+  }, [claims, subCost]);
   const PRODUCT_COLOR: Record<string, string> = { Pump: "#006383", CGM: "#4C9A93", Supplies: "#80ADAA", Other: "#B0B7C3" };
   const monLabel = (mk: string) => { const [y, m] = mk.split("-"); return new Date(+y, +m - 1, 1).toLocaleString("en-US", { month: "short" }) + " '" + y.slice(2); };
   const PAYER_COLORS = ["#006383", "#4C9A93", "#80ADAA", "#066FAC", "#093E52", "#CC3366", "#E8915B", "#98A2B3", "#B0B7C3"];
@@ -258,6 +282,15 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     });
   })();
   const k = res.kpis;
+  // Steady-state fixed-cost capacity: in the subscription-only tail (last full weeks
+  // before the horizon edge), the monthly fixed cost at which cash stays flat =
+  // avg weekly subscription gross profit (primary+secondary−product cost) × 52/12.
+  const flatFixed = (() => {
+    const tail = res.weekly.slice(-5, -1);
+    if (!tail.length) return 0;
+    const avg = tail.reduce((s, w) => s + (w.primary + w.secondary - w.cost), 0) / tail.length;
+    return avg * 52 / 12;
+  })();
   const updated = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
 
   // net-cash-flow labels: green above the up-stack when ≥0, red below the down-stack when <0
@@ -379,9 +412,10 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
           <StatBox title="Net operating cash (90d)" tone={k.netCash >= 0 ? "success" : "danger"} icon={<TrendingUp className="h-4 w-4" />}
             rows={[{ label: "Revenue in", value: fmt(k.revenue, true), color: "#006383" }, { label: "Cash out", value: fmt(k.costTotal, true), color: "#CC3366" }, { label: "Net", value: fmt(k.netCash, true) }]} />
           <StatBox title="Fixed-cost capacity / mo" tone="info" icon={<CalendarClock className="h-4 w-4" />}
-            rows={[{ label: "Flat balance (end = start)", value: fmt(k.flatBurn, true) }, { label: "Max before $0", value: fmt(k.maxBurn, true) }]} />
+            rows={[{ label: "Flat cash (steady state)", value: fmt(flatFixed, true) }]} />
         </div>
 
+        <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground pt-2">Cashflow</h2>
         <Card className="p-6">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <h3 className="text-[20px] font-semibold">Projected cash &amp; bank balance</h3>
@@ -475,6 +509,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         </Card>
 
         {monthlyRev.byProduct.length > 0 && (
+          <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground pt-2">Revenue</h2>
+        )}
+        {monthlyRev.byProduct.length > 0 && (
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <Card className="p-6">
               <div className="flex items-baseline justify-between gap-3">
@@ -541,6 +578,85 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
                   <Pie data={monthlyRev.payerPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100}
                     label={(e: any) => `${(e.percent * 100).toFixed(0)}%`}>
                     {monthlyRev.payerPie.map((d: any, i: number) => <Cell key={d.name} fill={PAYER_COLORS[i % PAYER_COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip formatter={(v: any) => fmt(v as number)} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </Card>
+          </div>
+        )}
+
+        {monthlyGP.byProduct.length > 0 && (
+          <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground pt-2">Gross Profit</h2>
+        )}
+        {monthlyGP.byProduct.length > 0 && (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <Card className="p-6">
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-[18px] font-semibold">Monthly gross profit · by product</h3>
+                <span className="text-[18px] font-semibold tabular-nums">{fmt(monthlyGP.total, true)} <span className="text-[13px] font-normal text-muted-foreground">total</span></span>
+              </div>
+              <p className="text-[13px] text-muted-foreground mt-1">Collected revenue − COGS (pump $3,800; sensors/supplies cost from the subscription board).</p>
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={monthlyGP.byProduct} margin={{ top: 16, right: 16, bottom: 4, left: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="month" tickFormatter={monLabel} stroke="#64748b" fontSize={13} />
+                  <YAxis tickFormatter={(v) => fmt(v, true)} stroke="#64748b" fontSize={13} />
+                  <Tooltip formatter={(v: any) => fmt(v as number)} labelFormatter={monLabel} />
+                  <Legend wrapperStyle={{ fontSize: 13 }} />
+                  <Bar dataKey="pump" stackId="g" fill="#006383" name="Pump" />
+                  <Bar dataKey="cgm" stackId="g" fill="#4C9A93" name="CGM" />
+                  <Bar dataKey="supplies" stackId="g" fill="#80ADAA" name="Supplies" />
+                  <Bar dataKey="other" stackId="g" fill="#B0B7C3" name="Other">
+                    <LabelList dataKey="total" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+                  </Bar>
+                </ComposedChart>
+              </ResponsiveContainer>
+            </Card>
+            <Card className="p-6">
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-[18px] font-semibold">Monthly gross profit · by payer</h3>
+                <span className="text-[18px] font-semibold tabular-nums">{fmt(monthlyGP.total, true)} <span className="text-[13px] font-normal text-muted-foreground">total</span></span>
+              </div>
+              <p className="text-[13px] text-muted-foreground mt-1">Same gross profit, broken down by insurer (top 8 + Other).</p>
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={monthlyGP.byPayer} margin={{ top: 16, right: 16, bottom: 4, left: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="month" tickFormatter={monLabel} stroke="#64748b" fontSize={13} />
+                  <YAxis tickFormatter={(v) => fmt(v, true)} stroke="#64748b" fontSize={13} />
+                  <Tooltip formatter={(v: any) => fmt(v as number)} labelFormatter={monLabel} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {monthlyGP.payerKeys.map((p, i) => (
+                    <Bar key={p} dataKey={p} stackId="h" fill={PAYER_COLORS[i % PAYER_COLORS.length]} name={p}>
+                      {i === monthlyGP.payerKeys.length - 1 && <LabelList dataKey="total" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />}
+                    </Bar>
+                  ))}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </Card>
+            <Card className="p-6">
+              <h3 className="text-[18px] font-semibold">Gross profit mix · by product</h3>
+              <p className="text-[13px] text-muted-foreground mt-1">Share of total gross profit (Apr onward).</p>
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie data={monthlyGP.prodPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100}
+                    label={(e: any) => `${e.name} ${(e.percent * 100).toFixed(0)}%`}>
+                    {monthlyGP.prodPie.map((d: any) => <Cell key={d.name} fill={PRODUCT_COLOR[d.name] || "#B0B7C3"} />)}
+                  </Pie>
+                  <Tooltip formatter={(v: any) => fmt(v as number)} />
+                  <Legend wrapperStyle={{ fontSize: 13 }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </Card>
+            <Card className="p-6">
+              <h3 className="text-[18px] font-semibold">Gross profit mix · by payer</h3>
+              <p className="text-[13px] text-muted-foreground mt-1">Share of total gross profit (Apr onward), top 8 + Other.</p>
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie data={monthlyGP.payerPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100}
+                    label={(e: any) => `${(e.percent * 100).toFixed(0)}%`}>
+                    {monthlyGP.payerPie.map((d: any, i: number) => <Cell key={d.name} fill={PAYER_COLORS[i % PAYER_COLORS.length]} />)}
                   </Pie>
                   <Tooltip formatter={(v: any) => fmt(v as number)} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
