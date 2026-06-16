@@ -371,44 +371,6 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             rows={[{ label: "Flat balance (end = start)", value: fmt(k.flatBurn, true) }, { label: "Max before $0", value: fmt(k.maxBurn, true) }]} />
         </div>
 
-        {monthlyRev.byProduct.length > 0 && (
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <Card className="p-6">
-              <h3 className="text-[18px] font-semibold">Monthly revenue collected · by product</h3>
-              <p className="text-[13px] text-muted-foreground mt-1">Actual paid amounts (incl. pumps) bucketed by pay date — captures pump revenue the subscription board doesn't track.</p>
-              <ResponsiveContainer width="100%" height={300}>
-                <ComposedChart data={monthlyRev.byProduct} margin={{ top: 16, right: 16, bottom: 4, left: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="month" tickFormatter={monLabel} stroke="#64748b" fontSize={13} />
-                  <YAxis tickFormatter={(v) => fmt(v, true)} stroke="#64748b" fontSize={13} />
-                  <Tooltip formatter={(v: any) => fmt(v as number)} labelFormatter={monLabel} />
-                  <Legend wrapperStyle={{ fontSize: 13 }} />
-                  <Bar dataKey="pump" stackId="p" fill="#006383" name="Pump" />
-                  <Bar dataKey="cgm" stackId="p" fill="#4C9A93" name="CGM" />
-                  <Bar dataKey="supplies" stackId="p" fill="#80ADAA" name="Supplies" />
-                  <Bar dataKey="other" stackId="p" fill="#B0B7C3" name="Other" />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </Card>
-            <Card className="p-6">
-              <h3 className="text-[18px] font-semibold">Monthly revenue collected · by payer</h3>
-              <p className="text-[13px] text-muted-foreground mt-1">Same actual collections, broken down by insurer (top 8 + Other).</p>
-              <ResponsiveContainer width="100%" height={300}>
-                <ComposedChart data={monthlyRev.byPayer} margin={{ top: 16, right: 16, bottom: 4, left: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="month" tickFormatter={monLabel} stroke="#64748b" fontSize={13} />
-                  <YAxis tickFormatter={(v) => fmt(v, true)} stroke="#64748b" fontSize={13} />
-                  <Tooltip formatter={(v: any) => fmt(v as number)} labelFormatter={monLabel} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  {monthlyRev.payerKeys.map((p, i) => (
-                    <Bar key={p} dataKey={p} stackId="q" fill={PAYER_COLORS[i % PAYER_COLORS.length]} name={p} />
-                  ))}
-                </ComposedChart>
-              </ResponsiveContainer>
-            </Card>
-          </div>
-        )}
-
         <Card className="p-6">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <h3 className="text-[20px] font-semibold">Projected cash &amp; bank balance</h3>
@@ -500,6 +462,44 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             </tbody>
           </table>
         </Card>
+
+        {monthlyRev.byProduct.length > 0 && (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <Card className="p-6">
+              <h3 className="text-[18px] font-semibold">Monthly revenue collected · by product</h3>
+              <p className="text-[13px] text-muted-foreground mt-1">Actual paid amounts (incl. pumps) bucketed by pay date — captures pump revenue the subscription board doesn't track.</p>
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={monthlyRev.byProduct} margin={{ top: 16, right: 16, bottom: 4, left: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="month" tickFormatter={monLabel} stroke="#64748b" fontSize={13} />
+                  <YAxis tickFormatter={(v) => fmt(v, true)} stroke="#64748b" fontSize={13} />
+                  <Tooltip formatter={(v: any) => fmt(v as number)} labelFormatter={monLabel} />
+                  <Legend wrapperStyle={{ fontSize: 13 }} />
+                  <Bar dataKey="pump" stackId="p" fill="#006383" name="Pump" />
+                  <Bar dataKey="cgm" stackId="p" fill="#4C9A93" name="CGM" />
+                  <Bar dataKey="supplies" stackId="p" fill="#80ADAA" name="Supplies" />
+                  <Bar dataKey="other" stackId="p" fill="#B0B7C3" name="Other" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </Card>
+            <Card className="p-6">
+              <h3 className="text-[18px] font-semibold">Monthly revenue collected · by payer</h3>
+              <p className="text-[13px] text-muted-foreground mt-1">Same actual collections, broken down by insurer (top 8 + Other).</p>
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={monthlyRev.byPayer} margin={{ top: 16, right: 16, bottom: 4, left: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="month" tickFormatter={monLabel} stroke="#64748b" fontSize={13} />
+                  <YAxis tickFormatter={(v) => fmt(v, true)} stroke="#64748b" fontSize={13} />
+                  <Tooltip formatter={(v: any) => fmt(v as number)} labelFormatter={monLabel} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {monthlyRev.payerKeys.map((p, i) => (
+                    <Bar key={p} dataKey={p} stackId="q" fill={PAYER_COLORS[i % PAYER_COLORS.length]} name={p} />
+                  ))}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </Card>
+          </div>
+        )}
       </div>
     </div>
   );
