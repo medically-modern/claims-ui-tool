@@ -220,13 +220,14 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
       payTot[payer] = (payTot[payer] || 0) + amt;
     }
     const months = Array.from(new Set([...Object.keys(prod), ...Object.keys(pay)])).sort();
-    const byProduct = months.map((m) => prod[m]);
+    const byProduct = months.map((m) => { const d = prod[m]; return { ...d, total: d.pump + d.cgm + d.supplies + d.other }; });
     const topPayers = Object.entries(payTot).sort((a, b) => b[1] - a[1]).slice(0, 8).map((e) => e[0]);
     let hasOther = false;
     const byPayer = months.map((m) => {
-      const row: any = { month: m }; let other = 0;
-      for (const [p, v] of Object.entries(pay[m] || {})) { if (p === "month") continue; if (topPayers.includes(p)) row[p] = v; else { other += v as number; } }
+      const row: any = { month: m }; let other = 0, tot = 0;
+      for (const [p, v] of Object.entries(pay[m] || {})) { if (p === "month") continue; tot += v as number; if (topPayers.includes(p)) row[p] = v; else { other += v as number; } }
       if (other > 0) { row["Other"] = other; hasOther = true; }
+      row.total = tot;
       return row;
     });
     // Totals across all months — for the header figures and the pie breakdowns.
@@ -491,7 +492,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
                   <Bar dataKey="pump" stackId="p" fill="#006383" name="Pump" />
                   <Bar dataKey="cgm" stackId="p" fill="#4C9A93" name="CGM" />
                   <Bar dataKey="supplies" stackId="p" fill="#80ADAA" name="Supplies" />
-                  <Bar dataKey="other" stackId="p" fill="#B0B7C3" name="Other" />
+                  <Bar dataKey="other" stackId="p" fill="#B0B7C3" name="Other">
+                    <LabelList dataKey="total" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+                  </Bar>
                 </ComposedChart>
               </ResponsiveContainer>
             </Card>
@@ -509,7 +512,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
                   <Tooltip formatter={(v: any) => fmt(v as number)} labelFormatter={monLabel} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                   {monthlyRev.payerKeys.map((p, i) => (
-                    <Bar key={p} dataKey={p} stackId="q" fill={PAYER_COLORS[i % PAYER_COLORS.length]} name={p} />
+                    <Bar key={p} dataKey={p} stackId="q" fill={PAYER_COLORS[i % PAYER_COLORS.length]} name={p}>
+                      {i === monthlyRev.payerKeys.length - 1 && <LabelList dataKey="total" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />}
+                    </Bar>
                   ))}
                 </ComposedChart>
               </ResponsiveContainer>
