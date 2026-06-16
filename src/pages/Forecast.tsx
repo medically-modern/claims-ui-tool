@@ -200,6 +200,38 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   // or "claims" (In-flight only). Net + balance recompute for the selected scope;
   // supplier paydown + fixed burn always apply (they're ongoing cash out).
   const showSubs = chartMode !== "claims", showClaims = chartMode !== "subs";
+  // Monthly revenue actually collected from the CLAIMS board (incl. pumps, which aren't
+  // on the subscription board). Sum of actual primary-paid amounts bucketed by pay date,
+  // split by product and by payer.
+  const monthlyRev = useMemo(() => {
+    const catOf = (r: ClaimRow) => {
+      const h = (r.lines || []).map((l) => (l.hcpcs || "").toUpperCase());
+      return h.includes("E0784") ? "pump" : h.includes("A4239") ? "cgm" : h.length ? "supplies" : "other";
+    };
+    const prod: Record<string, any> = {}, pay: Record<string, any> = {}, payTot: Record<string, number> = {};
+    for (const r of claims) {
+      const amt = r.primary_paid || 0, ds = (r.primary_paid_date || "").trim();
+      if (amt <= 0 || !/^\d{4}-\d{2}-\d{2}/.test(ds)) continue;
+      const mk = ds.slice(0, 7), c = catOf(r), payer = (r.primary_payor || "—").trim();
+      (prod[mk] ??= { month: mk, pump: 0, cgm: 0, supplies: 0, other: 0 })[c] += amt;
+      (pay[mk] ??= { month: mk })[payer] = (pay[mk][payer] || 0) + amt;
+      payTot[payer] = (payTot[payer] || 0) + amt;
+    }
+    const months = Array.from(new Set([...Object.keys(prod), ...Object.keys(pay)])).sort();
+    const byProduct = months.map((m) => prod[m]);
+    const topPayers = Object.entries(payTot).sort((a, b) => b[1] - a[1]).slice(0, 8).map((e) => e[0]);
+    let hasOther = false;
+    const byPayer = months.map((m) => {
+      const row: any = { month: m }; let other = 0;
+      for (const [p, v] of Object.entries(pay[m] || {})) { if (p === "month") continue; if (topPayers.includes(p)) row[p] = v; else { other += v as number; } }
+      if (other > 0) { row["Other"] = other; hasOther = true; }
+      return row;
+    });
+    return { byProduct, byPayer, payerKeys: [...topPayers, ...(hasOther ? ["Other"] : [])] };
+  }, [claims]);
+  const monLabel = (mk: string) => { const [y, m] = mk.split("-"); return new Date(+y, +m - 1, 1).toLocaleString("en-US", { month: "short" }) + " '" + y.slice(2); };
+  const PAYER_COLORS = ["#006383", "#4C9A93", "#80ADAA", "#066FAC", "#093E52", "#CC3366", "#E8915B", "#98A2B3", "#B0B7C3"];
+
   const chartData = (() => {
     let bal = startingCash;
     return res.weekly.map((w) => {
@@ -338,6 +370,44 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
           <StatBox title="Fixed-cost capacity / mo" tone="info" icon={<CalendarClock className="h-4 w-4" />}
             rows={[{ label: "Flat balance (end = start)", value: fmt(k.flatBurn, true) }, { label: "Max before $0", value: fmt(k.maxBurn, true) }]} />
         </div>
+
+        {monthlyRev.byProduct.length > 0 && (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <Card className="p-6">
+              <h3 className="text-[18px] font-semibold">Monthly revenue collected · by product</h3>
+              <p className="text-[13px] text-muted-foreground mt-1">Actual paid amounts (incl. pumps) bucketed by pay date — captures pump revenue the subscription board doesn't track.</p>
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={monthlyRev.byProduct} margin={{ top: 16, right: 16, bottom: 4, left: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="month" tickFormatter={monLabel} stroke="#64748b" fontSize={13} />
+                  <YAxis tickFormatter={(v) => fmt(v, true)} stroke="#64748b" fontSize={13} />
+                  <Tooltip formatter={(v: any) => fmt(v as number)} labelFormatter={monLabel} />
+                  <Legend wrapperStyle={{ fontSize: 13 }} />
+                  <Bar dataKey="pump" stackId="p" fill="#006383" name="Pump" />
+                  <Bar dataKey="cgm" stackId="p" fill="#4C9A93" name="CGM" />
+                  <Bar dataKey="supplies" stackId="p" fill="#80ADAA" name="Supplies" />
+                  <Bar dataKey="other" stackId="p" fill="#B0B7C3" name="Other" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </Card>
+            <Card className="p-6">
+              <h3 className="text-[18px] font-semibold">Monthly revenue collected · by payer</h3>
+              <p className="text-[13px] text-muted-foreground mt-1">Same actual collections, broken down by insurer (top 8 + Other).</p>
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={monthlyRev.byPayer} margin={{ top: 16, right: 16, bottom: 4, left: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="month" tickFormatter={monLabel} stroke="#64748b" fontSize={13} />
+                  <YAxis tickFormatter={(v) => fmt(v, true)} stroke="#64748b" fontSize={13} />
+                  <Tooltip formatter={(v: any) => fmt(v as number)} labelFormatter={monLabel} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {monthlyRev.payerKeys.map((p, i) => (
+                    <Bar key={p} dataKey={p} stackId="q" fill={PAYER_COLORS[i % PAYER_COLORS.length]} name={p} />
+                  ))}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </Card>
+          </div>
+        )}
 
         <Card className="p-6">
           <div className="flex items-start justify-between gap-3 flex-wrap">
