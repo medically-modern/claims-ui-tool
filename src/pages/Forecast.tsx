@@ -39,13 +39,16 @@ const claimCat = (r: ClaimRow) => {
   const h = (r.lines || []).map((l) => (l.hcpcs || "").toUpperCase());
   return h.includes("E0784") ? "pump" : h.includes("A4239") ? "cgm" : h.length ? "supplies" : "other";
 };
+const isMedicareAB = (p: string) => /^medicare\s+a&?b$/i.test((p || "").trim());
 // Build month-by-month series (by product + by payer + pies + total) from collected
 // claims, using a value function (revenue = paid; gross profit = paid − cost). Starts Apr.
-function buildMonthly(claims: ClaimRow[], valueOf: (r: ClaimRow) => number) {
+// Optional `include` predicate filters which claims count (e.g. drop Medicare pumps for GP).
+function buildMonthly(claims: ClaimRow[], valueOf: (r: ClaimRow) => number, include?: (r: ClaimRow) => boolean) {
   const prod: Record<string, any> = {}, pay: Record<string, any> = {}, payTot: Record<string, number> = {};
   for (const r of claims) {
     const ds = (r.primary_paid_date || "").trim();
     if ((r.primary_paid || 0) <= 0 || !/^\d{4}-\d{2}-\d{2}/.test(ds)) continue;
+    if (include && !include(r)) continue;
     const mk = ds.slice(0, 7); if (mk < "2026-04") continue;
     const c = claimCat(r), payer = (r.primary_payor || "—").trim(), v = valueOf(r);
     (prod[mk] ??= { month: mk, pump: 0, cgm: 0, supplies: 0, other: 0 })[c] += v;
@@ -261,7 +264,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
       if (c === "supplies") return subCost.byName[nm]?.supplies || subCost.avgSupplies;
       return 0;
     };
-    return buildMonthly(claims, (r) => (r.primary_paid || 0) - costOf(r));
+    // Exclude Medicare A&B pumps — billed as a 13-month rental, so COGS doesn't map cleanly.
+    const include = (r: ClaimRow) => !(claimCat(r) === "pump" && isMedicareAB(r.primary_payor));
+    return buildMonthly(claims, (r) => (r.primary_paid || 0) - costOf(r), include);
   }, [claims, subCost]);
   const PRODUCT_COLOR: Record<string, string> = { Pump: "#006383", CGM: "#4C9A93", Supplies: "#80ADAA", Other: "#B0B7C3" };
   const monLabel = (mk: string) => { const [y, m] = mk.split("-"); return new Date(+y, +m - 1, 1).toLocaleString("en-US", { month: "short" }) + " '" + y.slice(2); };
@@ -588,7 +593,10 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         )}
 
         {monthlyGP.byProduct.length > 0 && (
-          <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground pt-2">Gross Profit</h2>
+          <div className="pt-2">
+            <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground">Gross Profit</h2>
+            <p className="text-[12px] text-muted-foreground mt-0.5">Excludes Medicare A&amp;B pumps — they bill as a 13-month rental, so COGS doesn't map cleanly to a single month yet.</p>
+          </div>
         )}
         {monthlyGP.byProduct.length > 0 && (
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
