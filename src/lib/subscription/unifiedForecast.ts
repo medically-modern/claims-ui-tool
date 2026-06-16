@@ -84,14 +84,12 @@ function iso(d: Date): string { return `${d.getFullYear()}-${String(d.getMonth()
 function isMedicaid(p: string): boolean { return (p || "").trim() === "Medicaid"; }
 function isMedicareAB(p: string): boolean { return /^medicare a&?b$/i.test((p || "").trim()); }
 function emedny(od: Date): Date { return addDays(od, (3 - od.getDay() + 7) % 7 + 22); }
-function splitRevenue(payer: string, rev: number, oop: number, coins: number, ded: number): [number, number] {
+function splitRevenue(payer: string, rev: number, _oop: number, _coins: number, _ded: number): [number, number] {
+  // Only Medicare A&B has a secondary (80/20). Everything else (Medicaid + all
+  // commercial) is treated as 100% primary for now. (A future OOP-based split for
+  // commercial plans can reintroduce _oop/_coins/_ded.)
   if (rev <= 0) return [0, 0];
   if (isMedicareAB(payer)) return [rev * 0.8, rev * 0.2];
-  if (isMedicaid(payer)) return [rev, 0];
-  if (oop > 0) { const sec = Math.min(oop, rev); return [rev - sec, sec]; }
-  const cf = coins > 1 ? coins / 100 : coins;
-  const pr = Math.min(cf * rev + ded, rev);
-  if (pr > 0) return [rev - pr, pr];
   return [rev, 0];
 }
 
