@@ -158,7 +158,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     return {
       N, arr, arp,
       avgRev: orders ? rev / orders : 0, avgCost: orders ? (rev - gp) / orders : 0, avgGP: orders ? gp / orders : 0,
-      gmPct: rev ? (gp / rev) * 100 : 0,
+      // Gross & profit margin share the SAME annual base (ARR/ARP) so that with
+      // fixed cost = 0, profit margin == gross margin, and net/yr ties to ARP.
+      gmPct: arr ? (arp / arr) * 100 : 0,
       netProfit: arp - annualBurn,
       pmPct: arr ? ((arp - annualBurn) / arr) * 100 : 0,
     };
@@ -188,7 +190,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     for (const k of ["sensors", "supplies"]) {
       const b = m[k];
       b.avgRev = b.subs ? b.rev / b.subs : 0; b.avgCost = b.subs ? (b.rev - b.gp) / b.subs : 0; b.avgGP = b.subs ? b.gp / b.subs : 0;
-      b.gmPct = b.rev ? (b.gp / b.rev) * 100 : 0;
+      b.gmPct = b.arr ? (b.arp / b.arr) * 100 : 0;   // same ARR/ARP base as headline gross margin
       b.list.sort((a: any, c: any) => c.rev - a.rev);
     }
     return m;
