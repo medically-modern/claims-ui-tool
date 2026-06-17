@@ -11,6 +11,8 @@ import {
   isBcbsByPayorId,
   ANTHEM_NY_PAYER_ID,
   CARECENTRIX_NJ_PAYER_ID,
+  BCBS_TN_PAYER_ID,
+  resolveDirectBluePlan,
 } from "./bcbsSubmitGuard";
 
 describe("parsePatientStateFromAddress", () => {
@@ -397,5 +399,77 @@ describe("evaluateBcbsSubmit — scope detection by payor ID alone", () => {
     expect(r.applies).toBe(true);
     // NY + POS Office is a hard stop.
     expect(r.hardStops.some((h) => h.code === "WRONG_POS_NY_OR_NJ")).toBe(true);
+  });
+});
+
+
+describe("evaluateBcbsSubmit — BCBS Tennessee (direct, SB890)", () => {
+  it("clears a clean TN claim: SB890 + POS Home + NU lines, no 803/Office stops", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "BCBS TN",
+      payorId: BCBS_TN_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "OTHER",
+      lineAuthIds: ["AUTH", "", ""],
+      lineHcpcs: ["A4239", "A4224", "A4225"],
+      lineModifiers: [["NU"], ["NU"], ["NU"]],
+    });
+    expect(r.applies).toBe(true);
+    expect(r.hardStops).toEqual([]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("does NOT force 803/Office for a TN patient (the old BlueCard trap)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "BCBS TN",
+      payorId: BCBS_TN_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "OTHER",
+      lineAuthIds: ["AUTH"],
+    });
+    expect(r.hardStops.some((h) => h.code === "WRONG_PAYER_OTHER")).toBe(false);
+    expect(r.hardStops.some((h) => h.code === "WRONG_POS_OTHER")).toBe(false);
+  });
+
+  it("hard-stops when a TN claim has the wrong payer ID (e.g. left on 803)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "BCBS TN",
+      payorId: "803",
+      placeOfService: "Home",
+      patientState: "OTHER",
+      lineAuthIds: ["AUTH"],
+    });
+    expect(r.hardStops.some((h) => h.code === "WRONG_PAYER_DIRECT_BLUE")).toBe(true);
+  });
+
+  it("hard-stops when POS is Office for TN (should be Home/12)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "BCBS TN",
+      payorId: BCBS_TN_PAYER_ID,
+      placeOfService: "Office",
+      patientState: "OTHER",
+      lineAuthIds: ["AUTH"],
+    });
+    expect(r.hardStops.some((h) => h.code === "WRONG_POS_DIRECT_BLUE")).toBe(true);
+  });
+
+  it("warns (soft) when a TN line is missing the NU modifier", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "BCBS TN",
+      payorId: BCBS_TN_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "OTHER",
+      lineAuthIds: ["AUTH", ""],
+      lineHcpcs: ["A4239", "A4224"],
+      lineModifiers: [["NU"], ["KX"]],
+    });
+    expect(r.warnings.some((w) => w.code === "MODIFIER_MISMATCH")).toBe(true);
+    expect(r.hardStops).toEqual([]);
+  });
+
+  it("resolveDirectBluePlan matches by label and by SB890 id", () => {
+    expect(resolveDirectBluePlan("BCBS TN", null)?.payerId).toBe(BCBS_TN_PAYER_ID);
+    expect(resolveDirectBluePlan(null, "SB890")?.payerId).toBe(BCBS_TN_PAYER_ID);
+    expect(resolveDirectBluePlan("Anthem BCBS", "803")).toBeNull();
   });
 });

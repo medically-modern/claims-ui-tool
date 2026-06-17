@@ -30,6 +30,38 @@ export const ANTHEM_NY_PAYER_ID = "803";
  *  patient lives in NJ, regardless of what their card says. */
 export const CARECENTRIX_NJ_PAYER_ID = "11348";
 
+/** Standalone Blue plans we contract with DIRECTLY — they bill to their
+ *  own payer ID and POS, not through the Anthem (803) / CareCentrix
+ *  (11348) BlueCard gateways. BCBS Tennessee (SB890) is the first. */
+export const BCBS_TN_PAYER_ID = "SB890";
+
+interface DirectBluePlan {
+  payerId: string;
+  requiredPos: "Home" | "Office";
+  label: string;
+}
+
+const DIRECT_BLUE_PLANS: DirectBluePlan[] = [
+  { payerId: BCBS_TN_PAYER_ID, requiredPos: "Home", label: "BCBS Tennessee" },
+];
+
+/** Resolve a direct-contract Blue plan from the payer label or PR Payor
+ *  ID. Returns null for BlueCard-routed Blues (Anthem/CareCentrix),
+ *  which keep the state-based routing rules. */
+export function resolveDirectBluePlan(
+  payerLabel: string | null | undefined,
+  payorId: string | null | undefined,
+): DirectBluePlan | null {
+  const id = (payorId || "").trim();
+  const byId = DIRECT_BLUE_PLANS.find((p) => p.payerId === id);
+  if (byId) return byId;
+  const s = (payerLabel || "").toLowerCase();
+  if (s.includes("bcbs tn") || s.includes("tennessee")) {
+    return DIRECT_BLUE_PLANS.find((p) => p.payerId === BCBS_TN_PAYER_ID) ?? null;
+  }
+  return null;
+}
+
 export type PatientStateBucket = "NY" | "NJ" | "OTHER" | "UNKNOWN";
 
 export interface BcbsSubmitGuardInput {
@@ -58,7 +90,9 @@ export interface BcbsHardStop {
     | "WRONG_PAYER_NJ"
     | "WRONG_PAYER_OTHER"
     | "WRONG_POS_NY_OR_NJ"
-    | "WRONG_POS_OTHER";
+    | "WRONG_POS_OTHER"
+    | "WRONG_PAYER_DIRECT_BLUE"
+    | "WRONG_POS_DIRECT_BLUE";
   message: string;
   fix: string;
 }
@@ -96,7 +130,11 @@ export function isBcbsByPayerLabel(label: string | null | undefined): boolean {
 export function isBcbsByPayorId(payorId: string | null | undefined): boolean {
   if (!payorId) return false;
   const trimmed = payorId.trim();
-  return trimmed === ANTHEM_NY_PAYER_ID || trimmed === CARECENTRIX_NJ_PAYER_ID;
+  return (
+    trimmed === ANTHEM_NY_PAYER_ID ||
+    trimmed === CARECENTRIX_NJ_PAYER_ID ||
+    trimmed === BCBS_TN_PAYER_ID
+  );
 }
 
 /** Parse a Monday Address column's text value down to a 2-letter US
@@ -184,6 +222,14 @@ export const EXPECTED_LINE_MODIFIERS_BY_PAYER: Record<
     A4225: ["NU", "SC"],
     A4239: ["NU"],
   },
+  // BCBS Tennessee (direct, in-network 2026): NU on every line.
+  [BCBS_TN_PAYER_ID]: {
+    A4224: ["NU"],
+    A4225: ["NU"],
+    A4239: ["NU"],
+    E0784: ["NU"],
+    E2103: ["NU"],
+  },
 };
 
 /** Required modifiers that are absent from a line, given the billing
@@ -226,6 +272,61 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
 
   const hardStops: BcbsHardStop[] = [];
   const warnings: BcbsWarning[] = [];
+
+  // ---- Direct-contract Blue plans (e.g. BCBS TN / SB890) ----
+  // They bill to their own payer ID + POS, NOT through the Anthem/
+  // CareCentrix BlueCard gateways, so they bypass the state-based
+  // 803/11348 routing and POS rules below. We only validate that the
+  // payer ID + POS match the plan and (softly) that the lines carry
+  // the plan's modifiers.
+  const directBlue = resolveDirectBluePlan(input.payerLabel, input.payorId);
+  if (directBlue) {
+    const trimmedPayor = (input.payorId || "").trim();
+    if (trimmedPayor !== directBlue.payerId) {
+      hardStops.push({
+        code: "WRONG_PAYER_DIRECT_BLUE",
+        message: `${directBlue.label} bills direct to ${directBlue.payerId}, but PR Payor ID is ${
+          trimmedPayor || "blank"
+        }.`,
+        fix: `Change PR Payor ID to ${directBlue.payerId}.`,
+      });
+    }
+    const dbPos = input.placeOfService ?? "Home";
+    if (dbPos !== directBlue.requiredPos) {
+      hardStops.push({
+        code: "WRONG_POS_DIRECT_BLUE",
+        message: `${directBlue.label} bills at POS ${
+          directBlue.requiredPos === "Home" ? "12 (Home)" : "11 (Office)"
+        } but POS is set to ${dbPos}.`,
+        fix: `Change POS to ${directBlue.requiredPos} on this row before submitting.`,
+      });
+    }
+    if (input.lineHcpcs && input.lineModifiers) {
+      const issues: string[] = [];
+      input.lineHcpcs.forEach((hcpc, idx) => {
+        const missing = missingLineModifiers(
+          directBlue.payerId,
+          hcpc,
+          input.lineModifiers?.[idx],
+        );
+        if (missing.length > 0) {
+          const code = (hcpc || `line ${idx + 1}`).toUpperCase();
+          const have = (input.lineModifiers?.[idx] ?? []).join("+") || "none";
+          issues.push(`${code} missing ${missing.join("+")} (has ${have})`);
+        }
+      });
+      if (issues.length > 0) {
+        warnings.push({
+          code: "MODIFIER_MISMATCH",
+          message:
+            "Supply line modifiers don't match the billing route: " +
+            issues.join("; ") + ".",
+          detail: `${directBlue.label} (${directBlue.payerId}) expects NU on every line. Fix the Modifiers on each flagged line, then submit.`,
+        });
+      }
+    }
+    return { applies, hardStops, warnings };
+  }
 
   // ---- Patient state must be resolvable ----
   if (input.patientState === "UNKNOWN") {
