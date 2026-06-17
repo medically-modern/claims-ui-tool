@@ -12,7 +12,7 @@ import {
   ANTHEM_NY_PAYER_ID,
   CARECENTRIX_NJ_PAYER_ID,
   BCBS_TN_PAYER_ID,
-  resolveDirectBluePlan,
+  resolveLabelRoutedBluePlan,
 } from "./bcbsSubmitGuard";
 
 describe("parsePatientStateFromAddress", () => {
@@ -403,8 +403,8 @@ describe("evaluateBcbsSubmit — scope detection by payor ID alone", () => {
 });
 
 
-describe("evaluateBcbsSubmit — BCBS Tennessee (direct, SB890)", () => {
-  it("clears a clean TN claim: SB890 + POS Home + NU lines, no 803/Office stops", () => {
+describe("evaluateBcbsSubmit — BCBS Tennessee (CareCentrix, 11345)", () => {
+  it("clears a clean TN claim: 11345 + POS Home + NU lines, no 803/Office stops", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "BCBS TN",
       payorId: BCBS_TN_PAYER_ID,
@@ -439,7 +439,7 @@ describe("evaluateBcbsSubmit — BCBS Tennessee (direct, SB890)", () => {
       patientState: "OTHER",
       lineAuthIds: ["AUTH"],
     });
-    expect(r.hardStops.some((h) => h.code === "WRONG_PAYER_DIRECT_BLUE")).toBe(true);
+    expect(r.hardStops.some((h) => h.code === "WRONG_PAYER_LABEL_ROUTED")).toBe(true);
   });
 
   it("hard-stops when POS is Office for TN (should be Home/12)", () => {
@@ -450,7 +450,7 @@ describe("evaluateBcbsSubmit — BCBS Tennessee (direct, SB890)", () => {
       patientState: "OTHER",
       lineAuthIds: ["AUTH"],
     });
-    expect(r.hardStops.some((h) => h.code === "WRONG_POS_DIRECT_BLUE")).toBe(true);
+    expect(r.hardStops.some((h) => h.code === "WRONG_POS_LABEL_ROUTED")).toBe(true);
   });
 
   it("warns (soft) when a TN line is missing the NU modifier", () => {
@@ -467,9 +467,9 @@ describe("evaluateBcbsSubmit — BCBS Tennessee (direct, SB890)", () => {
     expect(r.hardStops).toEqual([]);
   });
 
-  it("resolveDirectBluePlan matches by label and by SB890 id", () => {
-    expect(resolveDirectBluePlan("BCBS TN", null)?.payerId).toBe(BCBS_TN_PAYER_ID);
-    expect(resolveDirectBluePlan(null, "SB890")?.payerId).toBe(BCBS_TN_PAYER_ID);
-    expect(resolveDirectBluePlan("Anthem BCBS", "803")).toBeNull();
+  it("resolveLabelRoutedBluePlan matches by label and by 11345 id", () => {
+    expect(resolveLabelRoutedBluePlan("BCBS TN", null)?.payerId).toBe(BCBS_TN_PAYER_ID);
+    expect(resolveLabelRoutedBluePlan(null, "11345")?.payerId).toBe(BCBS_TN_PAYER_ID);
+    expect(resolveLabelRoutedBluePlan("Anthem BCBS", "803")).toBeNull();
   });
 });

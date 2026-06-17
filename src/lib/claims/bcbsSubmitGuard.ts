@@ -30,34 +30,38 @@ export const ANTHEM_NY_PAYER_ID = "803";
  *  patient lives in NJ, regardless of what their card says. */
 export const CARECENTRIX_NJ_PAYER_ID = "11348";
 
-/** Standalone Blue plans we contract with DIRECTLY — they bill to their
- *  own payer ID and POS, not through the Anthem (803) / CareCentrix
- *  (11348) BlueCard gateways. BCBS Tennessee (SB890) is the first. */
-export const BCBS_TN_PAYER_ID = "SB890";
+/** BCBS Tennessee is CareCentrix-fronted: claims bill to the CareCentrix
+ *  trading partner 11345 (NOT a direct BCBS TN payer ID), the same gateway
+ *  pattern as Horizon NJ (11348) — but routed by label rather than by
+ *  patient state. POS is Home (12). */
+export const BCBS_TN_PAYER_ID = "11345";
 
-interface DirectBluePlan {
+interface LabelRoutedBluePlan {
   payerId: string;
   requiredPos: "Home" | "Office";
   label: string;
 }
 
-const DIRECT_BLUE_PLANS: DirectBluePlan[] = [
-  { payerId: BCBS_TN_PAYER_ID, requiredPos: "Home", label: "BCBS Tennessee" },
+/** Blue plans routed to a fixed payer ID + POS by their LABEL, outside the
+ *  NY/NJ/other state-based BlueCard logic. BCBS TN (CareCentrix 11345) is
+ *  the first. */
+const LABEL_ROUTED_BLUE_PLANS: LabelRoutedBluePlan[] = [
+  { payerId: BCBS_TN_PAYER_ID, requiredPos: "Home", label: "BCBS Tennessee (CareCentrix)" },
 ];
 
-/** Resolve a direct-contract Blue plan from the payer label or PR Payor
- *  ID. Returns null for BlueCard-routed Blues (Anthem/CareCentrix),
- *  which keep the state-based routing rules. */
-export function resolveDirectBluePlan(
+/** Resolve a label-routed Blue plan from the payer label or PR Payor ID.
+ *  Returns null for the state-routed Blues (Anthem NY 803 / Horizon NJ
+ *  11348), which keep the patient-state routing rules. */
+export function resolveLabelRoutedBluePlan(
   payerLabel: string | null | undefined,
   payorId: string | null | undefined,
-): DirectBluePlan | null {
+): LabelRoutedBluePlan | null {
   const id = (payorId || "").trim();
-  const byId = DIRECT_BLUE_PLANS.find((p) => p.payerId === id);
+  const byId = LABEL_ROUTED_BLUE_PLANS.find((p) => p.payerId === id);
   if (byId) return byId;
   const s = (payerLabel || "").toLowerCase();
   if (s.includes("bcbs tn") || s.includes("tennessee")) {
-    return DIRECT_BLUE_PLANS.find((p) => p.payerId === BCBS_TN_PAYER_ID) ?? null;
+    return LABEL_ROUTED_BLUE_PLANS.find((p) => p.payerId === BCBS_TN_PAYER_ID) ?? null;
   }
   return null;
 }
@@ -91,8 +95,8 @@ export interface BcbsHardStop {
     | "WRONG_PAYER_OTHER"
     | "WRONG_POS_NY_OR_NJ"
     | "WRONG_POS_OTHER"
-    | "WRONG_PAYER_DIRECT_BLUE"
-    | "WRONG_POS_DIRECT_BLUE";
+    | "WRONG_PAYER_LABEL_ROUTED"
+    | "WRONG_POS_LABEL_ROUTED";
   message: string;
   fix: string;
 }
@@ -273,39 +277,38 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
   const hardStops: BcbsHardStop[] = [];
   const warnings: BcbsWarning[] = [];
 
-  // ---- Direct-contract Blue plans (e.g. BCBS TN / SB890) ----
-  // They bill to their own payer ID + POS, NOT through the Anthem/
-  // CareCentrix BlueCard gateways, so they bypass the state-based
-  // 803/11348 routing and POS rules below. We only validate that the
-  // payer ID + POS match the plan and (softly) that the lines carry
-  // the plan's modifiers.
-  const directBlue = resolveDirectBluePlan(input.payerLabel, input.payorId);
-  if (directBlue) {
+  // ---- Label-routed Blue plans (e.g. BCBS TN via CareCentrix / 11345) ----
+  // Identified by label / payer ID rather than patient state. They bill to
+  // a fixed CareCentrix trading partner + POS, bypassing the state-based
+  // 803/11348 routing below. We validate that the payer ID + POS match the
+  // plan and (softly) that lines carry the plan's modifiers (NU).
+  const labelRouted = resolveLabelRoutedBluePlan(input.payerLabel, input.payorId);
+  if (labelRouted) {
     const trimmedPayor = (input.payorId || "").trim();
-    if (trimmedPayor !== directBlue.payerId) {
+    if (trimmedPayor !== labelRouted.payerId) {
       hardStops.push({
-        code: "WRONG_PAYER_DIRECT_BLUE",
-        message: `${directBlue.label} bills direct to ${directBlue.payerId}, but PR Payor ID is ${
+        code: "WRONG_PAYER_LABEL_ROUTED",
+        message: `${labelRouted.label} bills to ${labelRouted.payerId}, but PR Payor ID is ${
           trimmedPayor || "blank"
         }.`,
-        fix: `Change PR Payor ID to ${directBlue.payerId}.`,
+        fix: `Change PR Payor ID to ${labelRouted.payerId}.`,
       });
     }
-    const dbPos = input.placeOfService ?? "Home";
-    if (dbPos !== directBlue.requiredPos) {
+    const lrPos = input.placeOfService ?? "Home";
+    if (lrPos !== labelRouted.requiredPos) {
       hardStops.push({
-        code: "WRONG_POS_DIRECT_BLUE",
-        message: `${directBlue.label} bills at POS ${
-          directBlue.requiredPos === "Home" ? "12 (Home)" : "11 (Office)"
-        } but POS is set to ${dbPos}.`,
-        fix: `Change POS to ${directBlue.requiredPos} on this row before submitting.`,
+        code: "WRONG_POS_LABEL_ROUTED",
+        message: `${labelRouted.label} bills at POS ${
+          labelRouted.requiredPos === "Home" ? "12 (Home)" : "11 (Office)"
+        } but POS is set to ${lrPos}.`,
+        fix: `Change POS to ${labelRouted.requiredPos} on this row before submitting.`,
       });
     }
     if (input.lineHcpcs && input.lineModifiers) {
       const issues: string[] = [];
       input.lineHcpcs.forEach((hcpc, idx) => {
         const missing = missingLineModifiers(
-          directBlue.payerId,
+          labelRouted.payerId,
           hcpc,
           input.lineModifiers?.[idx],
         );
@@ -321,7 +324,7 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
           message:
             "Supply line modifiers don't match the billing route: " +
             issues.join("; ") + ".",
-          detail: `${directBlue.label} (${directBlue.payerId}) expects NU on every line. Fix the Modifiers on each flagged line, then submit.`,
+          detail: `${labelRouted.label} (${labelRouted.payerId}) expects NU on every line. Fix the Modifiers on each flagged line, then submit.`,
         });
       }
     }
