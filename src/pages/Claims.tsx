@@ -237,6 +237,21 @@ function generateStatusCheck(c: Claim, status: StatusCheckResult): StatusCheckRe
  * statusChecks map is only used to flip the UI instantly after a run;
  * on page refresh the row reads through to Monday via this function.
  */
+// Pull the most actionable line out of the backend's Claim Status Detail
+// string. The 277 writeback formats it like:
+//   "[P5] Pending/Payer Administrative/System hold · [3] Claim has been
+//    adjudicated and is awaiting payment cycle"
+// The last "·"-separated segment is the claim-status code description —
+// the part that says what's actually happening ("adjudicated and awaiting
+// payment cycle" vs "additional documentation required"). Strip the
+// leading "[code] " marker. Falls back to the whole string.
+function conciseStatusDetail(detail?: string | null): string {
+  if (!detail) return "";
+  const parts = detail.split("\u00b7").map((p) => p.trim()).filter(Boolean);
+  const last = parts[parts.length - 1] || detail.trim();
+  return last.replace(/^\[[^\]]*\]\s*/, "");
+}
+
 function statusCheckFromClaim(c: Claim): StatusCheckRecord | null {
   if (!c.claimStatusCategory && !c.lastClaimStatusCheck) return null;
   const cat = c.claimStatusCategory;
@@ -1606,6 +1621,22 @@ const Claims = () => {
                                                         <TooltipContent>Rerun status check</TooltipContent>
                                                       </Tooltip>
                                                     </div>
+                                                    {typeof result.paidAmount === "number" && result.paidAmount > 0 && (
+                                                      <span
+                                                        className="inline-flex items-center rounded-full bg-success-soft px-2 py-0.5 text-xs font-medium text-success-soft-foreground"
+                                                        title="Amount the payer reports for this claim on the 277 — expected payment"
+                                                      >
+                                                        {fmtMoney(result.paidAmount)} expected
+                                                      </span>
+                                                    )}
+                                                    {result.detail && (
+                                                      <div
+                                                        className="max-w-[15rem] truncate text-xs text-muted-foreground"
+                                                        title={result.detail}
+                                                      >
+                                                        {conciseStatusDetail(result.detail)}
+                                                      </div>
+                                                    )}
                                                   </div>
                                                   <div className="inline-flex items-center gap-1.5">
                                                     {keepBtn}{denialBtn}{detailsBtn}
