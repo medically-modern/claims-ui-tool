@@ -170,6 +170,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const [mixOpen, setMixOpen] = useState<string | null>(null);
   const [combosOpen, setCombosOpen] = useState(false);
   const [chartMode, setChartMode] = useState<"both" | "subs" | "claims">("both");
+  const [subFixed, setSubFixed] = useState(60000);   // fixed monthly expense for the 3-month profit outlook
 
   const subs: SubRow[] = useMemo(() => (subData ?? []).map((p: any) => ({
     group_title: p.isNotActive ? "Not Active Patients" : "Subscriptions",
@@ -271,6 +272,34 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const PRODUCT_COLOR: Record<string, string> = { Pump: "#006383", CGM: "#4C9A93", Supplies: "#80ADAA", Other: "#B0B7C3" };
   const monLabel = (mk: string) => { const [y, m] = mk.split("-"); return new Date(+y, +m - 1, 1).toLocaleString("en-US", { month: "short" }) + " '" + y.slice(2); };
   const PAYER_COLORS = ["#006383", "#4C9A93", "#80ADAA", "#066FAC", "#093E52", "#CC3366", "#E8915B", "#98A2B3", "#B0B7C3"];
+
+  // 3-month profit outlook — SEPARATE simple analysis (subscription board only).
+  // Buckets orders into three rolling 30-day windows by order date from today,
+  // including Medicaid recurrences (+60d). Per month: Revenue (full order rev),
+  // Gross Profit (rev − product cost), Net Profit (GP − editable fixed expense).
+  const profitOutlook = useMemo(() => {
+    const parse = (s: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec((s || "").trim()); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+    const addD = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+    const dd = (a: Date, b: Date) => Math.round((a.getTime() - b.getTime()) / 86400000);
+    const fmtD = (d: Date) => d.toLocaleString("en-US", { month: "short", day: "numeric" });
+    const W = 30, H = 90;
+    const buckets = [0, 1, 2].map((i) => ({ label: `${fmtD(addD(today, i * W))} – ${fmtD(addD(today, i * W + W - 1))}`, revenue: 0, gp: 0 }));
+    for (const s of subs) {
+      if ((s.group_title || "").toLowerCase().includes("not active")) continue;
+      const rev = s.total_revenue || 0; if (rev <= 0) continue;
+      const cost = s.total_gp !== 0 ? rev - s.total_gp : (s.total_cost || 0) + (s.shipping_cost || 0);
+      const gp = rev - cost;
+      const base = parse(s.next_order_date); if (!base) continue;
+      const isMcd = (s.primary_insurance || "").trim() === "Medicaid";
+      const dates = [base];
+      if (isMcd) { let d = addD(base, 60); while (dd(d, today) < H) { dates.push(d); d = addD(d, 60); } }
+      for (const d of dates) {
+        const off = dd(d, today); if (off < 0 || off >= H) continue;
+        const idx = Math.floor(off / W); if (idx >= 0 && idx < 3) { buckets[idx].revenue += rev; buckets[idx].gp += gp; }
+      }
+    }
+    return buckets.map((b) => ({ ...b, net: b.gp - subFixed }));
+  }, [subs, today, subFixed]);
 
   const chartData = (() => {
     let bal = startingCash;
@@ -419,6 +448,38 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
           <StatBox title="Fixed-cost capacity / mo" tone="info" icon={<CalendarClock className="h-4 w-4" />}
             rows={[{ label: "Flat cash (steady state)", value: fmt(flatFixed, true) }]} />
         </div>
+
+        <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground pt-2">Profit Outlook</h2>
+        <Card className="p-6">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="text-[20px] font-semibold">3-month profit outlook · subscriptions only</h3>
+              <p className="text-[13px] text-muted-foreground mt-1">Orders bucketed by order date into rolling 30-day months (incl. Medicaid reorders). Revenue paid ~30 days out, cost ~30 days out. Net profit = gross profit − fixed monthly expense.</p>
+            </div>
+            <div className="w-44">
+              <MoneyIn label="Fixed monthly expense" value={subFixed} onChange={setSubFixed} />
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={340}>
+            <ComposedChart data={profitOutlook} margin={{ top: 24, right: 16, bottom: 4, left: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="label" stroke="#64748b" fontSize={13} />
+              <YAxis tickFormatter={(v) => fmt(v, true)} stroke="#64748b" fontSize={13} />
+              <Tooltip formatter={(v: any) => fmt(v as number)} />
+              <Legend wrapperStyle={{ fontSize: 13 }} />
+              <ReferenceLine y={0} stroke="#94a3b8" />
+              <Bar dataKey="revenue" fill="#066FAC" name="Revenue">
+                <LabelList dataKey="revenue" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+              </Bar>
+              <Bar dataKey="gp" fill="#4C9A93" name="Gross profit">
+                <LabelList dataKey="gp" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+              </Bar>
+              <Bar dataKey="net" fill="#093E52" name={`Net profit (after ${fmt(subFixed, true)} fixed)`}>
+                <LabelList dataKey="net" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={700} fill="#093E52" />
+              </Bar>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </Card>
 
         <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground pt-2">Cashflow</h2>
         <Card className="p-6">
