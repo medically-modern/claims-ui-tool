@@ -171,6 +171,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const [combosOpen, setCombosOpen] = useState(false);
   const [chartMode, setChartMode] = useState<"both" | "subs" | "claims">("both");
   const [subFixed, setSubFixed] = useState(30000);   // fixed monthly expense for the 3-month profit outlook
+  const [granularity, setGranularity] = useState<"weekly" | "monthly">("weekly");
 
   const subs: SubRow[] = useMemo(() => (subData ?? []).map((p: any) => ({
     group_title: p.isNotActive ? "Not Active Patients" : "Subscriptions",
@@ -315,6 +316,19 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
       };
     });
   })();
+  // Monthly view: roll the weekly bars up by the calendar month of each week's Monday.
+  // Bars sum; the balance line is the month-end (last week's) balance.
+  const chartMonthly = (() => {
+    const byMonth: Record<string, any> = {};
+    chartData.forEach((d, i) => {
+      const mk = res.weekly[i].mon.slice(0, 7);
+      const b = (byMonth[mk] ??= { label: new Date(+mk.slice(0, 4), +mk.slice(5, 7) - 1, 1).toLocaleString("en-US", { month: "short", year: "2-digit" }), Primary: 0, Secondary: 0, "In-flight": 0, Cost: 0, Supplier: 0, Burn: 0, Net: 0, Balance: 0 });
+      b.Primary += d.Primary; b.Secondary += d.Secondary; b["In-flight"] += d["In-flight"];
+      b.Cost += d.Cost; b.Supplier += d.Supplier; b.Burn += d.Burn; b.Net += d.Net; b.Balance = d.Balance;
+    });
+    return Object.values(byMonth);
+  })();
+  const activeData = granularity === "monthly" ? chartMonthly : chartData;
   const k = res.kpis;
   // Steady-state fixed-cost capacity: in the subscription-only tail (last full weeks
   // before the horizon edge), the monthly fixed cost at which cash stays flat =
@@ -329,11 +343,11 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
 
   // net-cash-flow labels: green above the up-stack when ≥0, red below the down-stack when <0
   const NetTop = (p: any) => {
-    const v = chartData[p.index]?.Net ?? 0; if (v < 0) return null;
+    const v = activeData[p.index]?.Net ?? 0; if (v < 0) return null;
     return <text x={p.x + p.width / 2} y={p.y - 8} textAnchor="middle" fontSize={14} fontWeight={700} fill="#006383">{fmt(v, true)}</text>;
   };
   const NetBottom = (p: any) => {
-    const v = chartData[p.index]?.Net ?? 0; if (v >= 0) return null;
+    const v = activeData[p.index]?.Net ?? 0; if (v >= 0) return null;
     return <text x={p.x + p.width / 2} y={p.y + 16} textAnchor="middle" fontSize={14} fontWeight={700} fill="#CC3366">{fmt(v, true)}</text>;
   };
 
@@ -485,24 +499,34 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         <Card className="p-6">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <h3 className="text-[20px] font-semibold">Projected cash &amp; bank balance</h3>
-            <div className="inline-flex rounded-lg border bg-muted/40 p-0.5 text-[13px] font-medium">
-              {([["both", "Both"], ["subs", "Subscriptions"], ["claims", "Claims (in-flight)"]] as const).map(([m, lbl]) => (
-                <button key={m} onClick={() => setChartMode(m)}
-                  className={cn("px-3 py-1 rounded-md transition-colors", chartMode === m ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}>
-                  {lbl}
-                </button>
-              ))}
+            <div className="flex items-center gap-2">
+              <div className="inline-flex rounded-lg border bg-muted/40 p-0.5 text-[13px] font-medium">
+                {([["weekly", "Weekly"], ["monthly", "Monthly"]] as const).map(([g, lbl]) => (
+                  <button key={g} onClick={() => setGranularity(g)}
+                    className={cn("px-3 py-1 rounded-md transition-colors", granularity === g ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+              <div className="inline-flex rounded-lg border bg-muted/40 p-0.5 text-[13px] font-medium">
+                {([["both", "Both"], ["subs", "Subscriptions"], ["claims", "Claims (in-flight)"]] as const).map(([m, lbl]) => (
+                  <button key={m} onClick={() => setChartMode(m)}
+                    className={cn("px-3 py-1 rounded-md transition-colors", chartMode === m ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-          <p className="text-[15px] text-muted-foreground mt-1">Each bar covers Mon–Sun; the label is that Monday. Click a bar to drill in. Number on each bar = that week's net cash flow.</p>
+          <p className="text-[15px] text-muted-foreground mt-1">{granularity === "weekly" ? "Each bar covers Mon–Sun; the label is that Monday. Click a bar to drill in. " : "Each bar covers one calendar month. "}Number on each bar = net cash flow for that {granularity === "weekly" ? "week" : "month"}.</p>
           <div className="flex items-center gap-2 text-[14px] mt-1 mb-1">
             <span className="text-muted-foreground">Bars (left axis) = weekly cash in/out</span>
             <span className="text-muted-foreground">·</span>
             <span className="font-medium" style={{ color: "#093E52" }}>Line (right axis) = projected bank balance</span>
           </div>
           <ResponsiveContainer width="100%" height={460}>
-            <ComposedChart data={chartData} stackOffset="sign" margin={{ top: 32, right: 24, bottom: 8, left: 8 }}
-              onClick={(e: any) => { const i = e?.activeTooltipIndex; if (typeof i === "number") setDrill(i); }}>
+            <ComposedChart data={activeData} stackOffset="sign" margin={{ top: 32, right: 24, bottom: 8, left: 8 }}
+              onClick={(e: any) => { const i = e?.activeTooltipIndex; if (granularity === "weekly" && typeof i === "number") setDrill(i); }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="label" stroke="#64748b" fontSize={14} />
               <YAxis yAxisId="c" stroke="#64748b" fontSize={14} tickFormatter={(v) => fmt(v, true)} />
