@@ -128,28 +128,21 @@ function Metric({ label, value, sub }: { label: string; value: string; sub?: str
 function ChartTip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const d = payload[0]?.payload ?? {};
-  const rev = (d.Primary ?? 0) + (d.Secondary ?? 0) + (d["In-flight"] ?? 0);
-  const prod = -(d.Cost ?? 0);
-  const gm = rev - prod;
-  const gmP = rev ? Math.round((gm / rev) * 100) : 0;
-  const pmP = rev ? Math.round(((d.Net ?? 0) / rev) * 100) : 0;
+  const rev = d.Revenue ?? 0, cost = d.Cost ?? 0, burn = d.Burn ?? 0, net = d.Net ?? 0;
+  const pmP = rev ? Math.round((net / rev) * 100) : 0;
   const row = (l: string, v: number, c: string) => (
     <div className="flex items-center justify-between gap-6 text-[14px]"><span style={{ color: c }}>{l}</span><span className="tabular-nums font-medium" style={{ color: c }}>{fmt(v)}</span></div>
   );
   return (
     <div className="rounded-lg border bg-white px-3 py-2 shadow-md">
-      <div className="text-[15px] font-semibold mb-1">Week of {d.label}</div>
-      {row("Primary in", d.Primary ?? 0, "#006383")}
-      {row("Secondary in", d.Secondary ?? 0, "#80ADAA")}
-      {row("In-flight claims", d["In-flight"] ?? 0, "#4C9A93")}
-      {row("Product cost", d.Cost ?? 0, "#CC3366")}
-      {row("Supplier draw", d.Supplier ?? 0, "#066FAC")}
-      {row("Fixed burn", d.Burn ?? 0, "#98A2B3")}
-      <div className="mt-1 border-t pt-1">{row("Net cash flow", d.Net ?? 0, (d.Net ?? 0) >= 0 ? "#006383" : "#CC3366")}</div>
+      <div className="text-[15px] font-semibold mb-1">{d.label}</div>
+      {row("Revenue in", rev, "#006383")}
+      {row("Cost (product + supplier)", cost, "#CC3366")}
+      {row("Fixed burn", burn, "#98A2B3")}
+      <div className="mt-1 border-t pt-1">{row("Net cash flow", net, net >= 0 ? "#006383" : "#CC3366")}</div>
       {row("Bank balance (end)", d.Balance ?? 0, "#093E52")}
       <div className="mt-1 border-t pt-1 text-[14px]">
-        <div className="flex items-center justify-between gap-6"><span className="text-muted-foreground">Gross margin</span><span className="tabular-nums font-medium">{fmt(gm)} · {gmP}%</span></div>
-        <div className="flex items-center justify-between gap-6"><span className="text-muted-foreground">Profit margin</span><span className="tabular-nums font-medium">{rev && pmP >= 0 ? `${pmP}%` : "n/a"}</span></div>
+        <div className="flex items-center justify-between gap-6"><span className="text-muted-foreground">Net margin</span><span className="tabular-nums font-medium">{rev ? `${pmP}%` : "n/a"}</span></div>
       </div>
     </div>
   );
@@ -171,6 +164,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const [combosOpen, setCombosOpen] = useState(false);
   const [chartMode, setChartMode] = useState<"both" | "subs" | "claims">("both");
   const [subFixed, setSubFixed] = useState(30000);   // fixed monthly expense for the 3-month profit outlook
+  const [outReorder, setOutReorder] = useState(100); // reorder rate % for the outlook
+  const [outCollection, setOutCollection] = useState(100); // collection rate % for the outlook
+  const [outNewPerMo, setOutNewPerMo] = useState(0); // new patients / month for the outlook
   const [granularity, setGranularity] = useState<"weekly" | "monthly">("weekly");
 
   const subs: SubRow[] = useMemo(() => (subData ?? []).map((p: any) => ({
@@ -283,37 +279,42 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     const addD = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
     const dd = (a: Date, b: Date) => Math.round((a.getTime() - b.getTime()) / 86400000);
     const fmtD = (d: Date) => d.toLocaleString("en-US", { month: "short", day: "numeric" });
-    const W = 30, H = 90;
+    const W = 30, H = 90, rr = outReorder / 100, cr = outCollection / 100;
     const buckets = [0, 1, 2].map((i) => ({ label: `${fmtD(addD(today, i * W))} – ${fmtD(addD(today, i * W + W - 1))}`, revenue: 0, gp: 0 }));
     for (const s of subs) {
       if ((s.group_title || "").toLowerCase().includes("not active")) continue;
       const rev = s.total_revenue || 0; if (rev <= 0) continue;
       const cost = s.total_gp !== 0 ? rev - s.total_gp : (s.total_cost || 0) + (s.shipping_cost || 0);
-      const gp = rev - cost;
       const base = parse(s.next_order_date); if (!base) continue;
       const isMcd = (s.primary_insurance || "").trim() === "Medicaid";
       const dates = [base];
       if (isMcd) { let d = addD(base, 60); while (dd(d, today) < H) { dates.push(d); d = addD(d, 60); } }
       for (const d of dates) {
         const off = dd(d, today); if (off < 0 || off >= H) continue;
-        const idx = Math.floor(off / W); if (idx >= 0 && idx < 3) { buckets[idx].revenue += rev; buckets[idx].gp += gp; }
+        const idx = Math.floor(off / W); if (idx < 0 || idx >= 3) continue;
+        const revEff = rev * rr * cr, costEff = cost * rr;          // reorder scales orders; collection scales revenue only
+        buckets[idx].revenue += revEff; buckets[idx].gp += revEff - costEff;
       }
     }
-    return buckets.map((b) => ({ ...b, net: b.gp - subFixed }));
-  }, [subs, today, subFixed]);
+    // New patients: outNewPerMo added each month at roster averages, cumulative by month.
+    buckets.forEach((b, i) => {
+      const nNew = (i + 1) * outNewPerMo;
+      const addRev = nNew * fin.avgRev * rr * cr, addCost = nNew * fin.avgCost * rr;
+      b.revenue += addRev; b.gp += addRev - addCost;
+    });
+    return buckets.map((b) => ({ ...b, net: b.gp - subFixed, gmPct: b.revenue ? (b.gp / b.revenue) * 100 : 0 }));
+  }, [subs, today, subFixed, outReorder, outCollection, outNewPerMo, fin.avgRev, fin.avgCost]);
 
   const chartData = (() => {
     let bal = startingCash;
     return res.weekly.map((w) => {
       const rev = (showSubs ? w.primary + w.secondary : 0) + (showClaims ? w.inflight : 0);
-      const cost = showSubs ? w.cost : 0;                    // product cost belongs to subscriptions
-      const net = rev - cost - w.supplier - w.burn; bal += net;
-      return {
-        label: mLabel(w.mon),
-        Primary: showSubs ? Math.round(w.primary) : 0, Secondary: showSubs ? Math.round(w.secondary) : 0,
-        "In-flight": showClaims ? Math.round(w.inflight) : 0, Cost: -Math.round(cost),
-        Supplier: -Math.round(w.supplier), Burn: -Math.round(w.burn), Net: Math.round(net), Balance: Math.round(bal),
-      };
+      const cost = (showSubs ? w.cost : 0) + w.supplier;    // variable cash out (product cost + supplier paydown)
+      const burn = w.burn;                                   // fixed burn
+      const net = rev - cost - burn; bal += net;
+      // Revenue and Cost are their own columns; Net + Burn stack into a 3rd column whose
+      // top = rev − cost, so the Burn segment is the visible gap between net profit and that level.
+      return { label: mLabel(w.mon), Revenue: Math.round(rev), Cost: Math.round(cost), Net: Math.round(net), Burn: Math.round(burn), Balance: Math.round(bal) };
     });
   })();
   // Monthly view: roll the weekly bars up by the calendar month of each week's Monday.
@@ -322,9 +323,8 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     const byMonth: Record<string, any> = {};
     chartData.forEach((d, i) => {
       const mk = res.weekly[i].mon.slice(0, 7);
-      const b = (byMonth[mk] ??= { label: new Date(+mk.slice(0, 4), +mk.slice(5, 7) - 1, 1).toLocaleString("en-US", { month: "short", year: "2-digit" }), Primary: 0, Secondary: 0, "In-flight": 0, Cost: 0, Supplier: 0, Burn: 0, Net: 0, Balance: 0 });
-      b.Primary += d.Primary; b.Secondary += d.Secondary; b["In-flight"] += d["In-flight"];
-      b.Cost += d.Cost; b.Supplier += d.Supplier; b.Burn += d.Burn; b.Net += d.Net; b.Balance = d.Balance;
+      const b = (byMonth[mk] ??= { label: new Date(+mk.slice(0, 4), +mk.slice(5, 7) - 1, 1).toLocaleString("en-US", { month: "short", year: "2-digit" }), Revenue: 0, Cost: 0, Net: 0, Burn: 0, Balance: 0 });
+      b.Revenue += d.Revenue; b.Cost += d.Cost; b.Net += d.Net; b.Burn += d.Burn; b.Balance = d.Balance;
     });
     return Object.values(byMonth);
   })();
@@ -340,16 +340,6 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     return avg * 52 / 12;
   })();
   const updated = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
-
-  // net-cash-flow labels: green above the up-stack when ≥0, red below the down-stack when <0
-  const NetTop = (p: any) => {
-    const v = activeData[p.index]?.Net ?? 0; if (v < 0) return null;
-    return <text x={p.x + p.width / 2} y={p.y - 8} textAnchor="middle" fontSize={14} fontWeight={700} fill="#006383">{fmt(v, true)}</text>;
-  };
-  const NetBottom = (p: any) => {
-    const v = activeData[p.index]?.Net ?? 0; if (v >= 0) return null;
-    return <text x={p.x + p.width / 2} y={p.y + 16} textAnchor="middle" fontSize={14} fontWeight={700} fill="#CC3366">{fmt(v, true)}</text>;
-  };
 
   return (
     <div className={embedded ? "" : "min-h-screen bg-muted/20"}>
@@ -470,9 +460,12 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
               <h3 className="text-[20px] font-semibold">3-month profit outlook · subscriptions only</h3>
               <p className="text-[13px] text-muted-foreground mt-1">Orders bucketed by order date into rolling 30-day months (incl. Medicaid reorders). Revenue paid ~30 days out, cost ~30 days out. Net profit = gross profit − fixed monthly expense.</p>
             </div>
-            <div className="w-44">
-              <MoneyIn label="Fixed monthly expense" value={subFixed} onChange={setSubFixed} />
-            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+            <MoneyIn label="Fixed monthly expense" value={subFixed} onChange={setSubFixed} />
+            <NumIn label="Reorder rate" value={outReorder} onChange={setOutReorder} suffix="%" />
+            <NumIn label="Collection rate" value={outCollection} onChange={setOutCollection} suffix="%" />
+            <NumIn label="New patients / mo" value={outNewPerMo} onChange={setOutNewPerMo} suffix="+" />
           </div>
           <ResponsiveContainer width="100%" height={340}>
             <ComposedChart data={profitOutlook} margin={{ top: 24, right: 16, bottom: 4, left: 8 }}>
@@ -487,6 +480,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
               </Bar>
               <Bar dataKey="gp" fill="#4C9A93" name="Gross profit">
                 <LabelList dataKey="gp" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+                <LabelList dataKey="gmPct" position="center" formatter={(v: any) => `${(v as number).toFixed(0)}%`} fontSize={12} fontWeight={700} fill="#ffffff" />
               </Bar>
               <Bar dataKey="net" fill="#093E52" name={`Net profit (after ${fmt(subFixed, true)} fixed)`}>
                 <LabelList dataKey="net" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={700} fill="#093E52" />
@@ -533,13 +527,19 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
               <YAxis yAxisId="b" orientation="right" stroke="#093E52" fontSize={14} tickFormatter={(v) => fmt(v, true)} />
               <Tooltip content={<ChartTip />} />
               <Legend wrapperStyle={{ fontSize: 14 }} />
-              <ReferenceLine yAxisId="b" y={0} stroke="#ef4444" strokeDasharray="4 4" />
-              {showSubs && <Bar yAxisId="c" dataKey="Primary" stackId="a" fill="#006383" />}
-              {showSubs && <Bar yAxisId="c" dataKey="Secondary" stackId="a" fill="#80ADAA">{!showClaims && <LabelList position="top" content={NetTop} />}</Bar>}
-              {showClaims && <Bar yAxisId="c" dataKey="In-flight" stackId="a" fill="#4C9A93"><LabelList position="top" content={NetTop} /></Bar>}
-              {showSubs && <Bar yAxisId="c" dataKey="Cost" stackId="a" fill="#CC3366" />}
-              <Bar yAxisId="c" dataKey="Supplier" stackId="a" fill="#066FAC" />
-              <Bar yAxisId="c" dataKey="Burn" stackId="a" fill="#98A2B3"><LabelList position="bottom" content={NetBottom} /></Bar>
+              <ReferenceLine yAxisId="c" y={0} stroke="#94a3b8" />
+              <Bar yAxisId="c" dataKey="Revenue" fill="#006383" name="Revenue">
+                <LabelList position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+              </Bar>
+              <Bar yAxisId="c" dataKey="Cost" fill="#CC3366" name="Cost (product + supplier)">
+                <LabelList position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+              </Bar>
+              <Bar yAxisId="c" dataKey="Net" stackId="np" fill="#093E52" name="Net profit">
+                <LabelList dataKey="Net" position="center" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={700} fill="#ffffff" />
+              </Bar>
+              <Bar yAxisId="c" dataKey="Burn" stackId="np" fill="#98A2B3" name="Fixed burn (gap)">
+                <LabelList dataKey="Burn" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+              </Bar>
               <Line yAxisId="b" type="monotone" dataKey="Balance" stroke="#093E52" strokeWidth={2.5} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
