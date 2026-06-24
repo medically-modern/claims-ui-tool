@@ -313,9 +313,8 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
       const cost = (showSubs ? w.cost : 0) + w.supplier;    // variable cash out (product cost + supplier paydown)
       const burn = w.burn;                                   // fixed burn
       const net = rev - cost - burn; bal += net;
-      // Revenue and Cost are their own columns; Net + Burn stack into a 3rd column whose
-      // top = rev − cost, so the Burn segment is the visible gap between net profit and that level.
-      return { label: mLabel(w.mon), Revenue: Math.round(rev), Cost: Math.round(cost), Net: Math.round(net), Burn: Math.round(burn), Balance: Math.round(bal) };
+      // Cost column stacks product+supplier (Cost) with fixed Burn on top; Net is its own column.
+      return { label: mLabel(w.mon), Revenue: Math.round(rev), Cost: Math.round(cost), Burn: Math.round(burn), TotalCost: Math.round(cost + burn), Net: Math.round(net), Balance: Math.round(bal) };
     });
   })();
   // Monthly view: roll the weekly bars up by the calendar month of each week's Monday.
@@ -324,8 +323,8 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     const byMonth: Record<string, any> = {};
     chartData.forEach((d, i) => {
       const mk = res.weekly[i].mon.slice(0, 7);
-      const b = (byMonth[mk] ??= { label: new Date(+mk.slice(0, 4), +mk.slice(5, 7) - 1, 1).toLocaleString("en-US", { month: "short", year: "2-digit" }), Revenue: 0, Cost: 0, Net: 0, Burn: 0, Balance: 0 });
-      b.Revenue += d.Revenue; b.Cost += d.Cost; b.Net += d.Net; b.Burn += d.Burn; b.Balance = d.Balance;
+      const b = (byMonth[mk] ??= { label: new Date(+mk.slice(0, 4), +mk.slice(5, 7) - 1, 1).toLocaleString("en-US", { month: "short", year: "2-digit" }), Revenue: 0, Cost: 0, Net: 0, Burn: 0, TotalCost: 0, Balance: 0 });
+      b.Revenue += d.Revenue; b.Cost += d.Cost; b.Net += d.Net; b.Burn += d.Burn; b.TotalCost += d.TotalCost; b.Balance = d.Balance;
     });
     return Object.values(byMonth);
   })();
@@ -532,14 +531,15 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
               <Bar yAxisId="c" dataKey="Revenue" fill="#006383" name="Revenue">
                 <LabelList position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
               </Bar>
-              <Bar yAxisId="c" dataKey="Cost" fill="#CC3366" name="Cost (product + supplier)">
-                <LabelList position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+              <Bar yAxisId="c" dataKey="Cost" stackId="cost" fill="#CC3366" name="Cost (product + supplier)">
+                <LabelList dataKey="Cost" position="center" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#ffffff" />
               </Bar>
-              <Bar yAxisId="c" dataKey="Net" stackId="np" fill="#093E52" name="Net profit">
-                <LabelList dataKey="Net" position="center" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={700} fill="#ffffff" />
+              <Bar yAxisId="c" dataKey="Burn" stackId="cost" fill="#98A2B3" name="Fixed burn">
+                <LabelList dataKey="Burn" position="center" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#ffffff" />
+                <LabelList dataKey="TotalCost" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
               </Bar>
-              <Bar yAxisId="c" dataKey="Burn" stackId="np" fill="#98A2B3" name="Fixed burn (gap)">
-                <LabelList dataKey="Burn" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+              <Bar yAxisId="c" dataKey="Net" fill="#093E52" name="Net profit">
+                <LabelList dataKey="Net" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={700} fill="#093E52" />
               </Bar>
               <Line yAxisId="b" type="monotone" dataKey="Balance" stroke="#093E52" strokeWidth={2.5} dot={false} />
             </ComposedChart>
