@@ -279,8 +279,9 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
     const addD = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
     const dd = (a: Date, b: Date) => Math.round((a.getTime() - b.getTime()) / 86400000);
     const fmtD = (d: Date) => d.toLocaleString("en-US", { month: "short", day: "numeric" });
-    const W = 30, H = 90, rr = outReorder / 100, cr = outCollection / 100;
-    const buckets = [0, 1, 2].map((i) => ({ label: `${fmtD(addD(today, i * W))} – ${fmtD(addD(today, i * W + W - 1))}`, revenue: 0, gp: 0 }));
+    const W = 30, H = 90, LAG = 30, rr = outReorder / 100, cr = outCollection / 100;
+    // Cash-timing: label each month by when the cash lands (order date + 30-day lag).
+    const buckets = [0, 1, 2].map((i) => ({ label: `${fmtD(addD(today, i * W + LAG))} – ${fmtD(addD(today, i * W + LAG + W - 1))}`, revenue: 0, gp: 0 }));
     for (const s of subs) {
       if ((s.group_title || "").toLowerCase().includes("not active")) continue;
       const rev = s.total_revenue || 0; if (rev <= 0) continue;
@@ -458,7 +459,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <h3 className="text-[20px] font-semibold">3-month profit outlook · subscriptions only</h3>
-              <p className="text-[13px] text-muted-foreground mt-1">Orders bucketed by order date into rolling 30-day months (incl. Medicaid reorders). Revenue paid ~30 days out, cost ~30 days out. Net profit = gross profit − fixed monthly expense.</p>
+              <p className="text-[13px] text-muted-foreground mt-1">Cash-timing: each month is when cash lands (order date + 30 days), incl. Medicaid reorders. Net profit = gross profit − fixed monthly expense.</p>
             </div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
