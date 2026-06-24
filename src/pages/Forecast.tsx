@@ -289,10 +289,10 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
       const base = parse(s.next_order_date); if (!base) continue;
       const isMcd = (s.primary_insurance || "").trim() === "Medicaid";
       const dates = [base];
-      if (isMcd) { let d = addD(base, 60); while (dd(d, today) < H) { dates.push(d); d = addD(d, 60); } }
+      if (isMcd) { let d = addD(base, 60); while (dd(d, today) <= H) { dates.push(d); d = addD(d, 60); } }
       for (const d of dates) {
-        const off = dd(d, today); if (off < 0 || off >= H) continue;
-        const idx = Math.floor(off / W); if (idx < 0 || idx >= 3) continue;
+        const off = dd(d, today); if (off < 0 || off > H) continue;   // include day 90
+        const idx = Math.min(2, Math.floor(off / W));
         const revEff = rev * rr * cr, costEff = cost * rr;          // reorder scales orders; collection scales revenue only
         buckets[idx].revenue += revEff; buckets[idx].gp += revEff - costEff;
       }
@@ -366,7 +366,8 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         <Card className="p-5">
           <div className="text-[18px] font-semibold mb-3">Key financials</div>
           <div className="grid grid-cols-2 gap-x-8 gap-y-4 md:grid-cols-3 xl:grid-cols-6">
-            <Metric label="Active patients" value={fin.N.toLocaleString()} />
+            <Metric label="Active patients" value={fin.N.toLocaleString()} sub="unique patients" />
+            <Metric label="Total subscriptions" value={(mix.sensors.subs + mix.supplies.subs).toLocaleString()} sub={`${mix.sensors.subs} sensors + ${mix.supplies.subs} supplies`} />
             <Metric label="ARR (annual recurring rev)" value={fmt(fin.arr, true)} sub={`avg order rev ${fmt(fin.avgRev)}`} />
             <Metric label="ARP (annual recurring profit)" value={fmt(fin.arp, true)} sub={`avg order cost ${fmt(fin.avgCost)}`} />
             <Metric label="Gross margin" value={`${fin.gmPct.toFixed(1)}%`} sub={`avg GP/order ${fmt(fin.avgGP)}`} />
@@ -519,7 +520,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             <span className="font-medium" style={{ color: "#093E52" }}>Line (right axis) = projected bank balance</span>
           </div>
           <ResponsiveContainer width="100%" height={460}>
-            <ComposedChart data={activeData} stackOffset="sign" margin={{ top: 32, right: 24, bottom: 8, left: 8 }}
+            <ComposedChart data={activeData} margin={{ top: 32, right: 24, bottom: 8, left: 8 }}
               onClick={(e: any) => { const i = e?.activeTooltipIndex; if (granularity === "weekly" && typeof i === "number") setDrill(i); }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="label" stroke="#64748b" fontSize={14} />
@@ -528,18 +529,18 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
               <Tooltip content={<ChartTip />} />
               <Legend wrapperStyle={{ fontSize: 14 }} />
               <ReferenceLine yAxisId="c" y={0} stroke="#94a3b8" />
-              <Bar yAxisId="c" dataKey="Revenue" fill="#006383" name="Revenue">
-                <LabelList position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
+              {/* Waterfall: one column = revenue, split bottom→top into Net, Burn, Cost.
+                  Cost sits at the top (descends from revenue); burn below it; net is what's
+                  left, rising from 0 to where the burn segment starts. */}
+              <Bar yAxisId="c" dataKey="Net" stackId="wf" fill="#093E52" name="Net profit">
+                <LabelList dataKey="Net" position="center" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={700} fill="#ffffff" />
               </Bar>
-              <Bar yAxisId="c" dataKey="Cost" stackId="cost" fill="#CC3366" name="Cost (product + supplier)">
-                <LabelList dataKey="Cost" position="center" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#ffffff" />
-              </Bar>
-              <Bar yAxisId="c" dataKey="Burn" stackId="cost" fill="#98A2B3" name="Fixed burn">
+              <Bar yAxisId="c" dataKey="Burn" stackId="wf" fill="#98A2B3" name="Fixed burn">
                 <LabelList dataKey="Burn" position="center" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#ffffff" />
-                <LabelList dataKey="TotalCost" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#334155" />
               </Bar>
-              <Bar yAxisId="c" dataKey="Net" fill="#093E52" name="Net profit">
-                <LabelList dataKey="Net" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={700} fill="#093E52" />
+              <Bar yAxisId="c" dataKey="Cost" stackId="wf" fill="#CC3366" name="Cost (product + supplier)">
+                <LabelList dataKey="Cost" position="center" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={600} fill="#ffffff" />
+                <LabelList dataKey="Revenue" position="top" formatter={(v: any) => fmt(v as number, true)} fontSize={11} fontWeight={700} fill="#006383" />
               </Bar>
               <Line yAxisId="b" type="monotone" dataKey="Balance" stroke="#093E52" strokeWidth={2.5} dot={false} />
             </ComposedChart>
