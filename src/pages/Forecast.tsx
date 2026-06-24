@@ -170,7 +170,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
   const [mixOpen, setMixOpen] = useState<string | null>(null);
   const [combosOpen, setCombosOpen] = useState(false);
   const [chartMode, setChartMode] = useState<"both" | "subs" | "claims">("both");
-  const [subFixed, setSubFixed] = useState(60000);   // fixed monthly expense for the 3-month profit outlook
+  const [subFixed, setSubFixed] = useState(30000);   // fixed monthly expense for the 3-month profit outlook
 
   const subs: SubRow[] = useMemo(() => (subData ?? []).map((p: any) => ({
     group_title: p.isNotActive ? "Not Active Patients" : "Subscriptions",
