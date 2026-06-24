@@ -366,8 +366,11 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         <Card className="p-5">
           <div className="text-[18px] font-semibold mb-3">Key financials</div>
           <div className="grid grid-cols-2 gap-x-8 gap-y-4 md:grid-cols-3 xl:grid-cols-6">
-            <Metric label="Active patients" value={fin.N.toLocaleString()} sub="unique patients" />
-            <Metric label="Total subscriptions" value={(mix.sensors.subs + mix.supplies.subs).toLocaleString()} sub={`${mix.sensors.subs} sensors + ${mix.supplies.subs} supplies`} />
+            <div>
+              <div className="text-[22px] font-semibold tabular-nums leading-tight">{fin.N.toLocaleString()} <span className="text-[14px] font-normal text-muted-foreground">active unique patients</span></div>
+              <div className="text-[22px] font-semibold tabular-nums leading-tight mt-1">{(mix.sensors.subs + mix.supplies.subs).toLocaleString()} <span className="text-[14px] font-normal text-muted-foreground">total subscriptions</span></div>
+              <div className="text-[13px] text-muted-foreground mt-1">{mix.sensors.subs} sensors + {mix.supplies.subs} supplies</div>
+            </div>
             <Metric label="ARR (annual recurring rev)" value={fmt(fin.arr, true)} sub={`avg order rev ${fmt(fin.avgRev)}`} />
             <Metric label="ARP (annual recurring profit)" value={fmt(fin.arp, true)} sub={`avg order cost ${fmt(fin.avgCost)}`} />
             <Metric label="Gross margin" value={`${fin.gmPct.toFixed(1)}%`} sub={`avg GP/order ${fmt(fin.avgGP)}`} />
