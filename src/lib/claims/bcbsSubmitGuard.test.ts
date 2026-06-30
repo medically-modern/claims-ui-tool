@@ -12,6 +12,7 @@ import {
   ANTHEM_NY_PAYER_ID,
   CARECENTRIX_NJ_PAYER_ID,
   BCBS_TN_PAYER_ID,
+  BCBS_WY_PAYER_ID,
   resolveLabelRoutedBluePlan,
 } from "./bcbsSubmitGuard";
 
@@ -471,5 +472,61 @@ describe("evaluateBcbsSubmit — BCBS Tennessee (CareCentrix, 11345)", () => {
     expect(resolveLabelRoutedBluePlan("BCBS TN", null)?.payerId).toBe(BCBS_TN_PAYER_ID);
     expect(resolveLabelRoutedBluePlan(null, "11345")?.payerId).toBe(BCBS_TN_PAYER_ID);
     expect(resolveLabelRoutedBluePlan("Anthem BCBS", "803")).toBeNull();
+  });
+});
+
+
+describe("evaluateBcbsSubmit — BCBS Wyoming (direct, 53767)", () => {
+  it("clears a clean WY claim: 53767 + POS Home, no 803/Office forcing (Sue Snider Guerra)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "BCBS Wyoming",
+      payorId: BCBS_WY_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "OTHER",
+      lineAuthIds: ["AUTH"],
+    });
+    expect(r.applies).toBe(true);
+    expect(r.hardStops).toEqual([]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("does NOT force 803/Office for a WY patient (the old BlueCard trap)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "BCBS Wyoming",
+      payorId: BCBS_WY_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "OTHER",
+      lineAuthIds: ["AUTH"],
+    });
+    expect(r.hardStops.some((h) => h.code === "WRONG_PAYER_OTHER")).toBe(false);
+    expect(r.hardStops.some((h) => h.code === "WRONG_POS_OTHER")).toBe(false);
+  });
+
+  it("keeps the row's POS — Office does NOT hard-stop for WY (requiredPos null)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "BCBS Wyoming",
+      payorId: BCBS_WY_PAYER_ID,
+      placeOfService: "Office",
+      patientState: "OTHER",
+      lineAuthIds: ["AUTH"],
+    });
+    expect(r.hardStops).toEqual([]);
+  });
+
+  it("hard-stops when a WY claim has the wrong payer ID (e.g. left on 803)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "BCBS Wyoming",
+      payorId: "803",
+      placeOfService: "Home",
+      patientState: "OTHER",
+      lineAuthIds: ["AUTH"],
+    });
+    expect(r.hardStops.some((h) => h.code === "WRONG_PAYER_LABEL_ROUTED")).toBe(true);
+  });
+
+  it("resolveLabelRoutedBluePlan matches WY by label and by 53767 id", () => {
+    expect(resolveLabelRoutedBluePlan("BCBS Wyoming", null)?.payerId).toBe(BCBS_WY_PAYER_ID);
+    expect(resolveLabelRoutedBluePlan(null, "53767")?.payerId).toBe(BCBS_WY_PAYER_ID);
+    expect(resolveLabelRoutedBluePlan("BCBS Wyoming", null)?.requiredPos).toBeNull();
   });
 });

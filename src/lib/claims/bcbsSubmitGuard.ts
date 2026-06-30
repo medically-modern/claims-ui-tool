@@ -36,9 +36,17 @@ export const CARECENTRIX_NJ_PAYER_ID = "11348";
  *  patient state. POS is Home (12). */
 export const BCBS_TN_PAYER_ID = "11345";
 
+/** BCBS Wyoming is a DIRECT-bill exception: claims go straight to BCBS WY
+ *  (payer ID 53767), not through Anthem NY's BlueCard routing (803 + POS
+ *  11). Routed by label like BCBS TN, but POS is left as-is — see the
+ *  null requiredPos below. */
+export const BCBS_WY_PAYER_ID = "53767";
+
 interface LabelRoutedBluePlan {
   payerId: string;
-  requiredPos: "Home" | "Office";
+  /** Required POS for the plan, or null to leave the row's POS alone
+   *  (BCBS WY direct-bills at whatever POS is set). */
+  requiredPos: "Home" | "Office" | null;
   label: string;
 }
 
@@ -47,6 +55,7 @@ interface LabelRoutedBluePlan {
  *  the first. */
 const LABEL_ROUTED_BLUE_PLANS: LabelRoutedBluePlan[] = [
   { payerId: BCBS_TN_PAYER_ID, requiredPos: "Home", label: "BCBS Tennessee (CareCentrix)" },
+  { payerId: BCBS_WY_PAYER_ID, requiredPos: null, label: "BCBS Wyoming" },
 ];
 
 /** Resolve a label-routed Blue plan from the payer label or PR Payor ID.
@@ -62,6 +71,9 @@ export function resolveLabelRoutedBluePlan(
   const s = (payerLabel || "").toLowerCase();
   if (s.includes("bcbs tn") || s.includes("tennessee")) {
     return LABEL_ROUTED_BLUE_PLANS.find((p) => p.payerId === BCBS_TN_PAYER_ID) ?? null;
+  }
+  if (s.includes("wyoming") || s.includes("bcbs wy")) {
+    return LABEL_ROUTED_BLUE_PLANS.find((p) => p.payerId === BCBS_WY_PAYER_ID) ?? null;
   }
   return null;
 }
@@ -295,7 +307,7 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
       });
     }
     const lrPos = input.placeOfService ?? "Home";
-    if (lrPos !== labelRouted.requiredPos) {
+    if (labelRouted.requiredPos && lrPos !== labelRouted.requiredPos) {
       hardStops.push({
         code: "WRONG_POS_LABEL_ROUTED",
         message: `${labelRouted.label} bills at POS ${
