@@ -404,8 +404,8 @@ describe("evaluateBcbsSubmit — scope detection by payor ID alone", () => {
 });
 
 
-describe("evaluateBcbsSubmit — BCBS Tennessee (CareCentrix, 11345)", () => {
-  it("clears a clean TN claim: 11345 + POS Home + NU lines, no 803/Office stops", () => {
+describe("evaluateBcbsSubmit — BCBS Tennessee (direct, SB890)", () => {
+  it("clears a clean TN claim: SB890 + POS Home + NU lines, no 803/Office stops", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "BCBS TN",
       payorId: BCBS_TN_PAYER_ID,
@@ -468,9 +468,9 @@ describe("evaluateBcbsSubmit — BCBS Tennessee (CareCentrix, 11345)", () => {
     expect(r.hardStops).toEqual([]);
   });
 
-  it("resolveLabelRoutedBluePlan matches by label and by 11345 id", () => {
+  it("resolveLabelRoutedBluePlan matches by label and by SB890 id", () => {
     expect(resolveLabelRoutedBluePlan("BCBS TN", null)?.payerId).toBe(BCBS_TN_PAYER_ID);
-    expect(resolveLabelRoutedBluePlan(null, "11345")?.payerId).toBe(BCBS_TN_PAYER_ID);
+    expect(resolveLabelRoutedBluePlan(null, "SB890")?.payerId).toBe(BCBS_TN_PAYER_ID);
     expect(resolveLabelRoutedBluePlan("Anthem BCBS", "803")).toBeNull();
   });
 });

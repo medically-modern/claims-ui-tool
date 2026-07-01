@@ -30,11 +30,10 @@ export const ANTHEM_NY_PAYER_ID = "803";
  *  patient lives in NJ, regardless of what their card says. */
 export const CARECENTRIX_NJ_PAYER_ID = "11348";
 
-/** BCBS Tennessee is CareCentrix-fronted: claims bill to the CareCentrix
- *  trading partner 11345 (NOT a direct BCBS TN payer ID), the same gateway
- *  pattern as Horizon NJ (11348) — but routed by label rather than by
- *  patient state. POS is Home (12). */
-export const BCBS_TN_PAYER_ID = "11345";
+/** BCBS Tennessee bills DIRECT to the BCBS TN payer ID SB890 (previously
+ *  CareCentrix-fronted via trading partner 11345). Still routed by label
+ *  rather than by patient state, like BCBS WY. POS is Home (12). */
+export const BCBS_TN_PAYER_ID = "SB890";
 
 /** BCBS Wyoming is a DIRECT-bill exception: claims go straight to BCBS WY
  *  (payer ID 53767), not through Anthem NY's BlueCard routing (803 + POS
@@ -51,10 +50,10 @@ interface LabelRoutedBluePlan {
 }
 
 /** Blue plans routed to a fixed payer ID + POS by their LABEL, outside the
- *  NY/NJ/other state-based BlueCard logic. BCBS TN (CareCentrix 11345) is
+ *  NY/NJ/other state-based BlueCard logic. BCBS TN (direct, SB890) is
  *  the first. */
 const LABEL_ROUTED_BLUE_PLANS: LabelRoutedBluePlan[] = [
-  { payerId: BCBS_TN_PAYER_ID, requiredPos: "Home", label: "BCBS Tennessee (CareCentrix)" },
+  { payerId: BCBS_TN_PAYER_ID, requiredPos: "Home", label: "BCBS Tennessee" },
   { payerId: BCBS_WY_PAYER_ID, requiredPos: null, label: "BCBS Wyoming" },
 ];
 
@@ -289,9 +288,9 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
   const hardStops: BcbsHardStop[] = [];
   const warnings: BcbsWarning[] = [];
 
-  // ---- Label-routed Blue plans (e.g. BCBS TN via CareCentrix / 11345) ----
+  // ---- Label-routed Blue plans (e.g. BCBS TN direct / SB890) ----
   // Identified by label / payer ID rather than patient state. They bill to
-  // a fixed CareCentrix trading partner + POS, bypassing the state-based
+  // a fixed payer ID + POS, bypassing the state-based
   // 803/11348 routing below. We validate that the payer ID + POS match the
   // plan and (softly) that lines carry the plan's modifiers (NU).
   const labelRouted = resolveLabelRoutedBluePlan(input.payerLabel, input.payorId);
