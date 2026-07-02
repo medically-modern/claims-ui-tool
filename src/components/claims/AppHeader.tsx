@@ -8,7 +8,9 @@ export function AppHeader({
   showBack,
 }: {
   title: string;
-  subtitle?: string;
+  /** Plain string or JSX — ClaimDetail passes spans with `select-all`
+   *  so double-clicking DOB / DOS / Member ID grabs just that value. */
+  subtitle?: React.ReactNode;
   showBack?: boolean;
 }) {
   return (

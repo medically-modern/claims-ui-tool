@@ -1026,7 +1026,19 @@ const ClaimDetail = () => {
     <div className="min-h-screen bg-background pb-12">
       <AppHeader
         title={claim.patientName}
-        subtitle={`DOB ${fmtDate(claim.dob)} · DOS ${fmtDate(claim.dos)} · ${claim.primaryPayor} · Member ID ${claim.memberId}`}
+        subtitle={
+          // Each value sits in its own `select-all` span so a double-click
+          // (or single click-drag start) selects exactly that value —
+          // DOB, DOS, or Member ID — instead of a browser-picked word or
+          // the whole line. Operators copy these into payer portals all
+          // day; this makes it one double-click + Cmd-C per field.
+          <>
+            DOB <span className="select-all">{fmtDate(claim.dob)}</span>
+            {" · "}DOS <span className="select-all">{fmtDate(claim.dos)}</span>
+            {" · "}<span className="select-all">{claim.primaryPayor}</span>
+            {" · "}Member ID <span className="select-all">{claim.memberId}</span>
+          </>
+        }
         showBack
       />
 
