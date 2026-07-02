@@ -1045,16 +1045,15 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
     // we await it separately and surface a distinct error if it fails —
     // the status write is the authoritative "we billed them" record; the
     // trigger is the side-effect.
-    // Clear stale smsStatus immediately so the Stage 2 transition
-    // doesn't show Mark Paid based on a prior 'Delivered' label from
-    // an earlier send. Re-send overwrites Monday's column to '{}',
-    // then the Twilio -> Monday automation re-stamps Queued -> Sent
-    // -> Delivered as the new SMS goes out.
-    updateClaim(c.id, {
-      status: "Sent to Patient",
-      rawSecondaryStatus: "Outstanding",
-      smsStatus: undefined,
-    });
+    //
+    // NOTE: the local updateClaim is deliberately DEFERRED until after
+    // the writes complete. Updating optimistically here flipped
+    // rawSecondaryStatus to Outstanding immediately, which unmounted
+    // the Send Invoice button (and its Sending… spinner) and re-rendered
+    // the row as Stage 2 while the Monday writes were still in flight.
+    // The operator wants the sending indicator to hold until the SMS
+    // trigger actually fires, and only then have the row drop out of
+    // the bucket.
     void clearSmsStatus(c.mondayItemId).catch((e) => {
       console.warn("[sendInvoice] clearSmsStatus failed (non-fatal):", e);
     });
@@ -1075,6 +1074,17 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
     // retry the SMS automation.
     try {
       await fireSendInvoiceTrigger(c.mondayItemId);
+      // SMS trigger confirmed — NOW transition the row. Setting
+      // sendInvoiceTriggered routes bucketOf to outstandingInvoices,
+      // so the row disappears from the Patient bucket in the same
+      // render the spinner stops. smsStatus is cleared so a stale
+      // 'Delivered' from a prior send can't unlock Mark Paid.
+      updateClaim(c.id, {
+        status: "Sent to Patient",
+        rawSecondaryStatus: "Outstanding",
+        smsStatus: undefined,
+        sendInvoiceTriggered: true,
+      });
       toast({
         title: `Invoice sent: ${c.patientName}`,
         description: `Patient owes ${$(c.remaining)}. Status → Outstanding. SMS automation fired.`,
@@ -1084,6 +1094,15 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
       // transitions without operator action.
       schedulePollingRefetches();
     } catch (e) {
+      // Status flip DID land on Monday (authoritative) — mirror it
+      // locally even though the SMS trigger failed, but leave
+      // sendInvoiceTriggered false so the row stays visible in the
+      // Patient bucket for the operator to retry.
+      updateClaim(c.id, {
+        status: "Sent to Patient",
+        rawSecondaryStatus: "Outstanding",
+        smsStatus: undefined,
+      });
       toast({
         title: `Status saved but SMS trigger failed: ${c.patientName}`,
         description:
@@ -2847,11 +2866,11 @@ function SendToPatientBody({
         {(c.rawSecondaryStatus ?? "Submit") === "Submit" ? (
           // Stage 1 — invoice not yet sent. Send Invoice flips Secondary
           // Status to Outstanding AND fires the SMS trigger column. The
-          // button manages its own loading state (spinner + Sending…)
-          // until the Monday writes round-trip so the operator gets
-          // immediate feedback. Once the parent flips
-          // rawSecondaryStatus to Outstanding the row transitions to
-          // Stage 2 and the SmsStatusBadge takes over the visual story.
+          // button shows its Sending SMS… spinner for the FULL round-trip
+          // (status write + group move + SMS trigger) — sendInvoice only
+          // updates local state after the trigger confirms, at which point
+          // sendInvoiceTriggered flips and the row leaves this bucket for
+          // Outstanding Invoices in the same render.
           <SendInvoiceButton onClick={async () => { await onGenerate(); }} />
         ) : (
           // Stage 2 — invoice sent, awaiting SMS delivery + payment.
@@ -3531,7 +3550,7 @@ function SendInvoiceButton({ onClick }: { onClick: () => Promise<void> }) {
       className="h-8 bg-emerald-700 text-white hover:bg-emerald-800 transition-colors"
     >
       {sending ? (
-        <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Sending…</>
+        <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Sending SMS…</>
       ) : (
         <><FileText className="mr-1 h-3.5 w-3.5" /> Send Invoice</>
       )}
