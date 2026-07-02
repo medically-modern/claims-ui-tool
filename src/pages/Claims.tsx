@@ -1621,7 +1621,16 @@ const Claims = () => {
                                                         <TooltipContent>Rerun status check</TooltipContent>
                                                       </Tooltip>
                                                     </div>
-                                                    {typeof result.paidAmount === "number" && result.paidAmount > 0 && (
+                                                    {/* "$X expected" only makes sense when money is actually
+                                                        coming: Paid (F1, payment issued/forthcoming) or Pending
+                                                        (adjudicated, awaiting payment cycle). Payers echo an
+                                                        amount on non-final 277s too — Katherine Sosa's P3 info
+                                                        request carried amountPaid=700.28 and this pill read
+                                                        "$700.28 expected" on a claim that was parked awaiting
+                                                        docs. The backend now zeroes the column for other labels;
+                                                        this gate covers rows written before that fix. */}
+                                                    {typeof result.paidAmount === "number" && result.paidAmount > 0 &&
+                                                      (result.status === "Paid" || result.status === "Pending") && (
                                                       <span
                                                         className="inline-flex items-center rounded-full bg-success-soft px-2 py-0.5 text-xs font-medium text-success-soft-foreground"
                                                         title="Amount the payer reports for this claim on the 277 — expected payment"

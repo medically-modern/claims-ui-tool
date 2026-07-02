@@ -84,6 +84,7 @@ const BUCKETS: Bucket[] = [
   { id: "p-rejected",  label: "Rejected Primary",    fullLabel: "Rejected Primary · Awaiting Acceptance",     section: "Primary",   navTo: { board: "primary",   mode: "submit", primaryQueue: "awaiting" } },
   { id: "p-era",       label: "Review Primary",      fullLabel: "Review Primary · ERA Review",                section: "Primary",   navTo: { board: "primary",   mode: "review", primaryCategory: "era" } },
   { id: "p-late",      label: "Late Primary",        fullLabel: "Late ERAs Primary · Check Status",           section: "Primary",   navTo: { board: "primary",   mode: "review", primaryCategory: "late", lateSubTab: "check" } },
+  { id: "p-info-req",  label: "Info Requested",      fullLabel: "Payer Requests Info · send documentation",   section: "Primary",   navTo: { board: "primary",   mode: "review", primaryCategory: "late", lateSubTab: "check" } },
   { id: "p-denied",    label: "Denials",             fullLabel: "Denials",                                    section: "Primary",   navTo: { board: "primary",   mode: "review", primaryCategory: "denied" } },
   { id: "s-confirm",   label: "Confirm Secondary",   fullLabel: "Confirm Secondary Payor",                    section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "confirm" } },
   { id: "s-insurance", label: "Submit Secondary",    fullLabel: "Submit Secondary · Insurance",               section: "Secondary", navTo: { board: "secondary", mode: "submit", secondaryBucket: "insurance" } },
@@ -137,6 +138,22 @@ function inLateEraLocal(c: Claim): boolean {
 function inDeniedLocal(c: Claim): boolean {
   if (c.hasChildren) return false;
   return c.primaryStatus === "Denied (Or Partly)";
+}
+
+// Payer explicitly asked for information (status check came back
+// "Requests Info" — R* category, or P3/P4 "Pending/Provider|Patient
+// Requested Information" on the 277). These claims sit unpaid forever
+// until someone sends the docs, so they're an action item regardless
+// of how old the claim is — no age threshold like Late ERA. Rows drop
+// out when the ERA lands, the claim reaches a terminal status, or the
+// operator snoozes them after uploading the requested docs (same
+// snooze the Late ERA flow uses).
+function inInfoRequestedLocal(c: Claim): boolean {
+  if (c.hasChildren) return false;
+  if (c.claimStatusCategory !== "Requests Info") return false;
+  if (eraReceived(c)) return false;
+  const excluded = ["Paid", "Denied (Or Partly)", "Bad Debt", "Request Rejected"];
+  return !excluded.includes(c.primaryStatus);
 }
 
 function ageOldestFromDates(dates: Array<string | null | undefined>): string | null {
@@ -202,13 +219,20 @@ export function ActionItemsInbox({ onNavigate, className }: ActionItemsInboxProp
     // ── Primary Review ────────────────────────────────────────────
     if (primaryClaims) {
       const eraList    = primaryClaims.filter(inEraReviewLocal);
-      const lateList   = primaryClaims.filter(inLateEraLocal).filter((c) => !isLateEraSnoozed(c));
+      const infoList   = primaryClaims.filter(inInfoRequestedLocal).filter((c) => !isLateEraSnoozed(c));
+      // Info-requested rows get their own chip; keep them out of the
+      // generic Late chip so one claim doesn't light up two bars.
+      const lateList   = primaryClaims.filter(inLateEraLocal)
+        .filter((c) => !isLateEraSnoozed(c))
+        .filter((c) => !inInfoRequestedLocal(c));
       const deniedList = primaryClaims.filter(inDeniedLocal);
 
       out["p-era"]    = { count: eraList.length,
         oldestIso: ageOldestFromDates(eraList.map((c) => c.claimSentDate ?? c.dos)) };
       out["p-late"]   = { count: lateList.length,
         oldestIso: ageOldestFromDates(lateList.map((c) => c.claimSentDate ?? c.dos)) };
+      out["p-info-req"] = { count: infoList.length,
+        oldestIso: ageOldestFromDates(infoList.map((c) => c.claimSentDate ?? c.dos)) };
       out["p-denied"] = { count: deniedList.length,
         oldestIso: ageOldestFromDates(deniedList.map((c) => c.claimSentDate ?? c.dos)) };
     }
