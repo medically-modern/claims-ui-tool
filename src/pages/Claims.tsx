@@ -65,7 +65,7 @@ import { snoozeLateEra, isSnoozeLateEraConfigured, SnoozeLateEraError } from "@/
 import { ActionItemsInbox } from "@/components/claims/ActionItemsInbox";
 import { ClaimNotePopover } from "@/components/claims/ClaimNotePopover";
 import {
-  AlertTriangle, ArrowRight, Check, Clock, FileJson, FileSearch, MoreHorizontal, RefreshCw, Search, Send, Wallet, XCircle,
+  AlertTriangle, ArrowRight, Check, Clock, FileJson, FileSearch, FileText, MoreHorizontal, RefreshCw, Search, Send, Wallet, XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -160,13 +160,19 @@ const STATUS_CHECK_OPTIONS: StatusCheckResult[] = [
 ];
 
 type TriageRec = "keep" | "denial";
-const STATUS_CHECK_META: Record<StatusCheckResult, { tone: string; recommend: TriageRec }> = {
+// icon: optional glyph rendered inside the status pill. Only Requests
+// Info carries one today — it's the pill that demands operator action
+// (payer is waiting on paperwork), so it gets a document icon + a
+// distinct orange tone. Without it, Requests Info and No Match were
+// visually identical warning-soft pills and easy to skim past.
+const STATUS_CHECK_META: Record<StatusCheckResult, { tone: string; recommend: TriageRec; icon?: React.ReactNode }> = {
   "Acknowledged":   { tone: "bg-muted text-foreground",                       recommend: "keep" },
   "Pending":        { tone: "bg-muted text-foreground",                       recommend: "keep" },
   "In Process":     { tone: "bg-info-soft text-info-soft-foreground",         recommend: "keep" },
   "Paid":           { tone: "bg-success-soft text-success-soft-foreground",   recommend: "keep" },
   "Denied":         { tone: "bg-danger-soft text-danger-soft-foreground",     recommend: "denial" },
-  "Requests Info":  { tone: "bg-warning-soft text-warning-soft-foreground",   recommend: "denial" },
+  "Requests Info":  { tone: "bg-orange-100 text-orange-800 border border-orange-300", recommend: "denial",
+                      icon: <FileText className="h-3 w-3" /> },
   "No Match":       { tone: "bg-warning-soft text-warning-soft-foreground",   recommend: "denial" },
   "Error":          { tone: "bg-danger-soft text-danger-soft-foreground",     recommend: "denial" },
 };
@@ -1600,9 +1606,10 @@ const Claims = () => {
                                                 <div className="flex items-center gap-2">
                                                   <div className="space-y-0.5">
                                                     <span className={cn(
-                                                      "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                                                      "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
                                                       meta.tone,
                                                     )}>
+                                                      {meta.icon}
                                                       {result.status}
                                                     </span>
                                                     <div className="flex items-center gap-1 text-xs text-muted-foreground">
