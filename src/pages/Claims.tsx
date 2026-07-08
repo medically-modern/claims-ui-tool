@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -830,6 +831,100 @@ const Claims = () => {
     }
   }
 
+  // ─── Bulk Mark Paid (ERA Review multi-select) ─────────────────────────────
+  // Checkbox selection on the ERA Review bucket so a stack of fully-paid
+  // rows (difference ≈ 0) can be marked Paid in one confirm instead of
+  // one dialog per row. Selection is keyed by claim id and only ever
+  // acts on rows currently visible in the table — filters/search narrow
+  // the blast radius, never widen it.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0 });
+
+  // Selection only lives on the ERA Review bucket — clear it whenever the
+  // operator navigates anywhere else so stale ids can't linger and fire.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [category, board, mode, topLevel]);
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Fires /claims/mark-paid for every selected row, 3 requests at a time
+  // (the endpoint returns in ~1-2s each; secondary spawns run as Railway
+  // background tasks so modest concurrency here is cheap). Each success
+  // immediately flips that row into the existing per-row "Marking paid…"
+  // processing state and drops it from the selection — so on partial
+  // failure, exactly the failed rows stay selected and untouched, safe
+  // to re-fire after fixing whatever broke.
+  async function runBulkMarkPaid(targets: Claim[]) {
+    if (bulkBusy || targets.length === 0) return;
+    if (!isMarkPaidConfigured()) {
+      toast({
+        title: "Mark Paid not wired",
+        description: "VITE_API_BASE_URL / VITE_ADMIN_API_KEY missing.",
+      });
+      setBulkConfirmOpen(false);
+      return;
+    }
+    setBulkBusy(true);
+    setBulkProgress({ done: 0, total: targets.length });
+    const failures: { name: string; message: string }[] = [];
+    const queue = [...targets];
+    async function worker() {
+      for (;;) {
+        const c = queue.shift();
+        if (!c) return;
+        try {
+          await apiMarkPrimaryPaid(c.mondayItemId);
+          startMarkPaidProcessing(c.id);
+          setSelectedIds((prev) => {
+            if (!prev.has(c.id)) return prev;
+            const next = new Set(prev);
+            next.delete(c.id);
+            return next;
+          });
+        } catch (e) {
+          failures.push({
+            name: c.patientName,
+            message:
+              e instanceof MarkPaidError ? e.message : (e as Error).message,
+          });
+        } finally {
+          setBulkProgress((p) => ({ ...p, done: p.done + 1 }));
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(3, targets.length) }, () => worker()),
+    );
+    setBulkBusy(false);
+    setBulkConfirmOpen(false);
+    const ok = targets.length - failures.length;
+    if (failures.length === 0) {
+      toast({
+        title: `Marked ${ok} claim${ok === 1 ? "" : "s"} paid`,
+        description: "Secondary spawns (PR > 0) run in the background.",
+      });
+    } else {
+      toast({
+        title: `Marked ${ok}/${targets.length} paid — ${failures.length} failed`,
+        description:
+          `${failures.map((f) => f.name).join(", ")}. ` +
+          `First error: ${failures[0].message} ` +
+          `Failed rows stay selected — retry after fixing.`,
+      });
+    }
+    void refetchClaims();
+  }
+
   // Local in-row state for "Run Status Check" on Late ERAs
   const [statusChecks, setStatusChecks] = useState<Record<string, StatusCheckRecord>>(() => {
     const seed: Record<string, StatusCheckRecord> = {};
@@ -981,6 +1076,15 @@ const Claims = () => {
   }, [MOCK_CLAIMS, category, lateSubTab, search, payerFilter, statusFilter, sort]);
 
   const columns = CATEGORY_COLUMNS[category];
+
+  // Multi-select derived state — ERA Review only. Rows already mid-
+  // Mark-Paid are excluded so "select all" can't double-fire them.
+  // selectedRows intersects the selection with what's visible right
+  // now, so the action bar count and the bulk fire always agree.
+  const eraSelectable =
+    category === "era" ? rows.filter((c) => !markPaidProcessing[c.id]) : [];
+  const selectedRows = eraSelectable.filter((c) => selectedIds.has(c.id));
+  const bulkWarnRows = selectedRows.filter((c) => Math.abs(diff(c)) > 0.5);
 
   // Initial-load overlay: only when we expect Monday data but it hasn't
   // arrived yet. Hidden once data lands; refetches (Refresh button) don't
@@ -1247,6 +1351,43 @@ const Claims = () => {
             {/* Table */}
             <Card>
               <CardContent className="p-0">
+                {/* Bulk action bar — appears once anything is checked on
+                    the ERA Review bucket. One Mark Paid for the whole
+                    selection; the confirm dialog flags non-zero-difference
+                    rows before anything fires. */}
+                {category === "era" && selectedRows.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-3 border-b bg-muted/40 px-4 py-2.5">
+                    <span className="text-sm font-medium">
+                      {selectedRows.length} selected
+                    </span>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {fmtMoney(selectedRows.reduce((s, c) => s + c.primaryPaid, 0))} paid
+                    </span>
+                    {bulkWarnRows.length > 0 && (
+                      <span className="inline-flex items-center rounded-full bg-warning-soft px-2 py-0.5 text-xs font-medium text-warning-soft-foreground">
+                        {bulkWarnRows.length} with non-zero difference
+                      </span>
+                    )}
+                    <div className="ml-auto inline-flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={bulkBusy}
+                        onClick={() => setSelectedIds(new Set())}
+                      >
+                        Clear
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={bulkBusy}
+                        onClick={() => setBulkConfirmOpen(true)}
+                      >
+                        <Check className="mr-1 h-3.5 w-3.5" />
+                        Mark {selectedRows.length} Paid
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 {rows.length === 0 ? (
                   <EmptyState category={category} />
                 ) : (
@@ -1254,6 +1395,28 @@ const Claims = () => {
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          {category === "era" && (
+                            <TableHead className="w-10">
+                              <Checkbox
+                                aria-label="Select all rows"
+                                checked={
+                                  eraSelectable.length > 0 &&
+                                  selectedRows.length === eraSelectable.length
+                                    ? true
+                                    : selectedRows.length > 0
+                                      ? "indeterminate"
+                                      : false
+                                }
+                                onCheckedChange={(v) =>
+                                  setSelectedIds(
+                                    v
+                                      ? new Set(eraSelectable.map((c) => c.id))
+                                      : new Set(),
+                                  )
+                                }
+                              />
+                            </TableHead>
+                          )}
                           {columns.map((col) => {
                             const sortable = !NON_SORTABLE_COLUMNS.has(col);
                             const isActive = sortable && sort.col === col;
@@ -1334,6 +1497,16 @@ const Claims = () => {
                               )}
                               aria-busy={isMarkingPaid || undefined}
                             >
+                              {category === "era" && (
+                                <TableCell className="w-10">
+                                  <Checkbox
+                                    aria-label={`Select ${c.patientName}`}
+                                    checked={selectedIds.has(c.id)}
+                                    disabled={isMarkingPaid}
+                                    onCheckedChange={() => toggleSelected(c.id)}
+                                  />
+                                </TableCell>
+                              )}
                               {columns.map((col) => {
                                 switch (col) {
                                   case "patient": {
@@ -1892,7 +2065,10 @@ const Claims = () => {
                               if (!tc) return null;
                               return (
                                 <TableRow className="bg-muted/10 hover:bg-muted/10">
-                                  <TableCell colSpan={columns.length} className="p-0">
+                                  <TableCell
+                                    colSpan={columns.length + (category === "era" ? 1 : 0)}
+                                    className="p-0"
+                                  >
                                     <ThreadPanel
                                       currentClaimId={tc.id}
                                       onHide={() => setExpandedThread(null)}
@@ -1979,6 +2155,71 @@ const Claims = () => {
               onClick={(e) => { e.preventDefault(); void confirmMarkPaidFromRow(); }}
             >
               {markPaidBusy ? "Marking…" : "Confirm"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Bulk Mark Paid confirmation — same /claims/mark-paid backend call
+          as the single-row flow, fired per selected row (3 at a time).
+          Rows with a non-zero difference are flagged here so the operator
+          can back out and deselect before committing. No per-claim
+          Secondary Payer override in bulk — spawns use each claim's
+          current column value. */}
+      <AlertDialog
+        open={bulkConfirmOpen}
+        onOpenChange={(o) => {
+          if (!o && !bulkBusy) setBulkConfirmOpen(false);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Mark {selectedRows.length} claim{selectedRows.length === 1 ? "" : "s"} paid?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  Each claim's Primary status flips to Paid. Claims with
+                  PR &gt; 0 spawn a Secondary item in the background using
+                  their current Secondary Payer.
+                </p>
+                {bulkWarnRows.length > 0 && (
+                  <div className="rounded-md bg-warning-soft p-2.5 text-warning-soft-foreground">
+                    <p className="font-medium">
+                      {bulkWarnRows.length} selected claim
+                      {bulkWarnRows.length === 1 ? " has" : "s have"} a
+                      non-zero difference:
+                    </p>
+                    <ul className="mt-1 max-h-32 space-y-0.5 overflow-y-auto">
+                      {bulkWarnRows.map((c) => (
+                        <li key={c.id} className="tabular-nums">
+                          {c.patientName} — {fmtMoney(diff(c))}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {bulkBusy && (
+                  <p className="tabular-nums text-muted-foreground">
+                    Marking… {bulkProgress.done}/{bulkProgress.total}
+                  </p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={bulkBusy || selectedRows.length === 0}
+              onClick={(e) => {
+                e.preventDefault();
+                void runBulkMarkPaid(selectedRows);
+              }}
+            >
+              {bulkBusy
+                ? `Marking ${bulkProgress.done}/${bulkProgress.total}…`
+                : `Mark ${selectedRows.length} Paid`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
