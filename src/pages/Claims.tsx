@@ -653,6 +653,23 @@ const Claims = () => {
     }, 45000);
   }
 
+  // Optimistic cache flip. By the time /claims/mark-paid responds, the
+  // backend has ALREADY flipped the primary's status on Monday
+  // (primary_updated: true) — so writing "Paid" straight into the React
+  // Query cache isn't speculative, it's just reflecting confirmed server
+  // state without waiting for a ~10s full-board refetch to round-trip.
+  // The row drops out of ERA Review instantly and the sweep effect below
+  // clears its "Marking paid…" state in the same render. The background
+  // refetch fired after success reconciles the full row (PR columns,
+  // paid date, etc.) shortly after.
+  function optimisticallyMarkPaid(claimId: string) {
+    queryClient.setQueryData<Claim[]>(ALL_CLAIMS_QUERY_KEY, (old) =>
+      old?.map((c) =>
+        c.id === claimId ? { ...c, primaryStatus: "Paid" as const } : c,
+      ),
+    );
+  }
+
   // Drop processing ids once the claim's Primary Status is no longer
   // "Review" — i.e. Mark Paid actually took effect on Monday and our
   // refetch has noticed. We can't key off "claim disappeared from the
@@ -686,7 +703,11 @@ const Claims = () => {
     });
   }, [claimStatusById]);
 
-  // While anything is processing, re-fire the Monday refetch every 3s.
+  // While anything is processing, re-fire the Monday refetch every 10s
+  // as a reconciliation safety net. (With the optimistic cache flip in
+  // optimisticallyMarkPaid this loop rarely runs at all — processing
+  // state clears the moment the cache updates.)
+  //
   // We use queryClient.invalidateQueries + refetchQueries instead of
   // refetchClaims() directly because:
   //   (a) invalidate marks the cache stale so any other subscriber
@@ -696,14 +717,29 @@ const Claims = () => {
   //       it thinks data is unchanged — that was leaving claimStatusById
   //       pointing at the old status dict so the cleanup useEffect
   //       didn't re-run.
+  //
+  // BOTH calls must pass cancelRefetch: false. The default (true) cancels
+  // any in-flight fetch and restarts pagination from page 1 — and the
+  // full-board fetch takes longer than the tick interval, so the old 3s
+  // loop was cancelling itself forever: no refetch EVER completed while
+  // anything was processing, every "Marking paid…" spinner rode the full
+  // 45s hard timeout, and Monday got hammered with abandoned paginated
+  // queries the whole time. refetchType: "none" on the invalidate keeps
+  // it from spawning its own competing refetch of active queries.
   const anyProcessing = Object.keys(markPaidProcessing).length > 0;
   useEffect(() => {
     if (!anyProcessing) return;
     const tick = () => {
-      void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
-      void queryClient.refetchQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
+      void queryClient.invalidateQueries({
+        queryKey: ALL_CLAIMS_QUERY_KEY,
+        refetchType: "none",
+      });
+      void queryClient.refetchQueries({
+        queryKey: ALL_CLAIMS_QUERY_KEY,
+        cancelRefetch: false,
+      });
     };
-    const id = window.setInterval(tick, 3000);
+    const id = window.setInterval(tick, 10000);
     return () => window.clearInterval(id);
   }, [anyProcessing, queryClient]);
 
@@ -802,12 +838,13 @@ const Claims = () => {
       const result = await apiMarkPrimaryPaid(target.mondayItemId);
       setMarkPaidTarget(null);
 
-      // Flip the row into the inline "Marking paid…" loading state.
-      // The dialog closes; the row stays visible but dimmed with a
-      // spinner until it drops out of the bucket on the next refetch.
-      // startMarkPaidProcessing also fires follow-up refetches at 3s,
-      // 6s, 9s to catch slow Monday propagation.
+      // Belt-and-suspenders: the processing chip covers the (rare) case
+      // where the cache flip below can't land (e.g. cache empty); the
+      // sweep effect clears it as soon as the status reads non-Review.
       startMarkPaidProcessing(target.id);
+      // Server already confirmed the flip — drop the row from ERA Review
+      // right now instead of waiting for a full-board refetch.
+      optimisticallyMarkPaid(target.id);
 
       // Backend returns in ~1-2s after the Primary Status flip; the
       // secondary spawn + Subscription sync run as a Railway background
@@ -885,6 +922,8 @@ const Claims = () => {
         try {
           await apiMarkPrimaryPaid(c.mondayItemId);
           startMarkPaidProcessing(c.id);
+          // Server confirmed — drop the row from the bucket immediately.
+          optimisticallyMarkPaid(c.id);
           setSelectedIds((prev) => {
             if (!prev.has(c.id)) return prev;
             const next = new Set(prev);

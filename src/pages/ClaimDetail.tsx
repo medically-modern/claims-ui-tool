@@ -865,23 +865,27 @@ const ClaimDetail = () => {
       const result = await apiMarkPrimaryPaid(claim.mondayItemId);
       setMarkPaidOpen(false);
 
-      // Invalidate the shared claims-list cache so when the operator
-      // navigates back to /claims the row drops out of ERA Review
-      // immediately (instead of waiting up to 5 min for staleTime).
-      // Schedule a few follow-up invalidations to catch the Monday
-      // status propagation that lags behind the backend response.
+      // The backend has already flipped the primary's status on Monday by
+      // the time it responds — write "Paid" straight into the shared
+      // claims-list cache so the row is out of ERA Review the instant the
+      // operator navigates back. No waiting on a full-board refetch, no
+      // "Marking paid…" chip needed at all on the happy path.
+      queryClient.setQueryData<Claim[]>(ALL_CLAIMS_QUERY_KEY, (old) =>
+        old?.map((c) =>
+          c.id === claim.id ? { ...c, primaryStatus: "Paid" as const } : c,
+        ),
+      );
+      // One background reconcile to pull the full written row (paid date,
+      // PR columns, etc.). refetchType "none" + a non-cancelling refetch
+      // would be overkill here — a plain invalidate is fine because
+      // nothing is polling against it anymore. (The old code scheduled
+      // invalidations at 0s/3s/6s/9s; each one cancelled the previous
+      // in-flight paginated fetch, so none of them ever completed.)
       void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
-      [3000, 6000, 9000].forEach((delay) => {
-        window.setTimeout(() => {
-          void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
-        }, delay);
-      });
 
-      // Persist a "this claim is mid-processing" marker so the Claims
-      // page (when the operator navigates back) shows the same
-      // "Marking paid…" pulsing chip the row-level Mark Paid uses.
-      // Without this, returning to the list looked like the click in
-      // the detail view never happened.
+      // Persist the mid-processing marker as a fallback for the rare case
+      // the cache was empty and the optimistic write above no-opped; the
+      // Claims page sweeps it immediately once the status reads Paid.
       addMarkPaidProcessing(claim.id);
 
       // Backend now returns in ~1-2s after the Primary Status flip; the
