@@ -23,7 +23,8 @@ import {
 } from "@/components/ui/collapsible";
 import { getClaim } from "@/lib/claims/mockData";
 import { useAllClaims, ALL_CLAIMS_QUERY_KEY } from "@/hooks/useAllClaims";
-import { useQueryClient } from "@tanstack/react-query";
+import { fetchClaimByItemId } from "@/api/queries/allClaims";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { addProcessing as addMarkPaidProcessing } from "@/lib/markPaidProcessing";
 import { hasMondayToken } from "@/api/monday";
 import {
@@ -137,18 +138,40 @@ const ClaimDetail = () => {
   // no token is configured (local dev). Match by Claim ID column or by the
   // Monday item id, since some claims don't have a Claim ID set yet.
   const { data: mondayClaims, isLoading: claimsLoading } = useAllClaims();
+  const fromList = (() => {
+    if (!claimId || !hasMondayToken()) return undefined;
+    if (!mondayClaims) return undefined; // still loading
+    return mondayClaims.find(
+      (c) => c.id === claimId || c.mondayItemId === claimId,
+    );
+  })();
+
+  // Fallback: the claim isn't in the cached board load. That happens for
+  // freshly-spawned resubmission children (created seconds ago, cache is
+  // minutes old) and for deep links / hard refreshes. Previously this
+  // rendered "Claim not found" (or hung on "Fetching claim…" for a full
+  // ~10s board re-pagination). Instead, pull just this one item — a
+  // single un-paginated Monday query that returns in ~0.5s.
+  const needSingle =
+    hasMondayToken() && !!claimId && !claimsLoading && !fromList;
+  const { data: singleClaim, isFetching: singleFetching } = useQuery<Claim | null>({
+    queryKey: ["claims", "single", claimId],
+    queryFn: () => fetchClaimByItemId(claimId!),
+    enabled: needSingle,
+    staleTime: 60 * 1000,
+  });
+
   const initial = (() => {
     if (!claimId) return undefined;
-    if (hasMondayToken()) {
-      if (!mondayClaims) return undefined; // still loading
-      return mondayClaims.find(
-        (c) => c.id === claimId || c.mondayItemId === claimId,
-      );
-    }
+    if (hasMondayToken()) return fromList ?? singleClaim ?? undefined;
     return getClaim(claimId);
   })();
 
-  if (hasMondayToken() && claimsLoading && !initial) {
+  if (
+    hasMondayToken() &&
+    (claimsLoading || (needSingle && singleFetching)) &&
+    !initial
+  ) {
     return (
       <div className="min-h-screen bg-background">
         <AppHeader title="Loading…" showBack />
@@ -656,6 +679,36 @@ const ClaimDetail = () => {
       // Optimistically reflect what we just wrote so the user sees the
       // change without a full refetch.
       setClaim({ ...claim, hasChildren: true });
+
+      // Pre-fetch the freshly-created child (single-item query, ~0.5s)
+      // and insert it into the shared claims cache BEFORE navigating, so
+      // the child's detail page renders instantly instead of falling
+      // into "Claim not found" / a ~10s full-board refetch. Also flips
+      // the parent's hasChildren in the cache so the list view stops
+      // showing the parent as the active claim. Best-effort: if this
+      // fetch fails, the detail page's own single-item fallback query
+      // covers it.
+      try {
+        const child = await fetchClaimByItemId(result.child_item_id);
+        if (child) {
+          queryClient.setQueryData<Claim[]>(ALL_CLAIMS_QUERY_KEY, (old) => {
+            if (!old) return old;
+            const rest = old
+              .filter((c) => c.mondayItemId !== child.mondayItemId)
+              .map((c) =>
+                c.mondayItemId === claim.mondayItemId
+                  ? { ...c, hasChildren: true }
+                  : c,
+              );
+            return [...rest, child];
+          });
+        }
+      } catch (e) {
+        console.warn("[resubmit] child prefetch failed:", e);
+      }
+      // Background reconcile so hasChildren derivation + anything else
+      // the spawn touched lands on the next natural refetch.
+      void queryClient.invalidateQueries({ queryKey: ALL_CLAIMS_QUERY_KEY });
 
       toast.success(
         result.idempotent_hit

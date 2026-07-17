@@ -240,6 +240,36 @@ const PAGE_QUERY = `
   }
 `;
 
+// Single-item variant of the same projection. Used to pull ONE claim
+// (e.g. a freshly-spawned resubmission child) in ~0.5s instead of
+// re-paginating the entire board (~10s) just to find it.
+const ITEM_QUERY = `
+  query ClaimByItemId($ids: [ID!]) {
+    items(ids: $ids) {
+      id
+      name
+      created_at
+      group { id title }
+      column_values(ids: [${PARENT_COLUMN_IDS}]) {
+        id
+        text
+        value
+        type
+      }
+      subitems {
+        id
+        name
+        column_values(ids: [${SUBITEM_COLUMN_IDS}]) {
+          id
+          text
+          value
+          type
+        }
+      }
+    }
+  }
+`;
+
 // ---------- mapping helpers ----------
 
 function col(item: { column_values: MondayColumnValue[] }, id: string) {
@@ -566,6 +596,24 @@ function mapPlaceOfService(s: string): "Home" | "Office" | null {
 }
 
 // ---------- fetcher ----------
+
+/**
+ * Fetch a single claim by its Monday item id. Fast path (~0.5s, one
+ * un-paginated query) for cases where we know exactly which item we need
+ * and it isn't in the cached board load yet — e.g. the child created by
+ * spawn-resubmission, or a deep link / hard refresh on a detail page.
+ * Returns null when Monday has no item with that id. `hasChildren` is
+ * left undefined (it's derived across the full load in fetchAllClaims);
+ * callers inserting the result into the shared cache should set it
+ * explicitly if they know better.
+ */
+export async function fetchClaimByItemId(itemId: string): Promise<Claim | null> {
+  const data = await mondayQuery<{ items: MondayItem[] }>(ITEM_QUERY, {
+    ids: [itemId],
+  });
+  const item = data.items?.[0];
+  return item ? mapMondayItemToClaim(item) : null;
+}
 
 /**
  * Fetch every claim on the Claims Board, paginating until done.
