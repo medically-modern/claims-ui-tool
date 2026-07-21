@@ -180,6 +180,24 @@ export function checkInDue(p: LanePatient, todayStr: string = todayIso()): boole
   return onOrBefore(p.checkInDate ?? "", todayStr);
 }
 
+// ─── Readiness (Order Prep vs Ready to Order — the second axis) ──────────────
+/**
+ * Within Scheduled and Due, every patient is either ORDER PREP (something
+ * still to clear) or READY TO ORDER (ships the moment the order date
+ * arrives — which can be decided BEFORE the date). Blocked patients are
+ * never ready by definition. Readiness is derived: all 4 checkpoints
+ * green, or the backend cron already promoted Ordering Cycle.
+ */
+export function allChecksGreen(p: LanePatient): boolean {
+  return p.confirmation.tone === "ok" && p.benefits.tone === "ok"
+    && p.auth.tone === "ok" && p.lastPaid.tone === "ok";
+}
+
+export function isReady(p: LanePatient): boolean {
+  if (isBlocked(p)) return false;
+  return (p.orderingCycle || "") === "Ready to Order" || allChecksGreen(p);
+}
+
 // ─── Ship-without-confirmation candidate (doc §4) ────────────────────────────
 export const SHIP_MAX_OOP = 100;   // OOP Estimate must be under this
 export const SHIP_MIN_GP  = 100;   // Total GP must exceed this

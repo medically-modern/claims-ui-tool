@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  addDaysIso, blockReasons, checkInDue, getLane, isBlocked, needsReason,
-  possiblyResolved, reasonResolved, shipCandidate, todayIso,
+  addDaysIso, blockReasons, checkInDue, getLane, isBlocked, isReady,
+  needsReason, possiblyResolved, reasonResolved, shipCandidate, todayIso,
 } from "./lanes";
 import type { LanePatient } from "./lanes";
 import type { Checkpoint, PatientFinancials } from "@/components/subscription/mockData";
@@ -136,6 +136,23 @@ describe("ship-without-confirmation candidate (suggestion only)", () => {
   });
   it("falls back to deductible remaining when estimate is blank", () => {
     expect(shipCandidate({ ...candidate(), oopEstimate: "", dedRemaining: "$0" } as LanePatient).ok).toBe(true);
+  });
+});
+
+describe("readiness (Order Prep vs Ready to Order)", () => {
+  it("all 4 checks green → ready, even before the order date", () => {
+    expect(isReady(patient({ nextOrderDate: "2026-08-10" }))).toBe(true);
+  });
+  it("backend-promoted Ordering Cycle → ready even if a check hasn't rendered green", () => {
+    expect(isReady(patient({ confirmation: waiting, orderingCycle: "Ready to Order" }))).toBe(true);
+  });
+  it("any non-green check without promotion → prep", () => {
+    expect(isReady(patient({ auth: bad }))).toBe(false);
+    expect(isReady(patient({ confirmation: waiting }))).toBe(false);
+  });
+  it("blocked is NEVER ready, even with all green", () => {
+    expect(isReady(patient({ patientStatus: "Paused", pauseReason: "Other" }))).toBe(false);
+    expect(isReady(patient({ pauseReason: "Waiting on Patient", orderingCycle: "Ready to Order" }))).toBe(false);
   });
 });
 

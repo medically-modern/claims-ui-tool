@@ -56,7 +56,8 @@ import {
 import {
   BLOCK_REASONS, CHECK_IN_REQUIRED, DEAD_REASONS, DEFAULT_CHECK_IN_DAYS,
   FORCED_DECISION_MISSES, LanePatient, addDaysIso, blockReasons, checkInDue,
-  getLane, isBlocked, needsReason, possiblyResolved, shipCandidate, todayIso,
+  getLane, isBlocked, isReady, needsReason, possiblyResolved, shipCandidate,
+  todayIso,
 } from "@/lib/subscription/lanes";
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
@@ -1160,33 +1161,30 @@ function CheckInDialog({
 
 // ─── Component ───────────────────────────────────────────────────────────────
 function OrderCycleWorkflow() {
-  // Order Cycle v2 lanes: Due (order date arrived, no block — tonight's
-  // worklist) and Blocked (reason actively set) join the existing tabs.
-  // "prep" keeps its 21-day-window checkpoint-bucket semantics as the
-  // work-ahead view; lanes answer "what state is the patient in".
-  type PrimaryTab = "due" | "prep" | "blocked" | "order" | "neworder" | "overview";
+  // Order Cycle v2 hierarchy (Brandon 2026-07-21):
+  //   Lanes (when + blocked flag): Scheduled | Due | Blocked
+  //   Readiness (within Scheduled & Due): Order Prep | Ready to Order
+  // Ready = ships the moment the order date arrives — reachable BEFORE
+  // the date (automations finish early) and derived (all 4 checks green,
+  // or backend already promoted Ordering Cycle). Blocked is never ready;
+  // unblocking returns the patient to whichever lane their date says.
+  // Ready to Order is a readiness sub-split now, not a top-level tab.
+  type PrimaryTab = "due" | "prep" | "blocked" | "neworder" | "overview";
   const [primary, setPrimary] = useState<PrimaryTab>("due");
-  type PrepPhase = CheckpointKind | "all";
+  type PrepPhase = CheckpointKind | "all" | "readysub";
   const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
+  type DuePhase = "ready" | "prepwork";
+  const [duePhase, setDuePhase] = useState<DuePhase>("ready");
   // `phase` is the derived view selection used by the rest of the component.
-  // When prepPhase = "all", we render the overview-style table filtered to
-  // every non-ready patient so the operator sees the whole Order Prep cohort.
   const phase: PhaseTab =
     primary === "overview" ? "overview"
     : primary === "due"     ? "overview"
     : primary === "blocked" ? "overview"
-    : primary === "order"  ? "ready"
-    : prepPhase === "all"  ? "overview"
+    : prepPhase === "all" || prepPhase === "readysub" ? "overview"
     : prepPhase;
   // Stable "today" for lane math — refreshed per render pass is fine,
   // lanes only care about the calendar date.
   const todayStr = todayIso();
-  const setPhase = (next: PhaseTab) => {
-    if (next === "overview") setPrimary("overview");
-    else if (next === "ready") setPrimary("order");
-    else { setPrimary("prep"); setPrepPhase(next); }
-  };
-  void setPhase; // currently unused — keeps the helper for future deep-link routing
   const [search, setSearch] = useState("");
   const [payer, setPayer] = useState<string>("All payers");
   const [blocked, setBlocked] = useState<string>("Anyone");
@@ -1239,10 +1237,9 @@ function OrderCycleWorkflow() {
     const c = {
       overview: 0,
       confirmation: 0, benefits: 0, auth: 0, lastPaid: 0,
-      ready: 0,
       paused: 0,
-      due: 0,
-      scheduled: 0,
+      due: 0, dueReady: 0, duePrep: 0,
+      scheduled: 0, schedReady: 0,
       possiblyResolved: 0,
       checkInsDue: 0,
       noReason: 0,
@@ -1262,12 +1259,17 @@ function OrderCycleWorkflow() {
         if (needsReason(lp)) c.noReason++;
         continue;
       }
-      const status = p.orderingCycle || "";
-      // Ready-to-Order rows live in their own tab — not double-counted
-      // in Due even when their order date has arrived.
-      if (status === "Ready to Order") { c.ready++; continue; }
-      if (getLane(lp, todayStr) === "due") { c.due++; continue; }
+      // Readiness is the second axis: within Due and Scheduled every
+      // patient is either Ready to Order (ships as soon as the date
+      // arrives) or Order Prep (something still to clear).
+      const ready = isReady(lp);
+      if (getLane(lp, todayStr) === "due") {
+        c.due++;
+        if (ready) c.dueReady++; else c.duePrep++;
+        continue;
+      }
       c.scheduled++;
+      if (ready) { c.schedReady++; continue; }
       // Checkpoint buckets: actionable prep work = scheduled orders
       // inside the 21-day window with that checkpoint non-OK.
       if (!withinOrderPrepWindow(p)) continue;
@@ -1422,29 +1424,33 @@ function OrderCycleWorkflow() {
         !(p as LanePatient & { isNotActive?: boolean }).isNotActive
         && isBlocked(p as LanePatient));
     } else if (primary === "due") {
-      // Due lane: order date arrived/past, no block, not already
-      // promoted to Ready to Order. Tonight's worklist — sorted oldest
-      // order first below.
+      // Due lane: order date arrived/past, no block. duePhase splits by
+      // readiness — Ready to Order (send now) vs Order Prep (decide:
+      // fix, promote, or block). Sorted oldest order first below.
       base = filteredAll.filter((p) =>
         !(p as LanePatient & { isNotActive?: boolean }).isNotActive
         && getLane(p as LanePatient, todayStr) === "due"
-        && (p.orderingCycle || "") !== "Ready to Order");
+        && (duePhase === "ready") === isReady(p as LanePatient));
     } else if (phase === "overview") {
       if (primary === "prep" && prepPhase === "all") {
-        // Scheduled > All: every future-dated, unblocked, not-yet-ready
-        // order (soonest first via the default sort).
+        // Scheduled > All: every future-dated, unblocked order
+        // (soonest first via the default sort).
+        base = filteredAll.filter((p) =>
+          !(p as LanePatient & { isNotActive?: boolean }).isNotActive
+          && getLane(p as LanePatient, todayStr) === "scheduled",
+        );
+      } else if (primary === "prep" && prepPhase === "readysub") {
+        // Scheduled > Ready to Order: future-dated and already clear —
+        // will ship the moment the date arrives; nothing to do.
         base = filteredAll.filter((p) =>
           !(p as LanePatient & { isNotActive?: boolean }).isNotActive
           && getLane(p as LanePatient, todayStr) === "scheduled"
-          && (p.orderingCycle || "") !== "Ready to Order",
+          && isReady(p as LanePatient),
         );
       } else {
         // Pure Overview tab: whole cohort regardless of status.
         base = filteredAll;
       }
-    } else if (phase === "ready") {
-      // Order tab: rows the backend has promoted to 'Ready to Order'.
-      base = filteredAll.filter((p) => (p.orderingCycle || "") === "Ready to Order");
     } else {
       // Phase sub-tabs (Confirmation / Eligibility / Auth / Last Paid):
       // scheduled orders inside the 21-day prep window with this
@@ -1452,7 +1458,6 @@ function OrderCycleWorkflow() {
       base = filteredAll.filter((p) =>
         !(p as LanePatient & { isNotActive?: boolean }).isNotActive
         && getLane(p as LanePatient, todayStr) === "scheduled"
-        && (p.orderingCycle || "") !== "Ready to Order"
         && withinOrderPrepWindow(p)
         && getCheckpoint(p, phase).tone !== "ok",
       );
@@ -1505,7 +1510,7 @@ function OrderCycleWorkflow() {
         : bv.localeCompare(av, undefined, { numeric: true, sensitivity: "base" });
     });
     return sorted;
-  }, [filteredAll, filteredBase, phase, primary, prepPhase, sortKey, sortDir, todayStr]);
+  }, [filteredAll, filteredBase, phase, primary, prepPhase, duePhase, sortKey, sortDir, todayStr]);
 
 
   const renderPhaseTab = (k: PhaseTab, label: string, count: number) => (
@@ -1541,10 +1546,6 @@ function OrderCycleWorkflow() {
                   <Bell className="h-3 w-3" />{counts.possiblyResolved}
                 </span>
               )}
-            </TabsTrigger>
-            <TabsTrigger value="order" className="text-[15px] font-semibold gap-2 px-4">
-              Ready to Order
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.ready}</span>
             </TabsTrigger>
             <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4">
               Order
@@ -1621,10 +1622,6 @@ function OrderCycleWorkflow() {
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="order" className="text-[15px] font-semibold gap-2 px-4">
-              Ready to Order
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.ready}</span>
-            </TabsTrigger>
             <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4">
               Order
             </TabsTrigger>
@@ -1686,10 +1683,41 @@ function OrderCycleWorkflow() {
                 {counts.scheduled}
               </span>
             </TabsTrigger>
+            <TabsTrigger value="readysub" className="gap-1.5" title="Already clear — ships the moment the order date arrives">
+              <Check className="h-3.5 w-3.5 text-emerald-600" />
+              Ready to Order
+              <span className="rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
+                {counts.schedReady}
+              </span>
+            </TabsTrigger>
             {renderPhaseTab("confirmation", "Confirmation",     counts.confirmation)}
             {renderPhaseTab("benefits",     "Eligibility",      counts.benefits)}
             {renderPhaseTab("auth",         "Authorization",    counts.auth)}
             {renderPhaseTab("lastPaid",     "Last Order Paid",  counts.lastPaid)}
+          </TabsList>
+        </Tabs>
+      )}
+
+      {/* Sub-nav under Due — the readiness split. Ready = send now;
+          Order Prep = automations didn't clear it, decide manually:
+          fix + it auto-promotes, or set a block reason. */}
+      {primary === "due" && (
+        <Tabs value={duePhase} onValueChange={(v) => setDuePhase(v as DuePhase)}>
+          <TabsList className="bg-card border">
+            <TabsTrigger value="ready" className="gap-1.5" title="All checks clear — send these now">
+              <Send className="h-3.5 w-3.5 text-emerald-600" />
+              Ready to Order
+              <span className="rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
+                {counts.dueReady}
+              </span>
+            </TabsTrigger>
+            <TabsTrigger value="prepwork" className="gap-1.5" title="Date arrived but not clear — evaluate: fix, or assign a block reason">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+              Order Prep — needs decision
+              <span className="rounded-full bg-amber-100 text-amber-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
+                {counts.duePrep}
+              </span>
+            </TabsTrigger>
           </TabsList>
         </Tabs>
       )}
@@ -1749,8 +1777,6 @@ function OrderCycleWorkflow() {
             sendingIds={sendingIds}
             sentIds={sentIds}
           />
-        ) : phase === "ready" ? (
-          <SubmitTable rows={rows} onPatientClick={openPatient} onSubmit={sendToOrderBoard} sendingIds={sendingIds} sentIds={sentIds} />
         ) : (
           <PhaseTable
             rows={rows}
@@ -2101,46 +2127,6 @@ function PhaseTable({
   );
 }
 
-function SubmitTable({
-  rows, onPatientClick, onSubmit, sendingIds, sentIds,
-}: {
-  rows: SubscriptionPatient[];
-  onPatientClick: (p: SubscriptionPatient) => void;
-  onSubmit: (p: SubscriptionPatient) => void;
-  sendingIds: Set<string>;
-  sentIds:    Set<string>;
-}) {
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Patient</TableHead>
-          <TableHead>Order Date</TableHead>
-          <TableHead>Subscription</TableHead>
-          <TableHead>Primary Payer</TableHead>
-          <TableHead className="text-right">Actions</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map((p) => (
-          <TableRow key={p.id}>
-            <TableCell>
-              <div className="text-[13px] font-semibold flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /></div>
-              <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
-            </TableCell>
-            <TableCell>
-              <div className="text-[13px] font-medium tabular-nums">{fmtDate(p.nextOrderDate)}</div>
-              <div className="text-[11px] text-muted-foreground tabular-nums">in {daysBetween(p.nextOrderDate)}d</div>
-            </TableCell>
-            <TableCell><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></TableCell>
-            <TableCell>{p.primaryPayer}</TableCell>
-            <TableCell><ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} /></TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  );
-}
 
 // ─── Top-level SubscriptionBoard: 5 workflow tabs ────────────────────────────
 type WorkflowTab = "order-cycle" | "patient-profile" | "authorizations" | "medical-records" | "financials";
