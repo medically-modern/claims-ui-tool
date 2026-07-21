@@ -14,7 +14,7 @@
  * Check-In, Why Stuck) since that's the whole point of those views.
  */
 
-import { useMemo, useState } from "react";
+import { forwardRef, useMemo, useState } from "react";
 import {
   AlertTriangle, ArrowRight, Bell, Building2, CalendarClock, Check, ClipboardCheck,
   Clock, DollarSign, ExternalLink, Heart, Loader2,
@@ -150,14 +150,19 @@ function circleStateFor(c: Checkpoint): CircleState {
   return "gray";
 }
 
-function CheckpointCircle({
-  check, size = 30, onClick, title,
-}: {
+type CheckpointCircleProps = {
   check: Checkpoint;
   size?: number;
-  onClick?: () => void;
   title?: string;
-}) {
+} & React.ButtonHTMLAttributes<HTMLButtonElement>;
+
+/**
+ * forwardRef + prop spread are REQUIRED: Radix PopoverTrigger asChild
+ * injects ref/onClick/aria props into this element — without forwarding
+ * them the popover never opens (the original stub popover had this bug).
+ */
+const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
+  function CheckpointCircle({ check, size = 30, title, className, style, ...rest }, ref) {
   const state = circleStateFor(check);
   const sizeStyle = { width: size, height: size };
   const inner =
@@ -174,7 +179,8 @@ function CheckpointCircle({
   return (
     <button
       type="button"
-      onClick={onClick}
+      ref={ref}
+      {...rest}
       title={
         title ?? [
           `${check.label}${check.detail ? " — " + check.detail : ""}`,
@@ -182,8 +188,8 @@ function CheckpointCircle({
           check.patientMessage ? `Patient message: ${check.patientMessage}` : null,
         ].filter(Boolean).join("\n")
       }
-      className="relative inline-flex items-center justify-center"
-      style={sizeStyle}
+      className={cn("relative inline-flex items-center justify-center", className)}
+      style={{ ...sizeStyle, ...style }}
     >
       <span
         className={cn("inline-flex items-center justify-center rounded-full ring-2", cls)}
@@ -224,8 +230,7 @@ function CheckpointCircle({
       )}
     </button>
   );
-}
-
+});
 
 
 // ─── Checkpoint circle popover — REAL actions only (no stub toggles) ────────
@@ -512,6 +517,14 @@ function ReviewAndSubmit({ p, onReview, onSubmit, onBlock, sending, sent }: {
   sent?:    boolean;
 }) {
   const ready = allChecksPass(p);
+  // Guard: sending with non-green circles requires a second, explicit
+  // click — first click arms the button ("Send anyway?") for 4s.
+  const [armed, setArmed] = useState(false);
+  const handleSend = () => {
+    if (ready || armed) { setArmed(false); onSubmit(); return; }
+    setArmed(true);
+    setTimeout(() => setArmed(false), 4000);
+  };
   return (
     // pl-6 pushes the buttons away from the Paid circle in the
     // OverviewTable grid layout; justify-end keeps them right-anchored
@@ -540,24 +553,27 @@ function ReviewAndSubmit({ p, onReview, onSubmit, onBlock, sending, sent }: {
       </Button>
       <Button
         size="sm"
-        onClick={onSubmit}
+        onClick={handleSend}
         disabled={sending || sent}
         className={cn(
           "h-7 px-2.5 text-[11px] font-semibold text-white shadow-sm transition-colors",
           sending ? "bg-blue-600"
           : sent  ? "bg-emerald-600"
+          : armed ? "bg-rose-600 hover:bg-rose-700"
           : ready ? "bg-emerald-700 hover:bg-emerald-800"
                   : "bg-slate-400 hover:bg-slate-500",
         )}
         title={
           sending ? "Writing Ordering Cycle = Order on Monday…"
           : sent   ? "Sent — Monday automation now spawns the order"
+          : armed  ? "Not all 4 checks are green — click again to send anyway"
           : ready  ? "All 4 checks passed — send order"
-                   : "Not all 4 checks pass — confirm before submitting"
+                   : "Not all 4 checks pass — you'll be asked to confirm"
         }
       >
         {sending ? (<><Loader2 className="mr-1 h-3 w-3 animate-spin" />Sending…</>)
         : sent    ? (<><Check    className="mr-1 h-3 w-3" />Sent</>)
+        : armed   ? (<><AlertTriangle className="mr-1 h-3 w-3" />Send anyway?</>)
         :           (<><Send     className="mr-1 h-3 w-3" />Send Order</>)}
       </Button>
     </div>
