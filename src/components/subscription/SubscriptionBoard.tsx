@@ -17,7 +17,7 @@
 import { useMemo, useState } from "react";
 import {
   AlertTriangle, ArrowRight, Bell, Building2, CalendarClock, Check, ClipboardCheck,
-  Clock, ExternalLink, Heart, Loader2,
+  Clock, DollarSign, ExternalLink, Heart, Loader2,
   MessageSquare, PauseCircle, Pencil, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
   Server, Shield, UserCog, Unlock, UserCircle, UserX, X,
 } from "lucide-react";
@@ -57,7 +57,7 @@ import {
   BLOCK_REASON_GROUPS, BLOCK_REASONS, DEAD_REASONS, DEFAULT_CHECK_IN_DAYS,
   FORCED_DECISION_MISSES, LanePatient, ReasonFamily, addDaysIso, blockReasons,
   checkInDue, checkInRequiredFor, getLane, isBlocked, isReady, needsReason,
-  possiblyResolved, reasonFamily, shipCandidate, todayIso,
+  possiblyResolved, reasonFamily, reasonResolved, shipCandidate, todayIso,
 } from "@/lib/subscription/lanes";
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
@@ -776,11 +776,45 @@ function ResolutionPill({ patient }: { patient: LanePatient }) {
       </span>
     );
   }
+  const signals = [...new Set(
+    blockReasons(patient)
+      .filter((r) => !reasonResolved(patient, r))
+      .map((r) => FAMILY_SIGNAL[reasonFamily(r)]),
+  )];
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
-      <Clock className="h-3 w-3" /> Watching
-    </span>
+    <div className="space-y-0.5">
+      <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+        <Clock className="h-3 w-3" /> Watching
+      </span>
+      {signals.length > 0 && (
+        <div className="text-[10px] text-muted-foreground leading-tight">{signals.join(" · ")}</div>
+      )}
+    </div>
   );
+}
+
+/** Family display metadata — the explicit "which bucket" indicator. */
+const FAMILY_NAME: Record<ReasonFamily, string> = {
+  insurance: "Insurance",
+  auth:      "Auth",
+  money:     "Money",
+  patient:   "Patient",
+  other:     "Manual",
+};
+const FAMILY_SIGNAL: Record<ReasonFamily, string> = {
+  insurance: "elig active?",
+  auth:      "auth valid?",
+  money:     "claims paid?",
+  patient:   "contact / check-in",
+  other:     "manual only",
+};
+function FamilyIcon({ fam, className }: { fam: ReasonFamily; className?: string }) {
+  const cls = className ?? "h-3 w-3";
+  return fam === "insurance" ? <Building2 className={cls} />
+       : fam === "auth"      ? <Shield className={cls} />
+       : fam === "money"     ? <DollarSign className={cls} />
+       : fam === "patient"   ? <Heart className={cls} />
+       : <Pencil className={cls} />;
 }
 
 /** Reason chips inside the Blocked table — specific label, tinted by family. */
@@ -810,11 +844,12 @@ function ReasonChips({ patient }: { patient: LanePatient }) {
             key={r}
             title={FAMILY_TITLE[fam]}
             className={cn(
-              "inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap",
+              "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap",
               FAMILY_CHIP[fam],
             )}
           >
-            {r}
+            <FamilyIcon fam={fam} />
+            <span className="opacity-60">{FAMILY_NAME[fam]} ·</span> {r}
           </span>
         );
       })}
@@ -901,8 +936,8 @@ function BlockDialog({
             <div className="space-y-2.5">
               {BLOCK_REASON_GROUPS.map((g) => (
                 <div key={g.family}>
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-1">
-                    {g.label}
+                  <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-1">
+                    <FamilyIcon fam={g.family} className="h-3 w-3" />{g.label}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {g.reasons.map((r) => (
