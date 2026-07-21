@@ -95,6 +95,14 @@ export const SUB_COL = {
   status:           "color_mm2t7tdy",
   pause_reason:     "dropdown_mm2v3gfy",
   dead_reason:      "dropdown_mm27mdkh",
+  // ─── Order Cycle v2 block tracking (columns created 2026-07-21) ───────────
+  // See ORDER_CYCLE_V2_DESIGN.md §8.2 + src/lib/subscription/lanes.ts.
+  check_in_date:        "date_mm5fdn4h",
+  missed_checkins:      "numeric_mm5fcsvt",
+  block_resolution:     "color_mm5f3v2n",
+  block_note:           "long_text_mm5ffcqk",
+  blocked_date:         "date_mm5f7des",
+  last_patient_contact: "text_mm5frhe9",
   // Clinical
   mn_expiry:        "date_mkp09gra",
   diagnosis:        "color_mkxrxv9w",
@@ -223,6 +231,13 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   // Group membership (used to filter Not Active patients out by default)
   groupId: string;
   isNotActive: boolean;
+  // Order Cycle v2 block tracking (lanes.ts BlockFields)
+  checkInDate: string;
+  missedCheckIns: number;
+  blockResolution: string;
+  blockNote: string;
+  blockedDate: string;
+  lastPatientContact: string;
 }
 
 // ─── Monday types ───────────────────────────────────────────────────────────
@@ -611,6 +626,18 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
     partialApprovalDate: get(item, SUB_COL.partial_approval_date),
     groupId:             item.group?.id ?? "",
     isNotActive:         item.group?.id === NOT_ACTIVE_GROUP_ID,
+    // Order Cycle v2 block tracking. nextCheckIn / stuckSince / stuckReason
+    // are the pre-existing display fields (CheckInCell etc.) — feed them
+    // from the new live columns so old render paths light up too.
+    checkInDate:         get(item, SUB_COL.check_in_date),
+    missedCheckIns:      getNum(item, SUB_COL.missed_checkins),
+    blockResolution:     get(item, SUB_COL.block_resolution),
+    blockNote:           get(item, SUB_COL.block_note),
+    blockedDate:         get(item, SUB_COL.blocked_date),
+    lastPatientContact:  get(item, SUB_COL.last_patient_contact),
+    nextCheckIn:         get(item, SUB_COL.check_in_date) || undefined,
+    stuckSince:          get(item, SUB_COL.blocked_date) || undefined,
+    stuckReason:         (get(item, SUB_COL.block_note).split("\n")[0] || undefined),
   };
 }
 

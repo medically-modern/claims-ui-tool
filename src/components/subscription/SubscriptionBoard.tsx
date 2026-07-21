@@ -16,9 +16,10 @@
 
 import { useMemo, useState } from "react";
 import {
-  ArrowRight, Building2, Check, ClipboardCheck, Clock, ExternalLink, Heart, Loader2,
+  AlertTriangle, ArrowRight, Bell, Building2, CalendarClock, Check, ClipboardCheck,
+  Clock, ExternalLink, Heart, Loader2,
   MessageSquare, PauseCircle, Pencil, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
-  Server, Shield, UserCog, Unlock, UserCircle, X,
+  Server, Shield, UserCog, Unlock, UserCircle, UserX, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,14 @@ import { DvsQueue } from "./DvsQueue";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { runEligibilityCheck, sendToOrder } from "@/api/setSubscriptionPatient";
+import {
+  blockPatient, unblockPatient, recordCheckIn, churnPatient,
+} from "@/api/blockPatient";
+import {
+  BLOCK_REASONS, CHECK_IN_REQUIRED, DEAD_REASONS, DEFAULT_CHECK_IN_DAYS,
+  FORCED_DECISION_MISSES, LanePatient, addDaysIso, blockReasons, checkInDue,
+  getLane, isBlocked, needsReason, possiblyResolved, shipCandidate, todayIso,
+} from "@/lib/subscription/lanes";
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
   currentPhase, ORDER_PREP_PATIENTS, PATIENT_STATUS_OPTIONS, PAUSE_REASON_OPTIONS,
@@ -235,18 +244,8 @@ const STATE_OPTIONS: Record<EditableState, { label: string; cls: string; icon: J
              icon: <X className="h-4 w-4 text-white" strokeWidth={3} /> },
 };
 
-const CONFIRM_PAUSE_REASONS = [
-  "Collect new insurance",
-  "Need new auth",
-  "Has enough supplies",
-  "Still owes last invoice",
-  "Other supplier has auth",
-  "Last claim denied",
-  "Not using currently",
-  "Hasn't received pump yet",
-  "OOP too expensive",
-  "Hospital/SNF",
-];
+// Consolidated Order Cycle v2 block reasons (see lanes.ts / design doc §3.1).
+const CONFIRM_PAUSE_REASONS = [...BLOCK_REASONS];
 
 const CONFIRM_CANCEL_REASONS = [
   "Stopped using",
@@ -528,10 +527,11 @@ function CheckInCell({ iso, stuckSince }: { iso?: string; stuckSince?: string })
   );
 }
 
-function ReviewAndSubmit({ p, onReview, onSubmit, sending, sent }: {
+function ReviewAndSubmit({ p, onReview, onSubmit, onBlock, sending, sent }: {
   p: SubscriptionPatient;
   onReview: () => void;
   onSubmit: () => void;
+  onBlock?: () => void;
   sending?: boolean;
   sent?:    boolean;
 }) {
@@ -541,6 +541,18 @@ function ReviewAndSubmit({ p, onReview, onSubmit, sending, sent }: {
     // OverviewTable grid layout; justify-end keeps them right-anchored
     // so the spacing scales with column width.
     <div className="flex items-center justify-end gap-1.5 pl-6">
+      {onBlock && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 px-2 text-[11px] font-semibold text-rose-700 border-rose-200 hover:bg-rose-50"
+          onClick={onBlock}
+          disabled={sending || sent}
+          title="Can't order yet — set a block reason + watcher"
+        >
+          <PauseCircle className="h-3.5 w-3.5" />
+        </Button>
+      )}
       <Button
         variant="outline"
         size="sm"
@@ -748,10 +760,435 @@ function PatientDrawer({
   );
 }
 
+// ─── Order Cycle v2: lane badges, block dialogs, blocked table ───────────────
+
+/**
+ * Ship-candidate badge (doc §4) — SUGGESTION ONLY, a human always ships.
+ * Green-outline chip on rows where the economics guarantee profit even
+ * without a patient confirmation: text sent + no reply + other 3 checks
+ * green + no unreviewed changes + OOP < $100 + GP > $100.
+ */
+function ShipCandidateBadge({ patient }: { patient: SubscriptionPatient }) {
+  const sc = shipCandidate(patient as LanePatient);
+  if (!sc.ok) return null;
+  return (
+    <span
+      className="ml-1.5 inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700"
+      title={`No reply yet, but economics are safe to ship:\nOOP estimate ${fmtMoneyAmt(sc.oop ?? 0)} (< $100) · Est. profit ${fmtMoneyAmt(sc.gp ?? 0)} (> $100)\nEligibility, auth and last-order-paid are all green.\nShipping without confirmation is ALWAYS your call — this is only a suggestion.`}
+    >
+      <Send className="h-3 w-3" />
+      Ship candidate
+    </span>
+  );
+}
+
+/** Watching / Looks-resolved pill for the Blocked table (client-side watcher). */
+function ResolutionPill({ patient }: { patient: LanePatient }) {
+  if (needsReason(patient)) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
+        <AlertTriangle className="h-3 w-3" /> No reason set
+      </span>
+    );
+  }
+  if (possiblyResolved(patient)) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+        <Bell className="h-3 w-3" /> Looks resolved
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+      <Clock className="h-3 w-3" /> Watching
+    </span>
+  );
+}
+
+/** Reason chips inside the Blocked table. */
+function ReasonChips({ patient }: { patient: LanePatient }) {
+  const reasons = blockReasons(patient);
+  if (reasons.length === 0) return <span className="text-[11px] text-muted-foreground">—</span>;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {reasons.map((r) => (
+        <span key={r} className="inline-flex items-center rounded-md bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 whitespace-nowrap">
+          {r}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * BlockDialog — the one dialog for "we can't order for this patient yet".
+ * Reason(s) required; check-in date required for Waiting on Patient
+ * (suggested for everything else); note becomes the head of the
+ * append-only Block Note log.
+ */
+function BlockDialog({
+  patient, open, onClose, onDone,
+}: {
+  patient: LanePatient | null;
+  open: boolean;
+  onClose: () => void;
+  onDone: (msg: string) => void;
+}) {
+  const [reasons, setReasons] = useState<Set<string>>(new Set());
+  const [note, setNote] = useState("");
+  const [checkIn, setCheckIn] = useState<string>(addDaysIso(DEFAULT_CHECK_IN_DAYS));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Re-seed local state each time a new patient opens the dialog.
+  const [seedId, setSeedId] = useState<string | null>(null);
+  if (patient && patient.mondayItemId !== seedId) {
+    setSeedId(patient.mondayItemId);
+    setReasons(new Set(blockReasons(patient)));
+    setNote("");
+    setCheckIn(patient.checkInDate || addDaysIso(DEFAULT_CHECK_IN_DAYS));
+    setErr(null);
+  }
+  if (!patient) return null;
+
+  const needsCheckIn = [...reasons].some((r) => CHECK_IN_REQUIRED.has(r));
+  const canSave = reasons.size > 0 && !saving
+    && (!needsCheckIn || !!checkIn)
+    && (!reasons.has("Other") || note.trim().length > 0);
+
+  const toggle = (r: string) => setReasons((prev) => {
+    const n = new Set(prev);
+    if (n.has(r)) n.delete(r); else n.add(r);
+    return n;
+  });
+
+  const save = async () => {
+    setSaving(true); setErr(null);
+    const res = await blockPatient(patient.mondayItemId, {
+      reasons: [...reasons],
+      note: note.trim(),
+      checkInDate: checkIn || undefined,
+      existingNote: patient.blockNote,
+    });
+    setSaving(false);
+    if (res.failed.length > 0) {
+      setErr(`Some writes failed: ${res.failed.map((f) => f.step).join(", ")} — check Monday and retry.`);
+      return;
+    }
+    onDone(`${patient.name} blocked — ${[...reasons].join(", ")}`);
+    onClose();
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent className="w-[480px] sm:max-w-[480px] overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle className="flex items-center gap-2">
+            <PauseCircle className="h-5 w-5 text-rose-600" /> Block order
+          </SheetTitle>
+          <SheetDescription>
+            {patient.name} · order {patient.nextOrderDate ? fmtDate(patient.nextOrderDate) : "—"} · {patient.primaryPayer}
+          </SheetDescription>
+        </SheetHeader>
+
+        <div className="mt-6 space-y-5">
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+              Why can't we order? <span className="text-rose-600">*</span>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {BLOCK_REASONS.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => toggle(r)}
+                  className={cn(
+                    "rounded-md border px-2.5 py-2 text-[12px] font-semibold text-left transition-colors",
+                    reasons.has(r)
+                      ? "border-rose-400 bg-rose-50 text-rose-800"
+                      : "border-border bg-card hover:bg-muted text-foreground",
+                  )}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+            <div className="mt-1.5 text-[11px] text-muted-foreground">
+              The reason drives the SOP; the resolution watcher arms automatically.
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
+              Check-in date {needsCheckIn
+                ? <span className="text-rose-600">* required for Waiting on Patient</span>
+                : <span className="normal-case tracking-normal">(suggested)</span>}
+            </div>
+            <Input
+              type="date"
+              value={checkIn}
+              onChange={(e) => setCheckIn(e.target.value)}
+              className="h-9 text-[13px]"
+            />
+          </div>
+
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
+              Note{reasons.has("Other") ? <span className="text-rose-600"> * required for Other</span> : " (context — logged)"}
+            </div>
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="What's the situation? e.g. 'In rehab facility until ~Aug 15 per daughter'"
+              className="min-h-[80px] text-[13px]"
+            />
+          </div>
+
+          {err && (
+            <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-[12px] text-rose-700">{err}</div>
+          )}
+        </div>
+
+        <SheetFooter className="mt-6">
+          <Button
+            className="w-full bg-rose-700 hover:bg-rose-800"
+            disabled={!canSave}
+            onClick={() => void save()}
+          >
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PauseCircle className="mr-2 h-4 w-4" />}
+            Block order
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/**
+ * CheckInDialog — record a check-in on a blocked patient.
+ * Contact → counter resets. No contact → counter +1; at
+ * FORCED_DECISION_MISSES the dialog forces the fork: renew with a
+ * reason, or move to Not Active (doc §3.3). Unblock lives here too.
+ */
+function CheckInDialog({
+  patient, open, onClose, onDone,
+}: {
+  patient: LanePatient | null;
+  open: boolean;
+  onClose: () => void;
+  onDone: (msg: string) => void;
+}) {
+  const [outcome, setOutcome] = useState<"contact" | "nocontact" | null>(null);
+  const [note, setNote] = useState("");
+  const [nextDate, setNextDate] = useState<string>(addDaysIso(DEFAULT_CHECK_IN_DAYS));
+  const [deadReason, setDeadReason] = useState<string>("");
+  const [churnMode, setChurnMode] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [seedId, setSeedId] = useState<string | null>(null);
+  if (patient && patient.mondayItemId !== seedId) {
+    setSeedId(patient.mondayItemId);
+    setOutcome(null); setNote(""); setChurnMode(false); setDeadReason("");
+    setNextDate(addDaysIso(DEFAULT_CHECK_IN_DAYS));
+    setErr(null);
+  }
+  if (!patient) return null;
+
+  const missed = patient.missedCheckIns ?? 0;
+  const wouldBeMiss = missed + 1;
+  const forced = outcome === "nocontact" && wouldBeMiss >= FORCED_DECISION_MISSES;
+
+  const finish = (msg: string) => { onDone(msg); onClose(); };
+  const fail = (res: { failed: Array<{ step: string }> }) =>
+    setErr(`Some writes failed: ${res.failed.map((f) => f.step).join(", ")} — check Monday and retry.`);
+
+  const saveCheckIn = async () => {
+    setSaving(true); setErr(null);
+    const res = await recordCheckIn(patient.mondayItemId, {
+      contact: outcome === "contact",
+      note: note.trim(),
+      nextDate: nextDate || undefined,
+      currentMissed: missed,
+      existingNote: patient.blockNote,
+    });
+    setSaving(false);
+    if (res.failed.length > 0) return fail(res);
+    finish(`Check-in logged for ${patient.name}`);
+  };
+
+  const saveUnblock = async () => {
+    setSaving(true); setErr(null);
+    const res = await unblockPatient(patient.mondayItemId, {
+      note: note.trim() || undefined,
+      existingNote: patient.blockNote,
+    });
+    setSaving(false);
+    if (res.failed.length > 0) return fail(res);
+    finish(`${patient.name} unblocked — back to Active`);
+  };
+
+  const saveChurn = async () => {
+    setSaving(true); setErr(null);
+    const res = await churnPatient(patient.mondayItemId, {
+      deadReason,
+      note: note.trim() || undefined,
+      existingNote: patient.blockNote,
+    });
+    setSaving(false);
+    if (res.failed.length > 0) return fail(res);
+    finish(`${patient.name} moved to Not Active (${deadReason})`);
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent className="w-[480px] sm:max-w-[480px] overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle className="flex items-center gap-2">
+            <CalendarClock className="h-5 w-5 text-sky-700" /> Check-in — {patient.name}
+          </SheetTitle>
+          <SheetDescription>
+            Blocked{patient.blockedDate ? ` since ${fmtDate(patient.blockedDate)}` : ""} · {blockReasons(patient).join(", ") || "no reason set"}
+            {missed > 0 && ` · ${missed} missed check-in${missed === 1 ? "" : "s"}`}
+          </SheetDescription>
+        </SheetHeader>
+
+        <div className="mt-6 space-y-5">
+          {patient.blockNote && (
+            <div className="rounded-md bg-muted/50 border p-3 max-h-[140px] overflow-y-auto">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Block log</div>
+              <pre className="whitespace-pre-wrap text-[11px] text-slate-700 font-sans">{patient.blockNote}</pre>
+            </div>
+          )}
+
+          {!churnMode && (
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">Outcome</div>
+              <div className="flex gap-2">
+                <Button
+                  type="button" size="sm" variant={outcome === "contact" ? "default" : "outline"}
+                  className={cn("flex-1", outcome === "contact" && "bg-emerald-700 hover:bg-emerald-800")}
+                  onClick={() => setOutcome("contact")}
+                >
+                  <MessageSquare className="mr-1.5 h-3.5 w-3.5" /> Patient contact / new info
+                </Button>
+                <Button
+                  type="button" size="sm" variant={outcome === "nocontact" ? "default" : "outline"}
+                  className={cn("flex-1", outcome === "nocontact" && "bg-amber-600 hover:bg-amber-700")}
+                  onClick={() => setOutcome("nocontact")}
+                >
+                  <Clock className="mr-1.5 h-3.5 w-3.5" /> No contact
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {forced && !churnMode && (
+            <div className="rounded-md border border-rose-200 bg-rose-50 p-3 space-y-2">
+              <div className="text-[12px] font-bold text-rose-700 flex items-center gap-1.5">
+                <AlertTriangle className="h-4 w-4" /> This would be miss #{wouldBeMiss} in a row
+              </div>
+              <div className="text-[12px] text-rose-800">
+                Two consecutive check-ins with no contact — decide: renew the block
+                with a reason and a new date, or move the patient to Not Active.
+                (They can always be reactivated if they resurface.)
+              </div>
+              <Button
+                type="button" size="sm" variant="outline"
+                className="w-full border-rose-300 text-rose-700 hover:bg-rose-100"
+                onClick={() => setChurnMode(true)}
+              >
+                <UserX className="mr-1.5 h-3.5 w-3.5" /> Move to Not Active instead…
+              </Button>
+            </div>
+          )}
+
+          {churnMode && (
+            <div className="rounded-md border border-rose-200 bg-rose-50 p-3 space-y-2">
+              <div className="text-[12px] font-bold text-rose-700">Move to Not Active</div>
+              <Select value={deadReason} onValueChange={setDeadReason}>
+                <SelectTrigger className="h-9 text-[13px] bg-white"><SelectValue placeholder="Pick a churn reason…" /></SelectTrigger>
+                <SelectContent>
+                  {DEAD_REASONS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Button type="button" size="sm" variant="ghost" className="w-full" onClick={() => setChurnMode(false)}>
+                ← Back to check-in
+              </Button>
+            </div>
+          )}
+
+          {!churnMode && outcome && (
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
+                Next check-in {outcome === "nocontact" && !forced ? <span className="text-rose-600">*</span> : "(optional)"}
+              </div>
+              <Input type="date" value={nextDate} onChange={(e) => setNextDate(e.target.value)} className="h-9 text-[13px]" />
+            </div>
+          )}
+
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
+              Note {forced && !churnMode ? <span className="text-rose-600">* required to renew</span> : ""}
+            </div>
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={churnMode ? "Anything worth logging before parking this patient…" : "What happened? e.g. 'LVM, will try again Friday' / 'Texted back — ready to reorder'"}
+              className="min-h-[70px] text-[13px]"
+            />
+          </div>
+
+          {err && (
+            <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-[12px] text-rose-700">{err}</div>
+          )}
+        </div>
+
+        <SheetFooter className="mt-6 flex-col gap-2 sm:flex-col sm:space-x-0">
+          {churnMode ? (
+            <Button
+              className="w-full bg-rose-700 hover:bg-rose-800"
+              disabled={!deadReason || saving}
+              onClick={() => void saveChurn()}
+            >
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserX className="mr-2 h-4 w-4" />}
+              Move to Not Active
+            </Button>
+          ) : (
+            <Button
+              className="w-full"
+              disabled={saving || !outcome
+                || (outcome === "nocontact" && !forced && !nextDate)
+                || (forced && (!note.trim() || !nextDate))}
+              onClick={() => void saveCheckIn()}
+            >
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+              {forced ? "Renew block (logged)" : "Save check-in"}
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            className="w-full border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+            disabled={saving}
+            onClick={() => void saveUnblock()}
+            title="Clears the block entirely — patient returns to Active and re-enters Due if their order date has arrived"
+          >
+            <Unlock className="mr-2 h-4 w-4" /> Unblock — resolved
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 function OrderCycleWorkflow() {
-  type PrimaryTab = "prep" | "paused" | "order" | "neworder" | "overview";
-  const [primary, setPrimary] = useState<PrimaryTab>("prep");
+  // Order Cycle v2 lanes: Due (order date arrived, no block — tonight's
+  // worklist) and Blocked (reason actively set) join the existing tabs.
+  // "prep" keeps its 21-day-window checkpoint-bucket semantics as the
+  // work-ahead view; lanes answer "what state is the patient in".
+  type PrimaryTab = "due" | "prep" | "blocked" | "order" | "neworder" | "overview";
+  const [primary, setPrimary] = useState<PrimaryTab>("due");
   type PrepPhase = CheckpointKind | "all";
   const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
   // `phase` is the derived view selection used by the rest of the component.
@@ -759,10 +1196,14 @@ function OrderCycleWorkflow() {
   // every non-ready patient so the operator sees the whole Order Prep cohort.
   const phase: PhaseTab =
     primary === "overview" ? "overview"
-    : primary === "paused" ? "overview"
+    : primary === "due"     ? "overview"
+    : primary === "blocked" ? "overview"
     : primary === "order"  ? "ready"
     : prepPhase === "all"  ? "overview"
     : prepPhase;
+  // Stable "today" for lane math — refreshed per render pass is fine,
+  // lanes only care about the calendar date.
+  const todayStr = todayIso();
   const setPhase = (next: PhaseTab) => {
     if (next === "overview") setPrimary("overview");
     else if (next === "ready") setPrimary("order");
@@ -824,15 +1265,33 @@ function OrderCycleWorkflow() {
       ready: 0,
       prepUnique: 0,
       paused: 0,
+      due: 0,
+      scheduled: 0,
+      possiblyResolved: 0,
+      checkInsDue: 0,
+      noReason: 0,
     };
     for (const p of all) {
+      const lp = p as LanePatient;
+      // Not Active group is parked — excluded from every lane count.
+      if ((lp as { isNotActive?: boolean }).isNotActive) continue;
       c.overview++;
-      // Paused patients get pulled out of Order Prep so they don't
-      // clutter the happy-path queue. Counted in their own bucket so
-      // ops can find them when they need to.
-      if (p.patientStatus === "Paused") { c.paused++; continue; }
+      // Blocked patients get pulled out of Order Prep / Due so they
+      // don't clutter the happy-path queues. Lane counts + watcher
+      // queues computed here in one pass.
+      if (isBlocked(lp)) {
+        c.paused++;
+        if (possiblyResolved(lp)) c.possiblyResolved++;
+        if (checkInDue(lp, todayStr)) c.checkInsDue++;
+        if (needsReason(lp)) c.noReason++;
+        continue;
+      }
       const status = p.orderingCycle || "";
+      // Ready-to-Order rows live in their own tab — not double-counted
+      // in Due even when their order date has arrived.
       if (status === "Ready to Order") { c.ready++; continue; }
+      if (getLane(lp, todayStr) === "due") c.due++;
+      else c.scheduled++;
       if (status !== "Order Prep") continue;
       let anyFailing = false;
       if (p.confirmation.tone !== "ok") { c.confirmation++; anyFailing = true; }
@@ -847,7 +1306,7 @@ function OrderCycleWorkflow() {
       if (anyFailing) c.prepUnique++;
     }
     return c;
-  }, [all]);
+  }, [all, todayStr]);
 
   const openCell = (p: SubscriptionPatient, kind: CheckpointKind) => { setActivePatient(p); setActiveKind(kind); };
   const openPatient = (p: SubscriptionPatient) => { setActivePatient(p); setActiveKind("patient"); };
@@ -908,6 +1367,15 @@ function OrderCycleWorkflow() {
   // today, without leaving the order cycle."
   const [dvsView, setDvsView] = useState(false);
 
+  // ── Order Cycle v2 dialogs (block / check-in) ──
+  const [blockTarget, setBlockTarget]     = useState<LanePatient | null>(null);
+  const [checkInTarget, setCheckInTarget] = useState<LanePatient | null>(null);
+  const onBlockDone = (msg: string) => {
+    setBatchMsg(msg);
+    invalidateSubscription();
+    setTimeout(() => setBatchMsg(null), 5000);
+  };
+
   /**
    * Run Eligibility Batch — flips `Run Check` to "Run" for every patient
    * currently in the Eligibility phase of the visible cohort, in parallel.
@@ -938,7 +1406,11 @@ function OrderCycleWorkflow() {
   };
 
 
-  const filteredAll = useMemo(() => {
+  // filteredBase: search/payer/reason filters WITHOUT the status filter —
+  // the Blocked tab must see Paused rows even while the default status
+  // filter is "Active". filteredAll layers the status filter on top for
+  // every other tab.
+  const filteredBase = useMemo(() => {
     return all.filter((p) => {
       if (search) {
         const q = search.trim().toLowerCase();
@@ -949,15 +1421,22 @@ function OrderCycleWorkflow() {
         if (!nameMatch && !idMatch && !phoneMatch) return false;
       }
       if (payer !== "All payers" && p.primaryPayer !== payer) return false;
-      if (statusFilter !== "All" && p.patientStatus !== statusFilter) return false;
-      if (pauseReason !== "Any pause reason" && p.pauseReason !== pauseReason) return false;
+      // Multi-select cell ("Waiting on Patient, Last Order Unpaid") —
+      // match if the selected reason is among the row's labels.
+      if (pauseReason !== "Any pause reason"
+          && !blockReasons(p as LanePatient).includes(pauseReason)) return false;
       if (blocked !== "Anyone") {
         const map = { Us: "us", Patient: "patient", Payer: "payer", System: "system" } as const;
         if (p.blockedBy !== map[blocked as keyof typeof map]) return false;
       }
       return true;
     });
-  }, [all, search, payer, blocked, statusFilter, pauseReason]);
+  }, [all, search, payer, blocked, pauseReason]);
+
+  const filteredAll = useMemo(() => {
+    return filteredBase.filter((p) =>
+      statusFilter === "All" || p.patientStatus === statusFilter);
+  }, [filteredBase, statusFilter]);
 
   const rows = useMemo(() => {
     let base: SubscriptionPatient[];
@@ -965,17 +1444,26 @@ function OrderCycleWorkflow() {
     // (color_mkyjawhq). Backend cron + webhook own the promotion to
     // 'Ready to Order' once all 4 gates pass + eligibility is current.
     // Client-side filters now mirror that single source of truth.
-    if (primary === "paused") {
-      // Paused tab: every paused patient regardless of ordering cycle
-      // status. Lives outside the Order Prep happy path so the operator
-      // can still find them when they need to act on a pause reason.
-      base = filteredAll.filter((p) => p.patientStatus === "Paused");
+    if (primary === "blocked") {
+      // Blocked lane: reason actively set (or Paused with none — the
+      // triage cases). Bypasses the status filter via filteredBase.
+      base = filteredBase.filter((p) =>
+        !(p as LanePatient & { isNotActive?: boolean }).isNotActive
+        && isBlocked(p as LanePatient));
+    } else if (primary === "due") {
+      // Due lane: order date arrived/past, no block, not already
+      // promoted to Ready to Order. Tonight's worklist — sorted oldest
+      // order first below.
+      base = filteredAll.filter((p) =>
+        !(p as LanePatient & { isNotActive?: boolean }).isNotActive
+        && getLane(p as LanePatient, todayStr) === "due"
+        && (p.orderingCycle || "") !== "Ready to Order");
     } else if (phase === "overview") {
       if (primary === "prep" && prepPhase === "all") {
-        // Order Prep > All: every row in 'Order Prep' EXCLUDING paused.
+        // Order Prep > All: every row in 'Order Prep' EXCLUDING blocked.
         base = filteredAll.filter((p) =>
           (p.orderingCycle || "") === "Order Prep" &&
-          p.patientStatus !== "Paused",
+          !isBlocked(p as LanePatient),
         );
       } else {
         // Pure Overview tab: whole cohort regardless of status.
@@ -987,10 +1475,10 @@ function OrderCycleWorkflow() {
     } else {
       // Phase sub-tabs (Confirmation / Eligibility / Auth / Last Paid):
       // patients in Order Prep AND with this specific checkpoint non-OK,
-      // also excluding paused so they don't clog the buckets.
+      // also excluding blocked so they don't clog the buckets.
       base = filteredAll.filter((p) =>
         (p.orderingCycle || "") === "Order Prep" &&
-        p.patientStatus !== "Paused" &&
+        !isBlocked(p as LanePatient) &&
         getCheckpoint(p, phase).tone !== "ok",
       );
     }
@@ -1042,9 +1530,36 @@ function OrderCycleWorkflow() {
         : bv.localeCompare(av, undefined, { numeric: true, sensitivity: "base" });
     });
     return sorted;
-  }, [filteredAll, phase, primary, prepPhase, sortKey, sortDir]);
+  }, [filteredAll, filteredBase, phase, primary, prepPhase, sortKey, sortDir, todayStr]);
 
   const phaseKpis = useMemo(() => {
+    if (primary === "due") {
+      const green = rows.filter((p) => allChecksPass(p)).length;
+      const candidates = rows.filter((p) => shipCandidate(p as LanePatient).ok).length;
+      const oldest = rows.reduce((acc, p) => {
+        if (!p.nextOrderDate) return acc;
+        const d = -daysBetween(p.nextOrderDate);
+        return Math.max(acc, d);
+      }, 0);
+      return [
+        { tone: "info"    as const, label: "Due now",           value: counts.due },
+        { tone: "success" as const, label: "All 4 checks green", value: green },
+        { tone: "success" as const, label: "Ship candidates",    value: candidates },
+        { tone: "warning" as const, label: "Oldest waiting",     value: `${oldest}d` },
+        { tone: "neutral" as const, label: "Scheduled (future)", value: counts.scheduled },
+        { tone: "danger"  as const, label: "Blocked",            value: counts.paused },
+      ];
+    }
+    if (primary === "blocked") {
+      return [
+        { tone: "danger"  as const, label: "Blocked",          value: counts.paused },
+        { tone: "success" as const, label: "Looks resolved",   value: counts.possiblyResolved },
+        { tone: "warning" as const, label: "Check-ins due",    value: counts.checkInsDue },
+        { tone: "danger"  as const, label: "No reason set",    value: counts.noReason },
+        { tone: "info"    as const, label: "Due now",          value: counts.due },
+        { tone: "neutral" as const, label: "All open",         value: counts.overview },
+      ];
+    }
     if (phase === "overview") {
       return [
         { tone: "info"    as const, label: "Confirmation",     value: counts.confirmation },
@@ -1071,7 +1586,7 @@ function OrderCycleWorkflow() {
           && (p.confirmation.overrideReason || p.benefits.overrideReason
               || p.auth.overrideReason || p.lastPaid.overrideReason)).length },
     ];
-  }, [phase, filteredAll, rows, counts]);
+  }, [phase, primary, filteredAll, rows, counts]);
 
   const renderPhaseTab = (k: PhaseTab, label: string, count: number) => (
     <TabsTrigger value={k} className="gap-1.5">
@@ -1088,19 +1603,23 @@ function OrderCycleWorkflow() {
       <div className="space-y-4">
         <Tabs value={primary} onValueChange={(v) => setPrimary(v as PrimaryTab)}>
           <TabsList className="bg-card border h-11 p-1">
+            <TabsTrigger value="due" className="text-[15px] font-semibold gap-2 px-4">
+              Due
+              <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.due}</span>
+            </TabsTrigger>
             <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4">
               Order Prep
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.prepUnique}</span>
             </TabsTrigger>
-            <TabsTrigger value="paused" className="text-[15px] font-semibold gap-2 px-4">
+            <TabsTrigger value="blocked" className="text-[15px] font-semibold gap-2 px-4">
               <PauseCircle className="h-4 w-4 text-rose-600" />
-              Paused
+              Blocked
               <span className="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.paused}</span>
-            </TabsTrigger>
-            <TabsTrigger value="paused" className="text-[15px] font-semibold gap-2 px-4">
-              <PauseCircle className="h-4 w-4 text-rose-600" />
-              Paused
-              <span className="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.paused}</span>
+              {counts.possiblyResolved > 0 && (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
+                  <Bell className="h-3 w-3" />{counts.possiblyResolved}
+                </span>
+              )}
             </TabsTrigger>
             <TabsTrigger value="order" className="text-[15px] font-semibold gap-2 px-4">
               Ready to Order
@@ -1157,9 +1676,29 @@ function OrderCycleWorkflow() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs value={primary} onValueChange={(v) => setPrimary(v as PrimaryTab)}>
           <TabsList className="bg-card border h-11 p-1">
-            <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4">
+            <TabsTrigger value="due" className="text-[15px] font-semibold gap-2 px-4"
+              title="Order date arrived, nothing blocking — tonight's worklist">
+              Due
+              <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.due}</span>
+            </TabsTrigger>
+            <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4"
+              title="Upcoming orders being prepped — the 4 checkpoint buckets">
               Order Prep
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.prepUnique}</span>
+            </TabsTrigger>
+            <TabsTrigger value="blocked" className="text-[15px] font-semibold gap-2 px-4"
+              title="Actively blocked with a reason — watchers flag when the blocker resolves">
+              <PauseCircle className="h-4 w-4 text-rose-600" />
+              Blocked
+              <span className="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.paused}</span>
+              {counts.possiblyResolved > 0 && (
+                <span
+                  className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums"
+                  title={`${counts.possiblyResolved} block${counts.possiblyResolved === 1 ? " looks" : "s look"} resolved — review`}
+                >
+                  <Bell className="h-3 w-3" />{counts.possiblyResolved}
+                </span>
+              )}
             </TabsTrigger>
             <TabsTrigger value="order" className="text-[15px] font-semibold gap-2 px-4">
               Ready to Order
@@ -1273,12 +1812,21 @@ function OrderCycleWorkflow() {
           <div className="p-4">
             <DvsQueue />
           </div>
+        ) : primary === "blocked" ? (
+          <BlockedTable
+            rows={rows as LanePatient[]}
+            todayStr={todayStr}
+            onPatientClick={openPatient}
+            onCheckIn={(p) => setCheckInTarget(p)}
+            onEditBlock={(p) => setBlockTarget(p)}
+          />
         ) : phase === "overview" ? (
           <OverviewTable
             rows={rows}
             onCellClick={openCell}
             onPatientClick={openPatient}
             onSubmit={sendToOrderBoard}
+            onBlock={(p) => setBlockTarget(p as LanePatient)}
             sortKey={sortKey}
             sortDir={sortDir}
             onSort={toggleSort}
@@ -1303,13 +1851,28 @@ function OrderCycleWorkflow() {
         )}
         {rows.length === 0 && (
           <div className="px-4 py-12 text-center text-sm text-muted-foreground">
-            {phase === "ready" ? "Nothing ready to submit yet." : "No patients in this phase right now."}
+            {phase === "ready" ? "Nothing ready to submit yet."
+             : primary === "due" ? "Nothing due — every arrived order is either handled or blocked."
+             : primary === "blocked" ? "Nothing blocked. 🎉"
+             : "No patients in this phase right now."}
           </div>
         )}
       </Card>
 
         </>
       <PatientDrawer patient={activePatient} kind={activeKind} onClose={closeDrawer} />
+      <BlockDialog
+        patient={blockTarget}
+        open={!!blockTarget}
+        onClose={() => setBlockTarget(null)}
+        onDone={onBlockDone}
+      />
+      <CheckInDialog
+        patient={checkInTarget}
+        open={!!checkInTarget}
+        onClose={() => setCheckInTarget(null)}
+        onDone={onBlockDone}
+      />
     </div>
   );
 }
@@ -1351,13 +1914,14 @@ function SortableLabel({
 }
 
 function OverviewTable({
-  rows, onCellClick, onPatientClick, onSubmit, sortKey, sortDir, onSort,
+  rows, onCellClick, onPatientClick, onSubmit, onBlock, sortKey, sortDir, onSort,
   sendingIds, sentIds,
 }: {
   rows: SubscriptionPatient[];
   onCellClick: (p: SubscriptionPatient, k: CheckpointKind) => void;
   onPatientClick: (p: SubscriptionPatient) => void;
   onSubmit: (p: SubscriptionPatient) => void;
+  onBlock?: (p: SubscriptionPatient) => void;
   sortKey: OverviewSortKey;
   sortDir: "asc" | "desc";
   onSort: (k: OverviewSortKey) => void;
@@ -1380,7 +1944,7 @@ function OverviewTable({
       {rows.map((p) => (
         <div key={p.id} className={cn(OVERVIEW_GRID, "border-b px-6 py-4 hover:bg-muted/30 transition-colors items-center")}>
           <button type="button" onClick={() => onPatientClick(p)} className="text-left">
-            <div className="text-[15px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /></div>
+            <div className="text-[15px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /><ShipCandidateBadge patient={p} /></div>
             <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">{p.phone}</div>
           </button>
           <div>
@@ -1410,9 +1974,148 @@ function OverviewTable({
               <CheckpointCircle check={p.lastPaid} />
             </CircleEditPopover>
           </div>
-          <ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} />
+          <ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} onBlock={onBlock ? () => onBlock(p) : undefined} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} />
         </div>
       ))}
+    </div>
+  );
+}
+
+// ─── Blocked lane table (Order Cycle v2) ─────────────────────────────────────
+/**
+ * Three pinned sections above the rest:
+ *   🔔 Looks resolved — every reason's watcher signal has fired; review + unblock
+ *   📅 Check-ins due  — the check-in date arrived; contact the patient
+ *   ⚠ No reason set  — Paused with no reason (data hygiene / triage)
+ * Remainder sorted by check-in date (soonest first), then order date.
+ */
+function BlockedTable({
+  rows, todayStr, onPatientClick, onCheckIn, onEditBlock,
+}: {
+  rows: LanePatient[];
+  todayStr: string;
+  onPatientClick: (p: SubscriptionPatient) => void;
+  onCheckIn: (p: LanePatient) => void;
+  onEditBlock: (p: LanePatient) => void;
+}) {
+  const resolved = rows.filter((p) => possiblyResolved(p));
+  const resolvedIds = new Set(resolved.map((p) => p.mondayItemId));
+  const dueCheck = rows.filter((p) => !resolvedIds.has(p.mondayItemId) && checkInDue(p, todayStr));
+  const dueIds = new Set(dueCheck.map((p) => p.mondayItemId));
+  const noReason = rows.filter((p) =>
+    !resolvedIds.has(p.mondayItemId) && !dueIds.has(p.mondayItemId) && needsReason(p));
+  const noReasonIds = new Set(noReason.map((p) => p.mondayItemId));
+  const rest = rows
+    .filter((p) => !resolvedIds.has(p.mondayItemId) && !dueIds.has(p.mondayItemId) && !noReasonIds.has(p.mondayItemId))
+    .sort((a, b) => (a.checkInDate || "9999").localeCompare(b.checkInDate || "9999")
+      || (a.nextOrderDate || "9999").localeCompare(b.nextOrderDate || "9999"));
+
+  const Section = ({ title, icon, tone, list }: {
+    title: string; icon: JSX.Element; tone: string; list: LanePatient[];
+  }) => list.length === 0 ? null : (
+    <>
+      <div className={cn("flex items-center gap-2 px-6 py-2 text-[11px] font-bold uppercase tracking-wider border-b", tone)}>
+        {icon}{title}<span className="tabular-nums">({list.length})</span>
+      </div>
+      {list.map((p) => <BlockedRow key={p.mondayItemId} p={p} onPatientClick={onPatientClick} onCheckIn={onCheckIn} onEditBlock={onEditBlock} />)}
+    </>
+  );
+
+  return (
+    <div className="text-[13px]">
+      <div className={cn(BLOCKED_GRID, "border-b bg-muted/60 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
+        <div>Patient</div>
+        <div>Order</div>
+        <div>Reason</div>
+        <div>Latest note</div>
+        <div>Check-in</div>
+        <div>Watcher</div>
+        <div className="text-right pr-2">Actions</div>
+      </div>
+      <Section
+        title="Looks resolved — review + unblock"
+        icon={<Bell className="h-3.5 w-3.5" />}
+        tone="bg-emerald-50 text-emerald-800 border-emerald-100"
+        list={resolved}
+      />
+      <Section
+        title="Check-ins due"
+        icon={<CalendarClock className="h-3.5 w-3.5" />}
+        tone="bg-amber-50 text-amber-800 border-amber-100"
+        list={dueCheck}
+      />
+      <Section
+        title="No reason set — triage"
+        icon={<AlertTriangle className="h-3.5 w-3.5" />}
+        tone="bg-rose-50 text-rose-700 border-rose-100"
+        list={noReason}
+      />
+      {rest.length > 0 && (resolved.length + dueCheck.length + noReason.length > 0) && (
+        <div className="flex items-center gap-2 px-6 py-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground bg-muted/40 border-b">
+          <Clock className="h-3.5 w-3.5" />Watching<span className="tabular-nums">({rest.length})</span>
+        </div>
+      )}
+      {rest.map((p) => <BlockedRow key={p.mondayItemId} p={p} onPatientClick={onPatientClick} onCheckIn={onCheckIn} onEditBlock={onEditBlock} />)}
+    </div>
+  );
+}
+
+const BLOCKED_GRID = "grid grid-cols-[220px_110px_210px_minmax(160px,1fr)_150px_130px_210px] gap-4";
+
+function BlockedRow({
+  p, onPatientClick, onCheckIn, onEditBlock,
+}: {
+  p: LanePatient;
+  onPatientClick: (p: SubscriptionPatient) => void;
+  onCheckIn: (p: LanePatient) => void;
+  onEditBlock: (p: LanePatient) => void;
+}) {
+  // First line of the block note = the newest entry (append-prepends).
+  const latestNote = (p.blockNote ?? "").split("\n")[0] || "—";
+  const missed = p.missedCheckIns ?? 0;
+  return (
+    <div className={cn(BLOCKED_GRID, "border-b px-6 py-3.5 hover:bg-muted/30 transition-colors items-center")}>
+      <button type="button" onClick={() => onPatientClick(p)} className="text-left">
+        <div className="text-[14px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">
+          {p.name}<OopBadge patient={p} />
+        </div>
+        <div className="text-[11px] text-muted-foreground tabular-nums mt-0.5">
+          {p.phone}{p.blockedDate ? ` · blocked ${fmtDate(p.blockedDate)}` : ""}
+          {missed > 0 && <span className="ml-1 text-rose-600 font-semibold">· {missed} missed</span>}
+        </div>
+      </button>
+      <div>
+        {p.nextOrderDate ? (
+          <>
+            <div className="text-[13px] font-semibold tabular-nums">{fmtDate(p.nextOrderDate)}</div>
+            <div className="text-[11px] text-muted-foreground tabular-nums">
+              {daysBetween(p.nextOrderDate) < 0 ? `${-daysBetween(p.nextOrderDate)}d ago` : `in ${daysBetween(p.nextOrderDate)}d`}
+            </div>
+          </>
+        ) : <span className="text-[11px] text-muted-foreground">—</span>}
+      </div>
+      <div><ReasonChips patient={p} /></div>
+      <div className="text-[11px] text-muted-foreground truncate" title={p.blockNote || undefined}>{latestNote}</div>
+      <div><CheckInCell iso={p.checkInDate || undefined} /></div>
+      <div><ResolutionPill patient={p} /></div>
+      <div className="flex items-center justify-end gap-1.5">
+        <Button
+          variant="outline" size="sm"
+          className="h-7 px-2.5 text-[11px] font-semibold"
+          onClick={() => onCheckIn(p)}
+          title="Record a check-in, unblock, or move to Not Active"
+        >
+          <CalendarClock className="mr-1 h-3 w-3" />Check-in
+        </Button>
+        <Button
+          variant="outline" size="sm"
+          className="h-7 px-2.5 text-[11px] font-semibold"
+          onClick={() => onEditBlock(p)}
+          title="Edit the block reason / note / check-in date"
+        >
+          <Pencil className="mr-1 h-3 w-3" />Edit
+        </Button>
+      </div>
     </div>
   );
 }
