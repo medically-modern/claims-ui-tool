@@ -588,29 +588,6 @@ function ReviewAndSubmit({ p, onReview, onSubmit, onBlock, sending, sent }: {
   );
 }
 
-function KpiTile({ label, value, tone }: {
-  label: string; value: string | number;
-  tone?: "info" | "warning" | "danger" | "success" | "neutral";
-}) {
-  const dot = {
-    info:    "bg-sky-100 text-sky-600",
-    warning: "bg-amber-100 text-amber-600",
-    danger:  "bg-rose-100 text-rose-600",
-    success: "bg-emerald-100 text-emerald-600",
-    neutral: "bg-slate-100 text-slate-600",
-  }[tone ?? "neutral"];
-  return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className={cn("grid h-9 w-9 place-items-center rounded-lg", dot)}>
-          <Check className="h-4 w-4" />
-        </div>
-        <div className="text-3xl font-semibold tracking-tight tabular-nums">{value}</div>
-      </div>
-      <div className="mt-3 text-sm font-medium text-foreground">{label}</div>
-    </Card>
-  );
-}
 
 // ─── Drawer ──────────────────────────────────────────────────────────────────
 function PatientDrawer({
@@ -1250,20 +1227,19 @@ function OrderCycleWorkflow() {
     // promotion from 'Order Prep' to 'Ready to Order' once all 4
     // gates pass + eligibility is current for the order's month.
     //
-    //   Order Prep tab  = ordering_cycle == 'Order Prep'
-    //   Order tab       = ordering_cycle == 'Ready to Order'
-    //   Overview tab    = whole cohort (any status)
+    // Order Cycle v2: the three lanes are pure derivations —
+    //   Due       = order date arrived, no block reason
+    //   Scheduled = order date in future (or blank), no block reason
+    //   Blocked   = block reason set (or Paused with none — triage)
+    //   Ready/Order tabs stay driven by the Monday Ordering Cycle column.
     //
-    // The 4 phase sub-tabs under Order Prep still use independent-
-    // bucket semantics: within the Order Prep cohort, count + show
-    // patients whose THAT specific checkpoint is non-OK. prepUnique
-    // is the deduped count of Order-Prep rows with at least one
-    // non-OK check (so we don't double-count multi-blocked rows).
+    // The 4 phase sub-tabs under Scheduled use independent-bucket
+    // semantics within the 21-day prep window: count + show patients
+    // whose THAT specific checkpoint is non-OK.
     const c = {
       overview: 0,
       confirmation: 0, benefits: 0, auth: 0, lastPaid: 0,
       ready: 0,
-      prepUnique: 0,
       paused: 0,
       due: 0,
       scheduled: 0,
@@ -1276,7 +1252,7 @@ function OrderCycleWorkflow() {
       // Not Active group is parked — excluded from every lane count.
       if ((lp as { isNotActive?: boolean }).isNotActive) continue;
       c.overview++;
-      // Blocked patients get pulled out of Order Prep / Due so they
+      // Blocked patients get pulled out of Scheduled / Due so they
       // don't clutter the happy-path queues. Lane counts + watcher
       // queues computed here in one pass.
       if (isBlocked(lp)) {
@@ -1290,20 +1266,15 @@ function OrderCycleWorkflow() {
       // Ready-to-Order rows live in their own tab — not double-counted
       // in Due even when their order date has arrived.
       if (status === "Ready to Order") { c.ready++; continue; }
-      if (getLane(lp, todayStr) === "due") c.due++;
-      else c.scheduled++;
-      if (status !== "Order Prep") continue;
-      let anyFailing = false;
-      if (p.confirmation.tone !== "ok") { c.confirmation++; anyFailing = true; }
-      if (p.benefits.tone     !== "ok") { c.benefits++;     anyFailing = true; }
-      if (p.auth.tone         !== "ok") { c.auth++;         anyFailing = true; }
-      if (p.lastPaid.tone     !== "ok") { c.lastPaid++;     anyFailing = true; }
-      // A patient in Order Prep with all 4 checks passing but not yet
-      // promoted to Ready (cron hasn't fired yet, or some other gate
-      // we don't render — last_eligibility_check currency) still
-      // belongs in the prep cohort count.
-      if (!anyFailing) anyFailing = true; // count them in prepUnique too
-      if (anyFailing) c.prepUnique++;
+      if (getLane(lp, todayStr) === "due") { c.due++; continue; }
+      c.scheduled++;
+      // Checkpoint buckets: actionable prep work = scheduled orders
+      // inside the 21-day window with that checkpoint non-OK.
+      if (!withinOrderPrepWindow(p)) continue;
+      if (p.confirmation.tone !== "ok") c.confirmation++;
+      if (p.benefits.tone     !== "ok") c.benefits++;
+      if (p.auth.tone         !== "ok") c.auth++;
+      if (p.lastPaid.tone     !== "ok") c.lastPaid++;
     }
     return c;
   }, [all, todayStr]);
@@ -1460,10 +1431,12 @@ function OrderCycleWorkflow() {
         && (p.orderingCycle || "") !== "Ready to Order");
     } else if (phase === "overview") {
       if (primary === "prep" && prepPhase === "all") {
-        // Order Prep > All: every row in 'Order Prep' EXCLUDING blocked.
+        // Scheduled > All: every future-dated, unblocked, not-yet-ready
+        // order (soonest first via the default sort).
         base = filteredAll.filter((p) =>
-          (p.orderingCycle || "") === "Order Prep" &&
-          !isBlocked(p as LanePatient),
+          !(p as LanePatient & { isNotActive?: boolean }).isNotActive
+          && getLane(p as LanePatient, todayStr) === "scheduled"
+          && (p.orderingCycle || "") !== "Ready to Order",
         );
       } else {
         // Pure Overview tab: whole cohort regardless of status.
@@ -1474,12 +1447,14 @@ function OrderCycleWorkflow() {
       base = filteredAll.filter((p) => (p.orderingCycle || "") === "Ready to Order");
     } else {
       // Phase sub-tabs (Confirmation / Eligibility / Auth / Last Paid):
-      // patients in Order Prep AND with this specific checkpoint non-OK,
-      // also excluding blocked so they don't clog the buckets.
+      // scheduled orders inside the 21-day prep window with this
+      // specific checkpoint non-OK; blocked rows never clog the buckets.
       base = filteredAll.filter((p) =>
-        (p.orderingCycle || "") === "Order Prep" &&
-        !isBlocked(p as LanePatient) &&
-        getCheckpoint(p, phase).tone !== "ok",
+        !(p as LanePatient & { isNotActive?: boolean }).isNotActive
+        && getLane(p as LanePatient, todayStr) === "scheduled"
+        && (p.orderingCycle || "") !== "Ready to Order"
+        && withinOrderPrepWindow(p)
+        && getCheckpoint(p, phase).tone !== "ok",
       );
     }
     // Apply sort. nextOrderDate uses lexical ISO compare which is
@@ -1532,61 +1507,6 @@ function OrderCycleWorkflow() {
     return sorted;
   }, [filteredAll, filteredBase, phase, primary, prepPhase, sortKey, sortDir, todayStr]);
 
-  const phaseKpis = useMemo(() => {
-    if (primary === "due") {
-      const green = rows.filter((p) => allChecksPass(p)).length;
-      const candidates = rows.filter((p) => shipCandidate(p as LanePatient).ok).length;
-      const oldest = rows.reduce((acc, p) => {
-        if (!p.nextOrderDate) return acc;
-        const d = -daysBetween(p.nextOrderDate);
-        return Math.max(acc, d);
-      }, 0);
-      return [
-        { tone: "info"    as const, label: "Due now",           value: counts.due },
-        { tone: "success" as const, label: "All 4 checks green", value: green },
-        { tone: "success" as const, label: "Ship candidates",    value: candidates },
-        { tone: "warning" as const, label: "Oldest waiting",     value: `${oldest}d` },
-        { tone: "neutral" as const, label: "Scheduled (future)", value: counts.scheduled },
-        { tone: "danger"  as const, label: "Blocked",            value: counts.paused },
-      ];
-    }
-    if (primary === "blocked") {
-      return [
-        { tone: "danger"  as const, label: "Blocked",          value: counts.paused },
-        { tone: "success" as const, label: "Looks resolved",   value: counts.possiblyResolved },
-        { tone: "warning" as const, label: "Check-ins due",    value: counts.checkInsDue },
-        { tone: "danger"  as const, label: "No reason set",    value: counts.noReason },
-        { tone: "info"    as const, label: "Due now",          value: counts.due },
-        { tone: "neutral" as const, label: "All open",         value: counts.overview },
-      ];
-    }
-    if (phase === "overview") {
-      return [
-        { tone: "info"    as const, label: "Confirmation",     value: counts.confirmation },
-        { tone: "warning" as const, label: "Eligibility",      value: counts.benefits },
-        { tone: "danger"  as const, label: "Authorization",    value: counts.auth },
-        { tone: "warning" as const, label: "Last Order Paid",  value: counts.lastPaid },
-        { tone: "success" as const, label: "Ready to Submit",  value: counts.ready },
-        { tone: "neutral" as const, label: "All Open",         value: counts.overview },
-      ];
-    }
-    // Independent-bucket KPIs: "in this phase" = checkpoint for this
-    // phase is non-OK, regardless of other phases' status.
-    const inPhase = (p: SubscriptionPatient) => getCheckpoint(p, phase as CheckpointKind).tone !== "ok";
-    const blockedCount = (party: BlockedParty) =>
-      filteredAll.filter((p) => inPhase(p) && p.blockedBy === party).length;
-    return [
-      { tone: "neutral" as const, label: `In ${PHASE_LABELS[phase]}`, value: rows.length },
-      { tone: "warning" as const, label: "Blocked by patient",        value: blockedCount("patient") },
-      { tone: "info"    as const, label: "Waiting on payer",          value: blockedCount("payer") },
-      { tone: "danger"  as const, label: "Needs us to act",           value: blockedCount("us") },
-      { tone: "neutral" as const, label: "System-paced",              value: blockedCount("system") },
-      { tone: "success" as const, label: "Overrides applied",
-        value: filteredAll.filter((p) => inPhase(p)
-          && (p.confirmation.overrideReason || p.benefits.overrideReason
-              || p.auth.overrideReason || p.lastPaid.overrideReason)).length },
-    ];
-  }, [phase, primary, filteredAll, rows, counts]);
 
   const renderPhaseTab = (k: PhaseTab, label: string, count: number) => (
     <TabsTrigger value={k} className="gap-1.5">
@@ -1607,9 +1527,10 @@ function OrderCycleWorkflow() {
               Due
               <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.due}</span>
             </TabsTrigger>
-            <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4">
-              Order Prep
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.prepUnique}</span>
+            <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4"
+              title="Order date in the future — the 4 checkpoint buckets prep the next 21 days">
+              Scheduled
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.scheduled}</span>
             </TabsTrigger>
             <TabsTrigger value="blocked" className="text-[15px] font-semibold gap-2 px-4">
               <PauseCircle className="h-4 w-4 text-rose-600" />
@@ -1682,9 +1603,9 @@ function OrderCycleWorkflow() {
               <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.due}</span>
             </TabsTrigger>
             <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4"
-              title="Upcoming orders being prepped — the 4 checkpoint buckets">
-              Order Prep
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.prepUnique}</span>
+              title="Order date in the future — the 4 checkpoint buckets prep the next 21 days">
+              Scheduled
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.scheduled}</span>
             </TabsTrigger>
             <TabsTrigger value="blocked" className="text-[15px] font-semibold gap-2 px-4"
               title="Actively blocked with a reason — watchers flag when the blocker resolves">
@@ -1762,7 +1683,7 @@ function OrderCycleWorkflow() {
             <TabsTrigger value="all" className="gap-1.5">
               All
               <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
-                {counts.prepUnique}
+                {counts.scheduled}
               </span>
             </TabsTrigger>
             {renderPhaseTab("confirmation", "Confirmation",     counts.confirmation)}
@@ -1774,11 +1695,6 @@ function OrderCycleWorkflow() {
       )}
 
       <>
-      {/* KPI grid */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {phaseKpis.map((k) => (<KpiTile key={k.label} {...k} />))}
-      </div>
-
       {/* Filters */}
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[260px]">
