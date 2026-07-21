@@ -166,3 +166,27 @@ export async function runEligibilityCheck(mondayItemId: string): Promise<void> {
 export async function sendToOrder(mondayItemId: string): Promise<void> {
   await writeStatus(mondayItemId, "color_mkyjawhq", "Order");
 }
+
+/**
+ * Operator manually attests the patient confirmed (text / call / judgment
+ * call) — flips Patient Order Response to 'Confirmed' so the Confirmation
+ * checkpoint goes green, and prepends an audit line to Subscription
+ * Patient Notes. Once all 4 checks are green the row auto-promotes to
+ * Ready to Order in the UI (isReady derivation).
+ */
+export async function markConfirmedByOperator(
+  mondayItemId: string,
+  note: string,
+  existingNotes?: string,
+): Promise<void> {
+  await writeStatus(mondayItemId, SUB_COL.patient_order_response, "Confirmed");
+  const today = new Date();
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const line = `[${iso}] Confirmed manually by operator${note ? ` — ${note}` : ""}`;
+  const merged = (existingNotes ?? "").trim();
+  await writeSimple(
+    mondayItemId,
+    SUB_COL.patient_notes,
+    merged ? `${line}\n${merged}` : line,
+  );
+}
