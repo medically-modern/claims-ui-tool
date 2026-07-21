@@ -470,15 +470,23 @@ export const PAYER_OPTIONS = [
 
 export const BLOCKED_BY_OPTIONS = ["Anyone", "Us", "Patient", "Payer", "System"] as const;
 
-// Consolidated Order Cycle v2 reason set (board migrated 2026-07-21;
-// old 15-label taxonomy folded into these 6 — see ORDER_CYCLE_V2_DESIGN.md §8.1).
+// Order Cycle v2 two-level reason model: SPECIFIC labels on the board
+// (context for humans), FAMILIES in code (drive the watchers/SOPs) —
+// see lanes.ts REASON_FAMILY / BLOCK_REASON_GROUPS.
 export const PAUSE_REASON_OPTIONS = [
   "Any pause reason",
   "Inactive Insurance",
   "Need new auth",
   "Patient needs dr appt",
+  "Last claim denied",
+  "Still owes last invoice",
   "Last Order Unpaid",
-  "Waiting on Patient",
+  "No confirmation",
+  "Has enough supplies",
+  "Hospital/SNF",
+  "Hasn't received pump yet",
+  "OOP too expensive",
+  "Not using currently",
   "Other",
 ] as const;
 

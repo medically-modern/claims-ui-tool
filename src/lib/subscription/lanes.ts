@@ -19,21 +19,62 @@ import type { SubscriptionPatient } from "@/components/subscription/mockData";
 
 export type Lane = "scheduled" | "due" | "blocked";
 
-/** Consolidated block reasons (v2, migrated 2026-07-21 — 15 old labels → 6). */
-export const BLOCK_REASONS = [
-  "Inactive Insurance",
-  "Need new auth",
-  "Patient needs dr appt",
-  "Last Order Unpaid",
-  "Waiting on Patient",
-  "Other",
-] as const;
+/**
+ * Two-level reason model (Brandon 2026-07-21): the DROPDOWN keeps
+ * SPECIFIC reasons — the operator needs to read "No confirmation" or
+ * "Hospital/SNF" on the row, not a vague bucket. The consolidation
+ * lives in code: every specific reason maps to a FAMILY that drives
+ * the resolution watcher and the SOP. Detail for humans, buckets for
+ * automation.
+ */
+export type ReasonFamily = "insurance" | "auth" | "money" | "patient" | "other";
+
+export const REASON_FAMILY: Record<string, ReasonFamily> = {
+  // Insurance — resolves when eligibility comes back Active
+  "Inactive Insurance":        "insurance",
+  "Collect new insurance":     "insurance",   // legacy label, same family
+  // Auth/clinical — resolves when auth is valid for served categories
+  "Need new auth":             "auth",
+  "Patient needs dr appt":     "auth",
+  // Money — resolves via the claim mirror columns
+  "Last claim denied":         "money",
+  "Still owes last invoice":   "money",
+  "Last Order Unpaid":         "money",       // generic (e.g. claim unresolved)
+  // Waiting on patient — resolves via inbound contact or check-in date
+  "No confirmation":           "patient",
+  "Has enough supplies":       "patient",
+  "Hospital/SNF":              "patient",
+  "Hasn't received pump yet":  "patient",
+  "OOP too expensive":         "patient",
+  "Not using currently":       "patient",
+  "Waiting on Patient":        "patient",     // legacy generic
+  // Escape hatch — never auto-resolves, requires a note
+  "Other":                     "other",
+};
+
+/** Reasons offered in the Block dialog, grouped by family for display. */
+export const BLOCK_REASON_GROUPS: Array<{ family: ReasonFamily; label: string; reasons: string[] }> = [
+  { family: "insurance", label: "Insurance", reasons: ["Inactive Insurance"] },
+  { family: "auth",      label: "Auth / Clinical", reasons: ["Need new auth", "Patient needs dr appt"] },
+  { family: "money",     label: "Last Order Money", reasons: ["Last claim denied", "Still owes last invoice", "Last Order Unpaid"] },
+  { family: "patient",   label: "Waiting on Patient", reasons: [
+    "No confirmation", "Has enough supplies", "Hospital/SNF",
+    "Hasn't received pump yet", "OOP too expensive", "Not using currently",
+  ] },
+  { family: "other",     label: "Other", reasons: ["Other"] },
+];
+
+export const BLOCK_REASONS = BLOCK_REASON_GROUPS.flatMap((g) => g.reasons);
 export type BlockReason = (typeof BLOCK_REASONS)[number];
 
-/** Reasons whose block flow REQUIRES a check-in date (patient-timing family). */
-export const CHECK_IN_REQUIRED: ReadonlySet<string> = new Set([
-  "Waiting on Patient",
-]);
+export function reasonFamily(reason: string): ReasonFamily {
+  return REASON_FAMILY[reason] ?? "other";
+}
+
+/** Patient-family blocks REQUIRE a check-in date (the timing cadence). */
+export function checkInRequiredFor(reasons: string[]): boolean {
+  return reasons.some((r) => reasonFamily(r) === "patient");
+}
 
 /** Default check-in horizon (days) suggested when blocking. */
 export const DEFAULT_CHECK_IN_DAYS = 14;
@@ -145,17 +186,16 @@ function patientContactSinceBlock(p: LanePatient): boolean {
   return contactDate >= blockedDate;
 }
 
-/** Per-reason resolution predicate. */
+/** Per-reason resolution predicate — dispatched by FAMILY, not label. */
 export function reasonResolved(p: LanePatient, reason: string): boolean {
-  switch (reason) {
-    case "Inactive Insurance":
+  switch (reasonFamily(reason)) {
+    case "insurance":
       return (p.active ?? "").trim() === "Active";
-    case "Need new auth":
-    case "Patient needs dr appt":
+    case "auth":
       return p.auth.tone === "ok";
-    case "Last Order Unpaid":
+    case "money":
       return lastOrderPaidResolved(p);
-    case "Waiting on Patient":
+    case "patient":
       return patientContactSinceBlock(p);
     default:
       return false; // "Other" and unknowns never auto-resolve

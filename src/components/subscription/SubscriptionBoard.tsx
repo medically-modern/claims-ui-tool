@@ -54,10 +54,10 @@ import {
   blockPatient, unblockPatient, recordCheckIn, churnPatient,
 } from "@/api/blockPatient";
 import {
-  BLOCK_REASONS, CHECK_IN_REQUIRED, DEAD_REASONS, DEFAULT_CHECK_IN_DAYS,
-  FORCED_DECISION_MISSES, LanePatient, addDaysIso, blockReasons, checkInDue,
-  getLane, isBlocked, isReady, needsReason, possiblyResolved, shipCandidate,
-  todayIso,
+  BLOCK_REASON_GROUPS, BLOCK_REASONS, DEAD_REASONS, DEFAULT_CHECK_IN_DAYS,
+  FORCED_DECISION_MISSES, LanePatient, ReasonFamily, addDaysIso, blockReasons,
+  checkInDue, checkInRequiredFor, getLane, isBlocked, isReady, needsReason,
+  possiblyResolved, reasonFamily, shipCandidate, todayIso,
 } from "@/lib/subscription/lanes";
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
@@ -783,17 +783,41 @@ function ResolutionPill({ patient }: { patient: LanePatient }) {
   );
 }
 
-/** Reason chips inside the Blocked table. */
+/** Reason chips inside the Blocked table — specific label, tinted by family. */
+const FAMILY_CHIP: Record<ReasonFamily, string> = {
+  insurance: "bg-sky-50 border-sky-200 text-sky-800",
+  auth:      "bg-violet-50 border-violet-200 text-violet-800",
+  money:     "bg-rose-50 border-rose-200 text-rose-800",
+  patient:   "bg-amber-50 border-amber-200 text-amber-800",
+  other:     "bg-slate-50 border-slate-200 text-slate-700",
+};
+const FAMILY_TITLE: Record<ReasonFamily, string> = {
+  insurance: "Insurance family — resolves when eligibility comes back Active",
+  auth:      "Auth/clinical family — resolves when a valid auth is on file",
+  money:     "Money family — resolves when the last order's claims are settled",
+  patient:   "Waiting-on-patient family — resolves on inbound contact or check-in",
+  other:     "Manual — never auto-resolves",
+};
 function ReasonChips({ patient }: { patient: LanePatient }) {
   const reasons = blockReasons(patient);
   if (reasons.length === 0) return <span className="text-[11px] text-muted-foreground">—</span>;
   return (
     <div className="flex flex-wrap gap-1">
-      {reasons.map((r) => (
-        <span key={r} className="inline-flex items-center rounded-md bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 whitespace-nowrap">
-          {r}
-        </span>
-      ))}
+      {reasons.map((r) => {
+        const fam = reasonFamily(r);
+        return (
+          <span
+            key={r}
+            title={FAMILY_TITLE[fam]}
+            className={cn(
+              "inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap",
+              FAMILY_CHIP[fam],
+            )}
+          >
+            {r}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -829,7 +853,7 @@ function BlockDialog({
   }
   if (!patient) return null;
 
-  const needsCheckIn = [...reasons].some((r) => CHECK_IN_REQUIRED.has(r));
+  const needsCheckIn = checkInRequiredFor([...reasons]);
   const canSave = reasons.size > 0 && !saving
     && (!needsCheckIn || !!checkIn)
     && (!reasons.has("Other") || note.trim().length > 0);
@@ -874,25 +898,34 @@ function BlockDialog({
             <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
               Why can't we order? <span className="text-rose-600">*</span>
             </div>
-            <div className="grid grid-cols-2 gap-1.5">
-              {BLOCK_REASONS.map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => toggle(r)}
-                  className={cn(
-                    "rounded-md border px-2.5 py-2 text-[12px] font-semibold text-left transition-colors",
-                    reasons.has(r)
-                      ? "border-rose-400 bg-rose-50 text-rose-800"
-                      : "border-border bg-card hover:bg-muted text-foreground",
-                  )}
-                >
-                  {r}
-                </button>
+            <div className="space-y-2.5">
+              {BLOCK_REASON_GROUPS.map((g) => (
+                <div key={g.family}>
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-1">
+                    {g.label}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {g.reasons.map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => toggle(r)}
+                        className={cn(
+                          "rounded-md border px-2.5 py-1.5 text-[12px] font-semibold text-left transition-colors",
+                          reasons.has(r)
+                            ? "border-rose-400 bg-rose-50 text-rose-800"
+                            : "border-border bg-card hover:bg-muted text-foreground",
+                        )}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
             <div className="mt-1.5 text-[11px] text-muted-foreground">
-              The reason drives the SOP; the resolution watcher arms automatically.
+              Pick the specific situation — its family arms the right resolution watcher automatically.
             </div>
           </div>
 
@@ -1174,7 +1207,7 @@ function OrderCycleWorkflow() {
   type PrepPhase = CheckpointKind | "all" | "readysub";
   const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
   type DuePhase = "ready" | "prepwork";
-  const [duePhase, setDuePhase] = useState<DuePhase>("ready");
+  const [duePhase, setDuePhase] = useState<DuePhase>("prepwork");
   // `phase` is the derived view selection used by the rest of the component.
   const phase: PhaseTab =
     primary === "overview" ? "overview"
@@ -1547,9 +1580,11 @@ function OrderCycleWorkflow() {
                 </span>
               )}
             </TabsTrigger>
+            <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
             <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4">
               Order
             </TabsTrigger>
+            <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
             <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
               Overview
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.overview}</span>
@@ -1622,9 +1657,11 @@ function OrderCycleWorkflow() {
                 </span>
               )}
             </TabsTrigger>
+            <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
             <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4">
               Order
             </TabsTrigger>
+            <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
             <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
               Overview
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.overview}</span>
@@ -1683,6 +1720,10 @@ function OrderCycleWorkflow() {
                 {counts.scheduled}
               </span>
             </TabsTrigger>
+            {renderPhaseTab("confirmation", "Confirmation",     counts.confirmation)}
+            {renderPhaseTab("benefits",     "Eligibility",      counts.benefits)}
+            {renderPhaseTab("auth",         "Authorization",    counts.auth)}
+            {renderPhaseTab("lastPaid",     "Last Order Paid",  counts.lastPaid)}
             <TabsTrigger value="readysub" className="gap-1.5" title="Already clear — ships the moment the order date arrives">
               <Check className="h-3.5 w-3.5 text-emerald-600" />
               Ready to Order
@@ -1690,10 +1731,6 @@ function OrderCycleWorkflow() {
                 {counts.schedReady}
               </span>
             </TabsTrigger>
-            {renderPhaseTab("confirmation", "Confirmation",     counts.confirmation)}
-            {renderPhaseTab("benefits",     "Eligibility",      counts.benefits)}
-            {renderPhaseTab("auth",         "Authorization",    counts.auth)}
-            {renderPhaseTab("lastPaid",     "Last Order Paid",  counts.lastPaid)}
           </TabsList>
         </Tabs>
       )}
@@ -1704,18 +1741,18 @@ function OrderCycleWorkflow() {
       {primary === "due" && (
         <Tabs value={duePhase} onValueChange={(v) => setDuePhase(v as DuePhase)}>
           <TabsList className="bg-card border">
+            <TabsTrigger value="prepwork" className="gap-1.5" title="Date arrived but not clear — evaluate: fix, or assign a block reason">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+              Order Prep
+              <span className="rounded-full bg-amber-100 text-amber-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
+                {counts.duePrep}
+              </span>
+            </TabsTrigger>
             <TabsTrigger value="ready" className="gap-1.5" title="All checks clear — send these now">
               <Send className="h-3.5 w-3.5 text-emerald-600" />
               Ready to Order
               <span className="rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
                 {counts.dueReady}
-              </span>
-            </TabsTrigger>
-            <TabsTrigger value="prepwork" className="gap-1.5" title="Date arrived but not clear — evaluate: fix, or assign a block reason">
-              <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
-              Order Prep — needs decision
-              <span className="rounded-full bg-amber-100 text-amber-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
-                {counts.duePrep}
               </span>
             </TabsTrigger>
           </TabsList>
