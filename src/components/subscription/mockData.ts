@@ -60,6 +60,14 @@ export type SubscriptionPatient = {
   nextCheckIn?: string;
   stuckReason?: string;
   financials?: PatientFinancials;
+  // Order Cycle v2 block tracking (live columns; optional so mock rows
+  // and older cached data still typecheck). See lanes.ts BlockFields.
+  checkInDate?: string;
+  missedCheckIns?: number;
+  blockResolution?: string;
+  blockNote?: string;
+  blockedDate?: string;
+  lastPatientContact?: string;
 };
 
 export type PatientFinancials = {
@@ -462,21 +470,16 @@ export const PAYER_OPTIONS = [
 
 export const BLOCKED_BY_OPTIONS = ["Anyone", "Us", "Patient", "Payer", "System"] as const;
 
+// Consolidated Order Cycle v2 reason set (board migrated 2026-07-21;
+// old 15-label taxonomy folded into these 6 — see ORDER_CYCLE_V2_DESIGN.md §8.1).
 export const PAUSE_REASON_OPTIONS = [
   "Any pause reason",
-  "Collect new insurance",
-  "Has enough supplies",
-  "Hasn't received pump yet",
-  "Hospital/SNF, No confirmation",
-  "Last claim denied",
+  "Inactive Insurance",
   "Need new auth",
-  "No confirmation",
-  "No confirmation, Last claim denied",
-  "No confirmation, Still owes last invoice",
-  "Not using currently",
-  "OOP too expensive",
-  "Other supplier has auth",
-  "Still owes last invoice",
+  "Patient needs dr appt",
+  "Last Order Unpaid",
+  "Waiting on Patient",
+  "Other",
 ] as const;
 
 export const PATIENT_STATUS_OPTIONS = ["All", "Active", "Paused", "Dead"] as const;
