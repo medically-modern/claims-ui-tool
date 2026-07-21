@@ -1818,6 +1818,8 @@ function OrderCycleWorkflow() {
             onPatientClick={openPatient}
             onSubmit={sendToOrderBoard}
             onBlock={(p) => setBlockTarget(p as LanePatient)}
+            showOrderType={(primary === "due" && duePhase === "ready")
+              || (primary === "prep" && prepPhase === "readysub")}
             sortKey={sortKey}
             sortDir={sortDir}
             onSort={toggleSort}
@@ -1869,7 +1871,23 @@ function OrderCycleWorkflow() {
 
 // ─── Tables ──────────────────────────────────────────────────────────────────
 
+function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
+  const t = (patient.orderType ?? "").trim();
+  if (!t) return <span className="text-[11px] text-muted-foreground">—</span>;
+  const first = /first/i.test(t);
+  return (
+    <span className={cn(
+      "inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+      first ? "bg-orange-100 text-orange-700" : "bg-sky-100 text-sky-700",
+    )}>
+      {first ? "First Order" : "Reorder"}
+    </span>
+  );
+}
+
 const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_300px] gap-4";
+// Ready-to-Order variant adds a Type (First Order / Reorder) column.
+const OVERVIEW_GRID_TYPE = "grid grid-cols-[240px_120px_160px_110px_190px_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_300px] gap-4";
 
 type OverviewSortKey =
   | "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer"
@@ -1904,7 +1922,7 @@ function SortableLabel({
 }
 
 function OverviewTable({
-  rows, onCellClick, onPatientClick, onSubmit, onBlock, sortKey, sortDir, onSort,
+  rows, onCellClick, onPatientClick, onSubmit, onBlock, showOrderType, sortKey, sortDir, onSort,
   sendingIds, sentIds,
 }: {
   rows: SubscriptionPatient[];
@@ -1912,18 +1930,21 @@ function OverviewTable({
   onPatientClick: (p: SubscriptionPatient) => void;
   onSubmit: (p: SubscriptionPatient) => void;
   onBlock?: (p: SubscriptionPatient) => void;
+  showOrderType?: boolean;
   sortKey: OverviewSortKey;
   sortDir: "asc" | "desc";
   onSort: (k: OverviewSortKey) => void;
   sendingIds: Set<string>;
   sentIds:    Set<string>;
 }) {
+  const grid = showOrderType ? OVERVIEW_GRID_TYPE : OVERVIEW_GRID;
   return (
     <div className="text-[13px]">
-      <div className={cn(OVERVIEW_GRID, "border-b bg-muted/60 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
+      <div className={cn(grid, "border-b bg-muted/60 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
         <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Order"          k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Subscription"   k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
+        {showOrderType && <div>Type</div>}
         <div><SortableLabel label="Primary Payer"  k="primaryPayer"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div className="text-center"><SortableLabel label="Conf" k="confirmation" sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-center"><SortableLabel label="Elig" k="benefits"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
@@ -1932,7 +1953,7 @@ function OverviewTable({
         <div className="text-right pr-2">Actions</div>
       </div>
       {rows.map((p) => (
-        <div key={p.id} className={cn(OVERVIEW_GRID, "border-b px-6 py-4 hover:bg-muted/30 transition-colors items-center")}>
+        <div key={p.id} className={cn(grid, "border-b px-6 py-4 hover:bg-muted/30 transition-colors items-center")}>
           <button type="button" onClick={() => onPatientClick(p)} className="text-left">
             <div className="text-[15px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /><ShipCandidateBadge patient={p} /></div>
             <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">{p.phone}</div>
@@ -1942,6 +1963,7 @@ function OverviewTable({
             <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">in {daysBetween(p.nextOrderDate)}d</div>
           </div>
           <div><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></div>
+          {showOrderType && <div><OrderTypePill patient={p} /></div>}
           <div className="text-[14px] truncate">{p.primaryPayer}</div>
           <div className="flex items-center justify-center">
             <CircleEditPopover check={p.confirmation} kind="confirmation" patient={p} onBlockRequest={onBlock}>

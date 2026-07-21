@@ -60,6 +60,7 @@ export type SubscriptionPatient = {
   nextCheckIn?: string;
   stuckReason?: string;
   financials?: PatientFinancials;
+  orderType?: string;  // "First Order" / "Reorder" (Order Type column)
   // Order Cycle v2 block tracking (live columns; optional so mock rows
   // and older cached data still typecheck). See lanes.ts BlockFields.
   checkInDate?: string;

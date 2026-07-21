@@ -45,6 +45,7 @@ export const SUB_COL = {
   patient_address:   "location_mkp0rs0v",
   // Subscription
   subscription:      "color_mm273mv8",
+  order_type:        "color_mm2w6kd",   // First Order / Reorder
   ordering_cycle:    "color_mkyjawhq",
   next_order:        "date_mkp0nvf1",
   sensors_type:      "color_mkxmdscr",
@@ -231,6 +232,7 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   // Group membership (used to filter Not Active patients out by default)
   groupId: string;
   isNotActive: boolean;
+  orderType: string;  // "First Order" / "Reorder" / ""
   // Order Cycle v2 block tracking (lanes.ts BlockFields)
   checkInDate: string;
   missedCheckIns: number;
@@ -629,6 +631,7 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
     // Order Cycle v2 block tracking. nextCheckIn / stuckSince / stuckReason
     // are the pre-existing display fields (CheckInCell etc.) — feed them
     // from the new live columns so old render paths light up too.
+    orderType:           get(item, SUB_COL.order_type),
     checkInDate:         get(item, SUB_COL.check_in_date),
     missedCheckIns:      getNum(item, SUB_COL.missed_checkins),
     blockResolution:     get(item, SUB_COL.block_resolution),
