@@ -1874,10 +1874,11 @@ const Claims = () => {
                                             );
                                           })()
                                         ) : (
-                                          // Two buttons: Run Status Check (the API action)
-                                          // and See Details (drill into ClaimDetail). Side-
-                                          // by-side keeps the row compact without losing the
-                                          // ClaimDetail entry point.
+                                          // Three actions: Run Status Check (the API action),
+                                          // Keep Outstanding (snooze WITHOUT requiring a check
+                                          // first — the snooze only writes Late Action Date, so
+                                          // gating it on a 277 result was arbitrary), and See
+                                          // Details (drill into ClaimDetail).
                                           <TooltipProvider delayDuration={150}>
                                             <div className="inline-flex items-center gap-2">
                                               <Button
@@ -1895,6 +1896,23 @@ const Claims = () => {
                                                   "Run Status Check"
                                                 )}
                                               </Button>
+                                              <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                  <button
+                                                    type="button"
+                                                    aria-label="Keep Outstanding"
+                                                    disabled={!!keepOutstandingBusy[c.id]}
+                                                    onClick={() => void keepOutstandingForRow(c)}
+                                                    className={cn(
+                                                      "grid h-9 w-9 place-items-center rounded-md bg-muted text-muted-foreground hover:bg-info-soft hover:text-info-soft-foreground transition-colors shadow-sm",
+                                                      keepOutstandingBusy[c.id] && "opacity-60 cursor-wait",
+                                                    )}
+                                                  >
+                                                    <Clock className="h-4 w-4" />
+                                                  </button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>Keep Outstanding (snooze 10 days)</TooltipContent>
+                                              </Tooltip>
                                               <Tooltip>
                                                 <TooltipTrigger asChild>
                                                   <Link
