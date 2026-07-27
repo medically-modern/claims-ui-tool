@@ -137,10 +137,15 @@ export const SUB_COL = {
   // for the upcoming order; OopBadge headline prefers this over a
   // deductible-only calc when populated.
   oop_estimate:         "text_mm404p7d",
-  // "Facility Flags" (dropdown) — populated by the Stedi eligibility
-  // parser when the 271 reports a recent Hospice election (STC 45) or
-  // a Hospital/SNF admission (STC 48/AH) within the 30-day recency
-  // window. Used by deriveBenefits to override the Eligibility tone:
+  // "SNF/Hospice/Hospital/Deceased" (dropdown) — populated by the Stedi
+  // eligibility parser when the 271 reports an open Hospice election
+  // (STC 45) or Hospital/SNF admission (STC 48/AH), or a subscriber
+  // date of death (DTP*442). "Deceased" also settable by ops and sticky
+  // across re-checks (backend carries it forward; consolidated
+  // 2026-07-27, replacing the standalone Deceased? column). Used by
+  // deriveBenefits to override the Eligibility tone:
+  //   contains 'Deceased'              -> red  (stop everything —
+  //                                       claims unsubmittable)
   //   contains 'Hospital/SNF' or 'SNF' -> red  (can't bill DME at all)
   //   contains 'Hospice'               -> yellow (billable with GW
   //                                       on Medicare A&B; warn for
@@ -368,10 +373,21 @@ function deriveBenefits(item: MondayItem): Checkpoint {
   // Facility-flag overrides win before any Active value because they
   // describe billing-impact states that hold regardless of the
   // policy's eligibility verdict:
+  //   Deceased     -> red (stop the cycle entirely — never ship, never
+  //                    claim. Allan Blaer 2026-07-22: flag was on the
+  //                    board but nothing surfaced it, an order shipped,
+  //                    and the claim is now unsubmittable)
   //   Hospital/SNF -> red (DME can't be separately billed)
   //   Hospice      -> yellow (billable on Medicare A&B with GW; warn
   //                    on every other payer so ops verify the path)
   const ff = facilityFlags.toLowerCase();
+  if (ff.includes("deceased")) {
+    return {
+      tone: "bad",
+      label: "Deceased",
+      detail: "Payer reported a date of death (or flag set by ops). Do not ship or bill.",
+    };
+  }
   if (ff.includes("hospital") || /\bsnf\b/.test(ff)) {
     return {
       tone: "bad",
