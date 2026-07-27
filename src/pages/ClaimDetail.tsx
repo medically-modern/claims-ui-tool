@@ -883,7 +883,14 @@ const ClaimDetail = () => {
 
   async function confirmMarkPaid() {
     if (markPaidBusy) return;
-    const note = "Marked primary paid via Command Center.";
+    // "Accept & Mark Paid" from the denial workflow: the denial stood on
+    // part of the claim, but the paid portion is being kept — close the
+    // primary as Paid instead of Bad Debt (Bad Debt would misstate a
+    // claim that partly paid). Same backend endpoint either way.
+    const wasDenied = claim.primaryStatus === "Denied (Or Partly)";
+    const note = wasDenied
+      ? `Denial closed as Paid${denialAction ? ` (${denialAction})` : ""} — accepted the primary payment as final.`
+      : "Marked primary paid via Command Center.";
 
     // Optimistic local update so the UI feels instant
     const previous = claim;
@@ -916,6 +923,22 @@ const ClaimDetail = () => {
       }
 
       const result = await apiMarkPrimaryPaid(claim.mondayItemId);
+
+      // Coming from the denial workflow: persist any operator note the
+      // same way resolveDenial does (step 3 there). Non-fatal — the
+      // status flip already landed.
+      const ctxTrimmed = actionContext.trim();
+      if (wasDenied && ctxTrimmed !== (claim.actionContext ?? "").trim()) {
+        try {
+          await apiSetActionContext(claim.mondayItemId, ctxTrimmed);
+        } catch (e) {
+          console.warn("[mark-paid] action context write failed:", e);
+          toast.warning("Marked Paid, but action context didn't save", {
+            description: (e as Error).message,
+          });
+        }
+      }
+
       setMarkPaidOpen(false);
 
       // The backend has already flipped the primary's status on Monday by
@@ -1726,9 +1749,12 @@ const ClaimDetail = () => {
                 return (
                   <>
                     <p className="mb-3 text-xs text-muted-foreground">
-                      {hint}
+                      {hint}{" "}
+                      Accept &amp; Mark Paid is always available — use it when
+                      the denial stands but part of the claim paid and there's
+                      nothing left to chase.
                     </p>
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                       {/* Same Save-ERA gate as the Outstanding-bucket
                           cards below — operator with unsaved per-line
                           ERA edits open shouldn't be able to commit a
@@ -1794,6 +1820,39 @@ const ClaimDetail = () => {
                         disabled={
                           allowedRoute !== "Bad Debt" ||
                           denialResolveBusy !== null ||
+                          eraEditing
+                        }
+                        disabledReason={
+                          eraEditing
+                            ? "Save ERA before making a final decision — your per-line edits aren't on Monday yet."
+                            : undefined
+                        }
+                      />
+                      {/* Accept & Mark Paid — escape hatch for partial
+                          denials that turn out to be final AND correct
+                          enough to keep. Example: 1 of 3 units denied
+                          (CO-119 benefit max), investigation confirmed
+                          nothing can be done, but the paid units are
+                          real money — Bad Debt would misstate the claim
+                          since more than $0 came in. Deliberately NOT
+                          gated on the Denial Action (any action can end
+                          in "we're keeping what was paid"), and NOT
+                          gated on linesWithIssues like the Outstanding-
+                          bucket Paid card — denied lines are the whole
+                          point here. Reuses the standard Mark Paid
+                          dialog + /claims/mark-paid backend, so the
+                          Secondary spawn (PR > 0) works the same. */}
+                      <DecisionCard
+                        tone="success"
+                        icon={<CheckCircle2 className="h-5 w-5" />}
+                        title="Accept & Mark Paid"
+                        desc="Denial is final but part of the claim paid and there's nothing more to recover. Closes the primary as Paid (not Bad Debt) and spawns a Secondary item if PR > 0."
+                        cta={markPaidBusy ? "Marking…" : "Mark Paid"}
+                        onClick={openMarkPaid}
+                        disabled={
+                          denialResolveBusy !== null ||
+                          resubmitBusy ||
+                          markPaidBusy ||
                           eraEditing
                         }
                         disabledReason={
@@ -1883,10 +1942,20 @@ const ClaimDetail = () => {
       <AlertDialog open={markPaidOpen} onOpenChange={setMarkPaidOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Mark fully paid?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {claim.primaryStatus === "Denied (Or Partly)"
+                ? "Accept payment & mark paid?"
+                : "Mark fully paid?"}
+            </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-1 text-sm">
                 <p className="font-medium text-foreground">{claim.patientName}</p>
+                {claim.primaryStatus === "Denied (Or Partly)" && (
+                  <p>
+                    This claim is in Denials — confirming accepts the primary's
+                    partial payment as final and closes it as Paid (no write-off).
+                  </p>
+                )}
                 {claim.prAmount > 0 ? (
                   <div className="space-y-1.5 pt-1">
                     <label className="block font-medium text-foreground">
