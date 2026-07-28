@@ -713,7 +713,7 @@ function ClaimCard({
         <Field label="PR Payor ID" className={cellCls}>
           <Input
             value={c.payor_id ?? ""}
-            placeholder="ZTXQE"
+            placeholder="e.g. ZTXQE"
             disabled={isLocked}
             onChange={(e) => {
               const next = e.target.value;

@@ -2313,6 +2313,24 @@ function SubmitSecondaryBody({
   // registered (without this, the 3–8s Stedi round-trip looks like a
   // dead click).
   const [submitting, setSubmitting] = useState(false);
+
+  // Auto-heal a blank PR Payor ID. Items created by the backend arrive
+  // with Secondary Payor already set (e.g. NY Medicaid), so the
+  // dropdown's auto-fill never fires and the field sits empty — which
+  // build_secondary_payload rejects at submit time (seen 2026-07-28:
+  // Ramsubag + Cabase both blank). If the payer has a confirmed Stedi
+  // ID, fill it and persist to Monday; idempotent, so a re-render or
+  // StrictMode double-fire just writes the same value.
+  useEffect(() => {
+    if ((c.payorId ?? "").trim()) return;
+    const autoStediId = SECONDARY_PAYER_TO_STEDI_ID[c.secondaryPayer ?? ""];
+    if (!autoStediId) return;
+    onUpdate({ payorId: autoStediId });
+    if (c.mondayItemId) {
+      void setSecondaryText(c.mondayItemId, SECONDARY_PARENT_COL.payor_id, autoStediId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [c.mondayItemId, c.payorId, c.secondaryPayer]);
   const isOther = c.secondaryPayer === OTHER_PAYER;
   const otherName = c.secondaryPayerOther?.trim() ?? "";
   const otherInvalid = isOther && otherName.length === 0;
@@ -2451,7 +2469,7 @@ function SubmitSecondaryBody({
           <Field label="PR Payor ID">
             <Input
               value={c.payorId ?? ""}
-              placeholder="ZTXQE"
+              placeholder="e.g. MCDNY"
               onChange={(e) => onUpdate({ payorId: e.target.value })}
               onBlur={(e) => {
                 if (!c.mondayItemId) return;
