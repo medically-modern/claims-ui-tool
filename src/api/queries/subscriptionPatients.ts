@@ -352,7 +352,10 @@ function deriveConfirmation(item: MondayItem): Checkpoint {
   // No text yet? "Not sent" → outline circle (it's not our turn yet, the
   // reorder cron will fire at 20-days; nothing for ops to do until then).
   let label = reorderTextSent ? "Awaiting" : "Not sent";
-  const delayed = por === "Delayed";
+  // Monday's actual status label is "Delay" (verified on the board
+  // 2026-07-28 — Brian Gillen sat gray/pending because this compared
+  // against "Delayed"). Prefix-match so both spellings count.
+  const delayed = /^delay/i.test(por);
   if (por === "Confirmed") { tone = "ok"; label = "Confirmed"; }
   else if (delayed)        { tone = "ok"; label = "Confirmed (delayed)"; }
   return {

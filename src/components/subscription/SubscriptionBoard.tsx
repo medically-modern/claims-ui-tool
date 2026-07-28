@@ -164,14 +164,18 @@ type CheckpointCircleProps = {
 const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
   function CheckpointCircle({ check, size = 30, title, className, style, ...rest }, ref) {
   const state = circleStateFor(check);
+  // Delayed confirmation reads as a "hollow" green check — still a
+  // pass, but visually distinct from a solid "Confirmed" so ops can
+  // tell at a glance the patient pressed Delay instead of Yes.
+  const delayedGreen = state === "green" && !!check.delayed;
   const sizeStyle = { width: size, height: size };
   const inner =
-    state === "green" ? <Check className="h-4 w-4 text-white"  strokeWidth={3} /> :
+    state === "green" ? <Check className={cn("h-4 w-4", delayedGreen ? "text-emerald-600" : "text-white")} strokeWidth={3} /> :
     state === "red"   ? <X     className="h-4 w-4 text-white"  strokeWidth={3} /> :
     state === "yellow" ? <span className="text-white font-bold text-[14px] leading-none">!</span> :
     null;
   const cls =
-    state === "green"  ? "bg-emerald-600 ring-emerald-600"
+    state === "green"  ? (delayedGreen ? "bg-emerald-50 ring-emerald-600" : "bg-emerald-600 ring-emerald-600")
     : state === "red"  ? "bg-rose-600 ring-rose-600"
     : state === "yellow" ? "bg-amber-400 ring-amber-400"
     : state === "gray" ? "bg-slate-300 ring-slate-300"
@@ -1811,7 +1815,11 @@ function OrderCycleWorkflow() {
       </div>
 
       {/* Table per phase */}
-      <Card className="overflow-hidden">
+      {/* No overflow-hidden here: it would break position:sticky on the
+          table header rows (a clipping ancestor becomes the sticky
+          containing block, and the Card itself never scrolls). Header
+          rows carry rounded-t-lg to hug the Card's corners instead. */}
+      <Card>
         {phase === "auth" && dvsView ? (
           // DvsQueue ships with its own header / loading / refresh —
           // mount inside the same Card so column alignment with the
@@ -1956,7 +1964,9 @@ function OverviewTable({
   const grid = showOrderType ? OVERVIEW_GRID_TYPE : OVERVIEW_GRID;
   return (
     <div className="text-[13px]">
-      <div className={cn(grid, "border-b bg-muted/60 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
+      {/* sticky: keep Conf/Elig/Auth/Paid labels visible while scrolling.
+          Opaque bg (not bg-muted/60) so rows don't ghost through when stuck. */}
+      <div className={cn(grid, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
         <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Order"          k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Subscription"   k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
@@ -2051,7 +2061,7 @@ function BlockedTable({
 
   return (
     <div className="text-[13px]">
-      <div className={cn(BLOCKED_GRID, "border-b bg-muted/60 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
+      <div className={cn(BLOCKED_GRID, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
         <div>Patient</div>
         <div>Order</div>
         <div>Reason</div>
