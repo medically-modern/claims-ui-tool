@@ -114,7 +114,32 @@ const SUB_TYPE_PILLS: Record<string, string> = {
 
 const SENSORS_TYPES   = ["Dexcom G7", "Dexcom G6", "FreeStyle Libre 3", "FreeStyle Libre 2"];
 const SUPPLIES_TYPES  = ["Tandem t:slim X2", "Omnipod 5", "Medtronic 780G", "Tandem Mobi"];
-const INFUSION_SETS   = ["AutoSoft 90 9 mm 23\"", "TruSteel 6 mm 23\"", "VariSoft 6 mm 23\"", "Contact Detach 8 mm 23\""];
+// Infusion set options, spelled EXACTLY as the Subscription board spells them.
+// saveSubscriptionPatient writes these through as a raw `{ label }`, so Monday
+// matches byte-for-byte and rejects anything that is not on the column.
+//
+// The previous list was four entries, two of which ("VariSoft 6 mm 23\"",
+// "Contact Detach 8 mm 23\"") exist on no Monday board at all — writing either
+// would simply fail. Verified against a live board read on 2026-07-31, after
+// the infusion-set label lockdown.
+//
+// The slots are NOT interchangeable: Infusion Set 1 (color_mkxm50f9) carries
+// five products Infusion Set 2 (color_mkxmx5wk) does not.
+const INFUSION_SETS_1 = [
+  "AutoSoft XC 6 mm 5\"", "AutoSoft XC 6 mm 23\"", "AutoSoft XC 6 mm 32\"", "AutoSoft XC 6 mm 43\"",
+  "AutoSoft XC 9 mm 23\"", "AutoSoft XC 9 mm 43\"", "AutoSoft 90 6 mm 23\"", "AutoSoft 90 6 mm 43\"",
+  "AutoSoft 90 9 mm 23\"", "AutoSoft 90 9 mm 43\"", "AutoSoft 30 13 mm 23\"", "AutoSoft 30 13 mm 43\"",
+  "TruSteel 6 mm 23\"", "TruSteel 6 mm 32\"", "TruSteel 8 mm 23\"", "TruSteel 8 mm 32\"",
+  "VariSoft 13 mm 23\"", "VariSoft 13 mm 32\"", "VariSoft 17 mm 23\"", "Contact 6 mm 23\"",
+  "Inset 6 mm 23\"", "Luer 6 mm 32\"", "Mio Advance Clear 9 mm 23\"", "QuickSet 18\"", "Not Serving",
+];
+const INFUSION_SETS_2 = [
+  "AutoSoft XC 6 mm 5\"", "AutoSoft XC 6 mm 23\"", "AutoSoft XC 6 mm 32\"", "AutoSoft XC 6 mm 43\"",
+  "AutoSoft XC 9 mm 23\"", "AutoSoft 90 6 mm 23\"", "AutoSoft 90 6 mm 43\"", "AutoSoft 90 9 mm 23\"",
+  "AutoSoft 90 9 mm 43\"", "AutoSoft 30 13 mm 23\"", "TruSteel 6 mm 23\"", "TruSteel 6 mm 32\"",
+  "TruSteel 8 mm 23\"", "TruSteel 8 mm 32\"", "VariSoft 13 mm 23\"", "VariSoft 13 mm 32\"",
+  "VariSoft 17 mm 23\"", "Contact 6 mm 23\"", "Inset 6 mm 23\"", "Not Serving",
+];
 const DOCTORS         = ["Jason Sloane", "Rachel Goldstein", "Maria Hernandez", "Sam Patel", "Andrew Wu"];
 const AUTH_STATUSES   = ["Not Checked", "No Auth Needed", "Auth Valid", "Submitted", "Expiring", "Expired", "Mismatch", "Denied", "Required"];
 const CLINICALS_METHODS = ["Fax", "Parachute"];
@@ -197,10 +222,15 @@ function defaultsFromPatient(p: { id: string; name: string; phone: string; prima
     nextOrderDate: p.nextOrderDate,
     sensorsType: p.subscriptionType !== "Supplies" ? pick(SENSORS_TYPES, h) : "",
     suppliesType: p.subscriptionType !== "Sensors" ? pick(SUPPLIES_TYPES, h >> 1) : "",
-    infusionSet1: p.subscriptionType !== "Sensors" ? pick(INFUSION_SETS, h) : "",
-    infusionSet1Qty: p.subscriptionType !== "Sensors" ? "1" : "",
-    infusionSet2: p.subscriptionType !== "Sensors" && h % 4 === 0 ? pick(INFUSION_SETS, h >> 2) : "",
-    infusionSet2Qty: p.subscriptionType !== "Sensors" && h % 4 === 0 ? "1" : "",
+    // Seeded from the LIVE Monday values, which subscriptionPatients already
+    // fetches (SUB_COL.inf_set_1 / inf_set_2). These used to be pick(..., hash),
+    // which showed the operator a fabricated infusion set for a real patient AND
+    // made it the baseline the save diffs against — so the diff was computed
+    // against a value that was never on the board.
+    infusionSet1: p.infusionSet1,
+    infusionSet1Qty: p.infusionSet1Qty,
+    infusionSet2: p.infusionSet2,
+    infusionSet2Qty: p.infusionSet2Qty,
 
     primaryInsurance: p.primaryPayer,
     memberId1: `74${(10000000 + (h % 90000000))}`,
@@ -414,9 +444,9 @@ export function PatientProfile() {
             <Field label="Next Order date" value={draft.nextOrderDate} onChange={(v) => update("nextOrderDate", v)} type="date" />
             <SelectField label="Sensors type" value={draft.sensorsType || "—"} onChange={(v) => update("sensorsType", v === "—" ? "" : v)} options={["—", ...SENSORS_TYPES]} />
             <SelectField label="Supplies type" value={draft.suppliesType || "—"} onChange={(v) => update("suppliesType", v === "—" ? "" : v)} options={["—", ...SUPPLIES_TYPES]} />
-            <SelectField label="Infusion Set 1" value={draft.infusionSet1 || "—"} onChange={(v) => update("infusionSet1", v === "—" ? "" : v)} options={["—", ...INFUSION_SETS]} />
+            <SelectField label="Infusion Set 1" value={draft.infusionSet1 || "—"} onChange={(v) => update("infusionSet1", v === "—" ? "" : v)} options={["—", ...INFUSION_SETS_1]} />
             <Field label="Inf. Qty 1" value={draft.infusionSet1Qty} onChange={(v) => update("infusionSet1Qty", v)} type="number" />
-            <SelectField label="Infusion Set 2" value={draft.infusionSet2 || "—"} onChange={(v) => update("infusionSet2", v === "—" ? "" : v)} options={["—", ...INFUSION_SETS]} />
+            <SelectField label="Infusion Set 2" value={draft.infusionSet2 || "—"} onChange={(v) => update("infusionSet2", v === "—" ? "" : v)} options={["—", ...INFUSION_SETS_2]} />
             <Field label="Inf. Qty 2" value={draft.infusionSet2Qty} onChange={(v) => update("infusionSet2Qty", v)} type="number" />
           </FormSection>
 
