@@ -176,7 +176,16 @@ REAL_ROWS = {"age": 4, "est": 5, "coll": 6, "sec": 7, "pt": 8,
              "tot": 9, "rate": 10, "rem_prim": 11,
              "rp_unadj": 12, "rp_zero": 13,          # components of rem_prim
              "rp_ratevar": 14, "rp_denial": 15,      # paid-short, split by line CARC
-             "rem_sec": 16}
+             "rem_sec": 16,
+             # True realization: denominator backs out rate variance; the
+             # legit shortfall splits by board group (working vs gave up)
+             "adj_est": 18, "true_rate": 19, "legit": 20,
+             "still": 21, "lost": 22, "pct_still": 23, "pct_lost": 24}
+
+# Claims Board groups where an unpaid remainder means we ACCEPTED the loss.
+# Everything else (Outstanding, Denied, Submitted, Medicaid Outstanding,
+# Paid-but-not-EFTd, Future...) counts as still-collecting.
+GAVE_UP_GROUPS = ("paid and closed", "bad debt")
 
 # Line-level CARCs that mean part of the line was DENIED (collectible /
 # appealable) rather than contractually repriced. CO-45/253/223 etc. are
@@ -356,9 +365,11 @@ def compute_realization(token, dos_year, dos_month):
     r_first = dt.date(dos_year, dos_month, 1)
     r_last = (dt.date(dos_year + (dos_month == 12), (dos_month % 12) + 1, 1)
               - dt.timedelta(days=1))
-    r_est = r_coll = pr_total = 0.0
+    r_est = r_coll = pr_total = raw_lost = 0.0
     rp_unadj = rp_zero = rp_ratevar = rp_denial = 0.0
     for c in pull_month_claims(token, r_first.isoformat(), r_last.isoformat()):
+        group_title = (c.get("group") or {}).get("title", "").lower()
+        gave_up = any(g in group_title for g in GAVE_UP_GROUPS)
         pcv = {v["id"]: (v["text"] or "") for v in c["column_values"]}
         paid = num(pcv.get(C_PPAID))
         r_coll += paid
@@ -389,20 +400,28 @@ def compute_realization(token, dos_year, dos_month):
                     else:
                         line_ratevar += short_l
         r_est += est_c
-        # Components of the primary-side gap.
+        # Components of the primary-side gap. non_ratevar_short = the
+        # legit (collectible-in-principle) part of this claim's gap.
+        non_ratevar_short = 0.0
         if not adjudicated:
             rp_unadj += est_c
+            non_ratevar_short = est_c
         elif paid <= 0:
-            rp_zero += max(0.0, est_c - pr_c)
+            zero_short = max(0.0, est_c - pr_c)
+            rp_zero += zero_short
+            non_ratevar_short = zero_short
         else:
             claim_short = max(0.0, est_c - paid - pr_c)
             if line_data:
                 rp_ratevar += line_ratevar
                 rp_denial += line_denial
+                non_ratevar_short = line_denial
             else:
                 # no line-level ERA data (older claims) — default to rate
                 # variance, the benign bucket
                 rp_ratevar += claim_short
+        if gave_up:
+            raw_lost += non_ratevar_short
     r_sec, r_pt = pull_secondary_collections(
         token, r_first.isoformat(), r_last.isoformat())
     # Split the remaining gap: downstream remainder = PR established minus
@@ -411,11 +430,18 @@ def compute_realization(token, dos_year, dos_month):
     remaining = max(0.0, r_est - (r_coll + r_sec + r_pt))
     rem_sec = min(remaining, max(0.0, pr_total - r_sec - r_pt))
     rem_prim = remaining - rem_sec
+    # True realization: back the rate variance out of the denominator,
+    # then split the legit shortfall into lost (gave-up groups) vs still
+    # collecting (everything else, incl. the secondary/patient pipeline).
+    legit_remaining = max(0.0, (r_est - rp_ratevar) - (r_coll + r_sec + r_pt))
+    lost = min(raw_lost, legit_remaining)
+    still = legit_remaining - lost
     return dict(month=r_first.strftime("%b %Y"), est=round(r_est, 2),
                 collected=round(r_coll, 2), secondary=r_sec, patient=r_pt,
                 rem_prim=round(rem_prim, 2), rem_sec=round(rem_sec, 2),
                 rp_unadj=round(rp_unadj, 2), rp_zero=round(rp_zero, 2),
                 rp_ratevar=round(rp_ratevar, 2), rp_denial=round(rp_denial, 2),
+                lost=round(lost, 2), still=round(still, 2),
                 age_days=(dt.date.today() - r_last).days)
 
 
@@ -443,8 +469,16 @@ def _ensure_realization_tab(svc):
         ["   · paid short — rate variance (est. above contracted rate; not collectible)"],
         ["   · paid short — partial denial (denial CARC on line; work/appeal)"],
         ["Remaining — secondary & patient (PR established, not yet collected)"],
+        ["TRUE REALIZATION (rate variance backed out of the denominator)"],
+        ["Adjusted Est. Pay (est − rate variance)"],
+        ["True realization rate %"],
+        ["Legit uncollected (adjusted est − collected)"],
+        ["   · still collecting (open on boards + downstream pipeline)"],
+        ["   · lost / closed short (Paid And Closed / Bad Debt)"],
+        ["   % still collecting"],
+        ["   % lost"],
         [""],
-        ["Numerator: primary paid (Claims Board) + secondary ERA paid + patient Stripe paid (Secondary Board), same DOS window. Denominator: Est. Pay of the month's claims (latest thread only). Remaining split: PR established by primary ERAs minus downstream collections = secondary/patient; the rest is primary-side. Primary components: in-flight = no ERA yet; paid-$0 = denials to work; paid-short at maturity ≈ Est. Pay set above actual allowed (estimate error, not collectible). Components are unscaled and may differ slightly from the rem-primary total (overpay netting)."],
+        ["True realization: denominator = Est. Pay minus rate variance (payer contract rates below our estimates — definitional, not collectible). Legit uncollected splits by Claims Board group: remainder on claims in Paid And Closed / Bad Debt = lost (we accepted it); everything else (Outstanding, Denied, Submitted, Medicaid Outstanding, secondary/patient pipeline) = still collecting."],
     ]
     svc.spreadsheets().values().update(
         spreadsheetId=SHEET_ID, range=f"'{REAL_TAB}'!A1",
@@ -461,9 +495,16 @@ def _ensure_realization_tab(svc):
          "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.97}}},
          "fields": "userEnteredFormat"}},
         numf(4, 4, "NUMBER", "#,##0"), numf(5, 9, "CURRENCY", "$#,##0"),
-        numf(10, 10, "PERCENT", "0.0%"), numf(11, 15, "CURRENCY", "$#,##0"),
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 11, "endRowIndex": 14, "startColumnIndex": 0, "endColumnIndex": 30},
+        numf(10, 10, "PERCENT", "0.0%"), numf(11, 16, "CURRENCY", "$#,##0"),
+        numf(18, 18, "CURRENCY", "$#,##0"), numf(19, 19, "PERCENT", "0.0%"),
+        numf(20, 22, "CURRENCY", "$#,##0"), numf(23, 24, "PERCENT", "0.0%"),
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 11, "endRowIndex": 15, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 16, "endRowIndex": 17, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.97}}},
+         "fields": "userEnteredFormat"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 18, "endRowIndex": 19, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 8, "endRowIndex": 10, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
         {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
@@ -494,7 +535,13 @@ def update_realization_tab(svc, token, upto_year, upto_month):
                 RR["rate"]: f"=IF(N({colx}{RR['est']})=0,\"\",{colx}{RR['tot']}/{colx}{RR['est']})",
                 RR["rem_prim"]: r["rem_prim"], RR["rp_unadj"]: r["rp_unadj"],
                 RR["rp_zero"]: r["rp_zero"], RR["rp_ratevar"]: r["rp_ratevar"],
-                RR["rp_denial"]: r["rp_denial"], RR["rem_sec"]: r["rem_sec"]}
+                RR["rp_denial"]: r["rp_denial"], RR["rem_sec"]: r["rem_sec"],
+                RR["adj_est"]: f"=MAX(0,{colx}{RR['est']}-{colx}{RR['rp_ratevar']})",
+                RR["true_rate"]: f"=IF(N({colx}{RR['adj_est']})=0,\"\",{colx}{RR['tot']}/{colx}{RR['adj_est']})",
+                RR["legit"]: f"=MAX(0,{colx}{RR['adj_est']}-{colx}{RR['tot']})",
+                RR["still"]: r["still"], RR["lost"]: r["lost"],
+                RR["pct_still"]: f"=IF(N({colx}{RR['legit']})=0,\"\",{colx}{RR['still']}/{colx}{RR['legit']})",
+                RR["pct_lost"]: f"=IF(N({colx}{RR['legit']})=0,\"\",{colx}{RR['lost']}/{colx}{RR['legit']})"}
         data += [{"range": f"'{REAL_TAB}'!{colx}{row}", "values": [[v]]}
                  for row, v in vals.items()]
         print(f"Realization {r['month']}: {r['collected']}+{r['secondary']}+{r['patient']} "
