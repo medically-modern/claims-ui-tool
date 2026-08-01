@@ -71,6 +71,8 @@ SUB_COLS = [C_STATUS, C_TYPE, C_PRIMARY, C_SENSTYPE, C_SENS_REV, C_SENS_COST,
             C_SUPP_REV, C_SUPP_COST, C_TOT_REV, C_SHIP, C_ARR]
 
 C_PAYOR = "color_mkxmhypt"  # Claims Board: Primary Payor label (for payer mix)
+C_PPAID = "numeric_mm115q76"  # Claims Board: Primary Paid (A) — realization check
+KNOWN_CODES = {"E0784", "E2103", "A4239"} | {"A4224", "A4225", "A4230", "A4231", "A4232"}
 
 # Payer families for the mix section — fixed row order on the sheet.
 PAYER_FAMILIES = ["Medicare A&B", "Anthem BCBS", "Other Blues", "Fidelis",
@@ -151,8 +153,20 @@ ROWS = {
     # revenue; COGS = sensors+supplies only, no hardware/shipping)
     "pp_order_rev": 130, "pp_order_cogs": 131, "pp_order_gp": 132,
     "pp_ann_rev": 134, "pp_ann_cogs": 135, "pp_ann_gp": 136,
+    # LTV & pump payback (2026-08-01)
+    "ltv_churn": 139, "ltv_life": 140, "ltv_val": 141,
+    "pb_new_pumps": 143, "pb_spend": 144, "pb_rentals": 145,
+    "pb_rental_rev": 146, "pb_months": 147,
+    # Realization check (DOS month = target − 2; evolving)
+    "real_month": 150, "real_est": 151, "real_coll": 152, "real_rate": 153,
+    # Month-over-month deltas (formulas vs previous column; blank on first)
+    "d_rev": 156, "d_gp": 157, "d_np": 158, "d_arr": 159,
+    "d_active": 160, "d_new": 161, "d_attr": 162,
+    # Self-audit footer
+    "audit_revsum": 165, "audit_gpsum": 166, "audit_unmatched": 167,
+    "audit_unknown": 168, "audit_blankstatus": 169, "audit_status": 170,
 }
-LAST_ROW = 136
+LAST_ROW = 170
 
 
 def num(v):
@@ -207,13 +221,13 @@ def pull_month_claims(token, first_day, last_day):
     claims, cursor = [], None
     q_first = """query($b:ID!,$rules:CompareValue!){boards(ids:[$b]){items_page(limit:100,
       query_params:{rules:[{column_id:"%s",compare_value:$rules,operator:between}]}){
-      cursor items{id name group{title} column_values(ids:["%s","%s"]){id text}
+      cursor items{id name group{title} column_values(ids:["%s","%s","%s"]){id text}
         subitems{column_values(ids:["%s","%s","%s","%s"]){id text}}}}}}""" % (
-        C_DOS, C_SUBID, C_PAYOR, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
+        C_DOS, C_SUBID, C_PAYOR, C_PPAID, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
     q_next = """query($cur:String!){next_items_page(limit:100,cursor:$cur){
-      cursor items{id name group{title} column_values(ids:["%s","%s"]){id text}
+      cursor items{id name group{title} column_values(ids:["%s","%s","%s"]){id text}
         subitems{column_values(ids:["%s","%s","%s","%s"]){id text}}}}}""" % (
-        C_SUBID, C_PAYOR, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
+        C_SUBID, C_PAYOR, C_PPAID, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
     while True:
         if cursor is None:
             d = monday(q_first, {"b": CLAIMS_BOARD, "rules": [first_day, last_day]}, token)
@@ -377,6 +391,8 @@ def compute(token, year, month):
     avg_pump, avg_monitor, hw_detail = pull_hardware_costs(token, subs)
     pump_orders = monitor_orders = new_pumps = 0
     sens_fills = supp_fills = 0
+    rental_pumps = 0; rental_rev = 0.0
+    unmatched = unknown_lines = 0
     payer_agg = {f: dict(rev=0.0, gp=0.0) for f in PAYER_FAMILIES}
     for c in claims:
         has_sens = has_supp = False
@@ -396,6 +412,9 @@ def compute(token, year, month):
                 if "KI" not in mods and "KJ" not in mods:
                     new_pumps += 1
                     claim_cogs += avg_pump
+                else:
+                    rental_pumps += 1
+                    rental_rev += val
             elif code == "E2103":
                 rev["monitor"] += val; claim_rev += val
                 claim_cogs += avg_monitor
@@ -403,9 +422,13 @@ def compute(token, year, month):
                 rev["sensors"] += val; claim_rev += val; has_sens = True
             elif code in SUPPLY_CODES:
                 rev["supplies"] += val; claim_rev += val; has_supp = True
+            elif code:
+                unknown_lines += 1
         pcv = {v["id"]: (v["text"] or "") for v in c["column_values"]}
         sub_item_id = (pcv.get(C_SUBID) or "").strip()
         patient = by_id.get(sub_item_id) or by_name.get(c["name"].strip().lower())
+        if patient is None and (has_sens or has_supp):
+            unmatched += 1
         if has_sens:
             cost = num(patient.get(C_SENS_COST)) if patient else 0
             cost = cost if cost > 0 else SENSORS_COST_FALLBACK
@@ -457,6 +480,26 @@ def compute(token, year, month):
     attr = dict(unique=len(lost), sensors=sum(map(is_sens, lost)),
                 supplies=sum(map(is_supp, lost)))
 
+    # 4. Realization check: DOS month two months back — how much of its
+    # Est. Pay has actually been collected (parent Primary Paid) by now.
+    # Early version (Brandon 2026-08-01): primary collections only, will
+    # evolve as data comes in.
+    rm = month - 2 if month > 2 else month + 10
+    ry = year if month > 2 else year - 1
+    r_first = dt.date(ry, rm, 1)
+    r_last = dt.date(ry + (rm == 12), (rm % 12) + 1, 1) - dt.timedelta(days=1)
+    r_claims = pull_month_claims(token, r_first.isoformat(), r_last.isoformat())
+    r_est = r_coll = 0.0
+    for c in r_claims:
+        pcv = {v["id"]: (v["text"] or "") for v in c["column_values"]}
+        r_coll += num(pcv.get(C_PPAID))
+        for sub in c.get("subitems") or []:
+            cv = {v["id"]: (v["text"] or "") for v in sub["column_values"]}
+            if cv.get(S_HCPC, "").strip().upper() in KNOWN_CODES:
+                r_est += num(cv.get(S_ESTPAY)) or num(cv.get(S_CHARGE))
+    realization = dict(month=r_first.strftime("%b %Y"),
+                       est=round(r_est, 2), collected=round(r_coll, 2))
+
     return {
         "counts": counts, "attrition": attr,
         "arr": dict(total=round(arr_total, 2), sensors=round(arr_sens, 2), supplies=round(arr_supp, 2)),
@@ -472,6 +515,11 @@ def compute(token, year, month):
             sensors=round(cogs["sensors"] / sens_fills, 2) if sens_fills else 0,
             supplies=round(cogs["supplies"] / supp_fills, 2) if supp_fills else 0),
         "payer_mix": payer_mix,
+        "payback": dict(new_pumps=new_pumps, rental_pumps=rental_pumps,
+                        rental_rev=round(rental_rev, 2)),
+        "realization": realization,
+        "audit": dict(unmatched=unmatched, unknown_lines=unknown_lines,
+                      blank_status=sum(1 for s in subs if not s.get(C_STATUS, "").strip())),
         "claims_counted": len(claims),
     }
 
@@ -593,6 +641,53 @@ def write_column(svc, kpis, year, month, dry_run=False):
     cells[R["pp_ann_rev"]] = pp["ann_rev"]
     cells[R["pp_ann_cogs"]] = pp["ann_cogs"]
     cells[R["pp_ann_gp"]] = f"={col}{R['pp_ann_rev']}-{col}{R['pp_ann_cogs']}"
+
+    # LTV: churn = attrition / active; lifetime = 1/churn months; LTV =
+    # lifetime in years × annual GP per patient.
+    cells[R["ltv_churn"]] = (f"=IF({col}{R['active_u']}=0,\"\","
+                             f"{col}{R['attr_u']}/{col}{R['active_u']})")
+    cells[R["ltv_life"]] = f"=IF(N({col}{R['ltv_churn']})=0,\"\",1/{col}{R['ltv_churn']})"
+    cells[R["ltv_val"]] = (f"=IF(N({col}{R['ltv_life']})=0,\"\","
+                           f"{col}{R['ltv_life']}/12*{col}{R['pp_ann_gp']})")
+    # Pump payback
+    pb = kpis["payback"]
+    cells[R["pb_new_pumps"]] = pb["new_pumps"]
+    cells[R["pb_spend"]] = f"={col}{R['cogs_pump']}"
+    cells[R["pb_rentals"]] = pb["rental_pumps"]
+    cells[R["pb_rental_rev"]] = pb["rental_rev"]
+    cells[R["pb_months"]] = (f"=IF(OR(N({col}{R['pb_rentals']})=0,N({col}{R['pb_rental_rev']})=0),\"\","
+                             f"{col}{R['unit_pump']}/({col}{R['pb_rental_rev']}/{col}{R['pb_rentals']}))")
+    # Realization check (DOS month −2, primary collections only for now)
+    rl = kpis["realization"]
+    cells[R["real_month"]] = rl["month"]
+    cells[R["real_est"]] = rl["est"]
+    cells[R["real_coll"]] = rl["collected"]
+    cells[R["real_rate"]] = f"=IF(N({col}{R['real_est']})=0,\"\",{col}{R['real_coll']}/{col}{R['real_est']})"
+    # Month-over-month deltas — reference the previous month column;
+    # blank on the sheet's first month column.
+    if idx > 1:
+        pc = col_letter(idx - 1)
+        for k, r_ in (("d_rev", "rev_total"), ("d_gp", "gp_total"),
+                      ("d_np", "np_total"), ("d_arr", "arr_total")):
+            cells[R[k]] = f"=IF(N({pc}{R[r_]})=0,\"\",{col}{R[r_]}/{pc}{R[r_]}-1)"
+        for k, r_ in (("d_active", "active_u"), ("d_new", "new_u"), ("d_attr", "attr_u")):
+            cells[R[k]] = f"=IF({pc}{R[r_]}=\"\",\"\",{col}{R[r_]}-{pc}{R[r_]})"
+    else:
+        for k in ("d_rev", "d_gp", "d_np", "d_arr", "d_active", "d_new", "d_attr"):
+            cells[R[k]] = ""
+    # Self-audit footer
+    au = kpis["audit"]
+    cells[R["audit_revsum"]] = (f"=SUM({col}{R['payer_rev_start']}:"
+                                f"{col}{R['payer_rev_start'] + len(PAYER_FAMILIES) - 1})-1")
+    cells[R["audit_gpsum"]] = (f"=SUM({col}{R['payer_gp_start']}:"
+                               f"{col}{R['payer_gp_start'] + len(PAYER_FAMILIES) - 1})-1")
+    cells[R["audit_unmatched"]] = au["unmatched"]
+    cells[R["audit_unknown"]] = au["unknown_lines"]
+    cells[R["audit_blankstatus"]] = au["blank_status"]
+    cells[R["audit_status"]] = (f"=IF(AND(ABS(N({col}{R['audit_revsum']}))<0.005,"
+                                f"ABS(N({col}{R['audit_gpsum']}))<0.005,"
+                                f"N({col}{R['audit_unmatched']})=0,"
+                                f"N({col}{R['audit_unknown']})=0),\"OK\",\"CHECK\")")
     cells[HEADER_ROW] = label
     if created:
         cells[R["fixed"]] = FIXED_COST_DEFAULT  # never overwrite an existing month's fixed costs
