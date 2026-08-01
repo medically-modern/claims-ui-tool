@@ -174,8 +174,18 @@ REAL_TAB = "Realization"
 REAL_START = (2026, 5)  # earliest DOS month with complete board data
 REAL_ROWS = {"age": 4, "est": 5, "coll": 6, "sec": 7, "pt": 8,
              "tot": 9, "rate": 10, "rem_prim": 11,
-             "rp_unadj": 12, "rp_zero": 13, "rp_short": 14,  # components of rem_prim
-             "rem_sec": 15}
+             "rp_unadj": 12, "rp_zero": 13,          # components of rem_prim
+             "rp_ratevar": 14, "rp_denial": 15,      # paid-short, split by line CARC
+             "rem_sec": 16}
+
+# Line-level CARCs that mean part of the line was DENIED (collectible /
+# appealable) rather than contractually repriced. CO-45/253/223 etc. are
+# contractual (rate variance). PR-1/2/3 are deductible/coins/copay (PR).
+DENIAL_CARCS = {"16", "22", "23", "29", "50", "55", "96", "97", "109", "119",
+                "150", "151", "167", "197", "198", "204", "242", "B7", "B15"}
+S_RAW_PAID = "numeric_mm201t4y"   # subitem: ERA line paid
+S_PARSED_PR = "numeric_mm1gredn"  # subitem: ERA line patient responsibility
+S_CARC = "dropdown_mm2pthcy"      # subitem: ERA line CARC codes
 REAL_HEADER_ROW = 3
 
 SECONDARY_BOARD = 18413019028
@@ -236,14 +246,14 @@ def pull_month_claims(token, first_day, last_day):
     q_first = """query($b:ID!,$rules:CompareValue!){boards(ids:[$b]){items_page(limit:100,
       query_params:{rules:[{column_id:"%s",compare_value:$rules,operator:between}]}){
       cursor items{id name group{title} column_values(ids:["%s","%s","%s","%s","%s","%s"]){id text}
-        subitems{column_values(ids:["%s","%s","%s","%s"]){id text}}}}}}""" % (
+        subitems{column_values(ids:["%s","%s","%s","%s","%s","%s","%s"]){id text}}}}}}""" % (
         C_DOS, C_SUBID, C_PAYOR, C_PPAID, C_PR_AMT, C_RAW_PR, C_ERA_DATE,
-        S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
+        S_HCPC, S_ESTPAY, S_CHARGE, S_MODS, S_RAW_PAID, S_PARSED_PR, S_CARC)
     q_next = """query($cur:String!){next_items_page(limit:100,cursor:$cur){
       cursor items{id name group{title} column_values(ids:["%s","%s","%s","%s","%s","%s"]){id text}
-        subitems{column_values(ids:["%s","%s","%s","%s"]){id text}}}}}""" % (
+        subitems{column_values(ids:["%s","%s","%s","%s","%s","%s","%s"]){id text}}}}}""" % (
         C_SUBID, C_PAYOR, C_PPAID, C_PR_AMT, C_RAW_PR, C_ERA_DATE,
-        S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
+        S_HCPC, S_ESTPAY, S_CHARGE, S_MODS, S_RAW_PAID, S_PARSED_PR, S_CARC)
     while True:
         if cursor is None:
             d = monday(q_first, {"b": CLAIMS_BOARD, "rules": [first_day, last_day]}, token)
@@ -347,7 +357,7 @@ def compute_realization(token, dos_year, dos_month):
     r_last = (dt.date(dos_year + (dos_month == 12), (dos_month % 12) + 1, 1)
               - dt.timedelta(days=1))
     r_est = r_coll = pr_total = 0.0
-    rp_unadj = rp_zero = rp_short = 0.0
+    rp_unadj = rp_zero = rp_ratevar = rp_denial = 0.0
     for c in pull_month_claims(token, r_first.isoformat(), r_last.isoformat()):
         pcv = {v["id"]: (v["text"] or "") for v in c["column_values"]}
         paid = num(pcv.get(C_PPAID))
@@ -357,21 +367,42 @@ def compute_realization(token, dos_year, dos_month):
         adjudicated = bool(pcv.get(C_ERA_DATE, "").strip()) or paid > 0
         pr_c = (num(pcv.get(C_RAW_PR)) or num(pcv.get(C_PR_AMT))) if adjudicated else 0.0
         pr_total += pr_c
-        est_c = 0.0
+        est_c = line_ratevar = line_denial = line_data = 0.0
         for sub in c.get("subitems") or []:
             cv = {v["id"]: (v["text"] or "") for v in sub["column_values"]}
-            if cv.get(S_HCPC, "").strip().upper() in KNOWN_CODES:
-                est_c += num(cv.get(S_ESTPAY)) or num(cv.get(S_CHARGE))
+            if cv.get(S_HCPC, "").strip().upper() not in KNOWN_CODES:
+                continue
+            est_l = num(cv.get(S_ESTPAY)) or num(cv.get(S_CHARGE))
+            est_c += est_l
+            paid_l, pr_l = num(cv.get(S_RAW_PAID)), num(cv.get(S_PARSED_PR))
+            carc = cv.get(S_CARC, "").upper()
+            if paid_l > 0 or pr_l > 0 or carc:
+                line_data += 1
+                short_l = max(0.0, est_l - paid_l - pr_l)
+                if short_l >= 0.01:
+                    # A denial-class CARC on the line = payer refused part
+                    # of it (collectible / appealable). Otherwise the payer
+                    # simply allowed less than we estimated (rate variance).
+                    codes = {t.strip() for t in carc.replace(";", ",").split(",") if t.strip()}
+                    if codes & DENIAL_CARCS:
+                        line_denial += short_l
+                    else:
+                        line_ratevar += short_l
         r_est += est_c
-        # Components of the primary-side gap: still in flight vs denied
-        # vs paid-short (the paid-short bucket at maturity ≈ Est. Pay set
-        # above the payer's actual allowed — estimate variance).
+        # Components of the primary-side gap.
         if not adjudicated:
             rp_unadj += est_c
         elif paid <= 0:
             rp_zero += max(0.0, est_c - pr_c)
         else:
-            rp_short += max(0.0, est_c - paid - pr_c)
+            claim_short = max(0.0, est_c - paid - pr_c)
+            if line_data:
+                rp_ratevar += line_ratevar
+                rp_denial += line_denial
+            else:
+                # no line-level ERA data (older claims) — default to rate
+                # variance, the benign bucket
+                rp_ratevar += claim_short
     r_sec, r_pt = pull_secondary_collections(
         token, r_first.isoformat(), r_last.isoformat())
     # Split the remaining gap: downstream remainder = PR established minus
@@ -384,7 +415,7 @@ def compute_realization(token, dos_year, dos_month):
                 collected=round(r_coll, 2), secondary=r_sec, patient=r_pt,
                 rem_prim=round(rem_prim, 2), rem_sec=round(rem_sec, 2),
                 rp_unadj=round(rp_unadj, 2), rp_zero=round(rp_zero, 2),
-                rp_short=round(rp_short, 2),
+                rp_ratevar=round(rp_ratevar, 2), rp_denial=round(rp_denial, 2),
                 age_days=(dt.date.today() - r_last).days)
 
 
@@ -409,7 +440,8 @@ def _ensure_realization_tab(svc):
         ["Remaining — primary side (components below)"],
         ["   · not yet adjudicated (in flight)"],
         ["   · adjudicated, paid $0 (denied / stuck)"],
-        ["   · adjudicated, paid short (est. variance / underpay)"],
+        ["   · paid short — rate variance (est. above contracted rate; not collectible)"],
+        ["   · paid short — partial denial (denial CARC on line; work/appeal)"],
         ["Remaining — secondary & patient (PR established, not yet collected)"],
         [""],
         ["Numerator: primary paid (Claims Board) + secondary ERA paid + patient Stripe paid (Secondary Board), same DOS window. Denominator: Est. Pay of the month's claims (latest thread only). Remaining split: PR established by primary ERAs minus downstream collections = secondary/patient; the rest is primary-side. Primary components: in-flight = no ERA yet; paid-$0 = denials to work; paid-short at maturity ≈ Est. Pay set above actual allowed (estimate error, not collectible). Components are unscaled and may differ slightly from the rem-primary total (overpay netting)."],
@@ -461,8 +493,8 @@ def update_realization_tab(svc, token, upto_year, upto_month):
                 RR["tot"]: f"=SUM({colx}{RR['coll']}:{colx}{RR['pt']})",
                 RR["rate"]: f"=IF(N({colx}{RR['est']})=0,\"\",{colx}{RR['tot']}/{colx}{RR['est']})",
                 RR["rem_prim"]: r["rem_prim"], RR["rp_unadj"]: r["rp_unadj"],
-                RR["rp_zero"]: r["rp_zero"], RR["rp_short"]: r["rp_short"],
-                RR["rem_sec"]: r["rem_sec"]}
+                RR["rp_zero"]: r["rp_zero"], RR["rp_ratevar"]: r["rp_ratevar"],
+                RR["rp_denial"]: r["rp_denial"], RR["rem_sec"]: r["rem_sec"]}
         data += [{"range": f"'{REAL_TAB}'!{colx}{row}", "values": [[v]]}
                  for row, v in vals.items()]
         print(f"Realization {r['month']}: {r['collected']}+{r['secondary']}+{r['patient']} "
