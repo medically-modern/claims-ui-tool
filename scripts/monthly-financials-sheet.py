@@ -125,56 +125,56 @@ HEADER_ROW = 3
 ROWS = {
     # Patient blocks (2026-08-01 layout): unique / half-height spacer /
     # sensors / supplies / subscriptions-total (=sensors+supplies formula).
-    "total_u": 5, "total_sens": 7, "total_supp": 8, "total_tot": 9,
-    "active_u": 11, "active_sens": 13, "active_supp": 14, "active_tot": 15,
-    "paused_u": 17, "paused_sens": 19, "paused_supp": 20, "paused_tot": 21,
-    "new_u": 23, "new_sens": 25, "new_supp": 26, "new_tot": 27,  # created in month
+    "total_u": 5, "total_sens": 7, "total_supp": 8, "total_dual": 9, "total_tot": 10,
+    "active_u": 12, "active_sens": 14, "active_supp": 15, "active_dual": 16, "active_tot": 17,
+    "paused_u": 19, "paused_sens": 21, "paused_supp": 22, "paused_dual": 23, "paused_tot": 24,
+    "new_u": 26, "new_sens": 28, "new_supp": 29, "new_dual": 30, "new_tot": 31,  # created in month
     # Churn = left the book (→Not Active/Dead) ONLY. Pure churn feeds LTV
     # (Brandon 2026-08-01; Paused-vs-Inactive hygiene enforced going fwd).
-    "attr_u": 29, "attr_sens": 31, "attr_supp": 32, "attr_tot": 33,
+    "attr_u": 33, "attr_sens": 35, "attr_supp": 36, "attr_dual": 37, "attr_tot": 38,
     # Pause flow (leading indicators, NOT attrition)
-    "pause_new": 35, "pause_res": 36, "pause_net": 37,
-    "arr_total": 40, "arr_sens": 41, "arr_supp": 42,
-    "rev_pump": 45, "rev_monitor": 46, "rev_sensor": 47, "rev_supplies": 48,
-    "rev_total": 49,
-    "pump_orders": 50, "monitor_orders": 51,   # claim counts by DOS, tie to rev rows
-    "avg_weighted": 53, "avg_sens": 54, "avg_supp": 55,
+    "pause_new": 40, "pause_res": 41, "pause_net": 42,
+    "arr_total": 45, "arr_sens": 46, "arr_supp": 47,
+    "rev_pump": 50, "rev_monitor": 51, "rev_sensor": 52, "rev_supplies": 53,
+    "rev_total": 54,
+    "pump_orders": 55, "monitor_orders": 56,   # claim counts by DOS, tie to rev rows
+    "avg_weighted": 58, "avg_sens": 59, "avg_supp": 60,
     # Per-product P&L: COGS / GP / margins / net all mirror the
     # pump-monitor-sensor-supplies-total revenue layout.
-    "cogs_pump": 58, "cogs_monitor": 59, "cogs_sensor": 60,
-    "cogs_supplies": 61, "cogs_ship": 62, "cogs_total": 63,
+    "cogs_pump": 63, "cogs_monitor": 64, "cogs_sensor": 65,
+    "cogs_supplies": 66, "cogs_ship": 67, "cogs_total": 68,
     # Per-unit averages actually used this month (informational rows)
-    "unit_pump": 64, "unit_monitor": 65, "unit_sensor": 66, "unit_supplies": 67,
-    "gp_pump": 70, "gp_monitor": 71, "gp_sensor": 72, "gp_supplies": 73, "gp_total": 74,
-    "gm_pump": 75, "gm_monitor": 76, "gm_sensor": 77, "gm_supplies": 78, "gm_total": 79,
-    "fixed": 82,
-    "np_pump": 83, "np_monitor": 84, "np_sensor": 85, "np_supplies": 86, "np_total": 87,
-    "nm_pump": 88, "nm_monitor": 89, "nm_sensor": 90, "nm_supplies": 91, "nm_total": 92,
+    "unit_pump": 69, "unit_monitor": 70, "unit_sensor": 71, "unit_supplies": 72,
+    "gp_pump": 75, "gp_monitor": 76, "gp_sensor": 77, "gp_supplies": 78, "gp_total": 79,
+    "gm_pump": 80, "gm_monitor": 81, "gm_sensor": 82, "gm_supplies": 83, "gm_total": 84,
+    "fixed": 87,
+    "np_pump": 88, "np_monitor": 89, "np_sensor": 90, "np_supplies": 91, "np_total": 92,
+    "nm_pump": 93, "nm_monitor": 94, "nm_sensor": 95, "nm_supplies": 96, "nm_total": 97,
     # Mix section (2026-08-01): product shares are formulas off the rows
     # above; payer shares are computed values (12 fixed family rows).
-    "mixrev_pump": 95, "mixrev_monitor": 96, "mixrev_sensor": 97, "mixrev_supplies": 98,
-    "mixgp_pump": 100, "mixgp_monitor": 101, "mixgp_sensor": 102, "mixgp_supplies": 103,
-    "payer_rev_start": 106,   # 12 rows, PAYER_FAMILIES order
-    "payer_gp_start": 120,    # 12 rows, PAYER_FAMILIES order
+    "mixrev_pump": 100, "mixrev_monitor": 101, "mixrev_sensor": 102, "mixrev_supplies": 103,
+    "mixgp_pump": 105, "mixgp_monitor": 106, "mixgp_sensor": 107, "mixgp_supplies": 108,
+    "payer_rev_start": 111,   # 12 rows, PAYER_FAMILIES order
+    "payer_gp_start": 125,    # 12 rows, PAYER_FAMILIES order
     # Per-patient unit economics (weighted over Active patients with
     # revenue; COGS = sensors+supplies only, no hardware/shipping)
-    "pp_order_rev": 134, "pp_order_cogs": 135, "pp_order_gp": 136,
-    "pp_ann_rev": 138, "pp_ann_cogs": 139, "pp_ann_gp": 140,
+    "pp_order_rev": 139, "pp_order_cogs": 140, "pp_order_gp": 141,
+    "pp_ann_rev": 143, "pp_ann_cogs": 144, "pp_ann_gp": 145,
     # LTV & pump payback — churn basis = PURE churn (left book)
-    "ltv_churn": 143, "ltv_life": 144, "ltv_val": 145,
-    "pb_new_pumps": 147, "pb_spend": 148, "pb_rentals": 149,
-    "pb_rental_rev": 150, "pb_months": 151,
+    "ltv_churn": 148, "ltv_life": 149, "ltv_val": 150,
+    "pb_new_pumps": 152, "pb_spend": 153, "pb_rentals": 154,
+    "pb_rental_rev": 155, "pb_months": 156,
     # Month-over-month deltas (formulas vs previous column; blank on first)
-    "d_rev": 154, "d_gp": 155, "d_np": 156, "d_arr": 157,
-    "d_active": 158, "d_new": 159, "d_attr": 160,
+    "d_rev": 159, "d_gp": 160, "d_np": 161, "d_arr": 162,
+    "d_active": 163, "d_new": 164, "d_attr": 165,
     # Self-audit footer
-    "audit_revsum": 163, "audit_gpsum": 164, "audit_unmatched": 165,
-    "audit_unknown": 166, "audit_blankstatus": 167,
-    "audit_rollfwd_total": 168,   # Total − (prev Total + New − Churned)
-    "audit_rollfwd_active": 169,  # Active − (prev Active + New − Paused + Resumed − Churned)
-    "audit_status": 170,
+    "audit_revsum": 168, "audit_gpsum": 169, "audit_unmatched": 170,
+    "audit_unknown": 171, "audit_blankstatus": 172,
+    "audit_rollfwd_total": 173,   # Total − (prev Total + New − Churned)
+    "audit_rollfwd_active": 174,  # Active − (prev Active + New − Paused + Resumed − Churned)
+    "audit_status": 175,
 }
-LAST_ROW = 170
+LAST_ROW = 175
 
 # ── Realization tab (own tab — vintage analysis by DOS month) ──────────────
 REAL_TAB = "Realization"
@@ -607,9 +607,12 @@ def compute(token, year, month):
     def is_sens(s): return s.get(C_TYPE, "") in ("Sensors", "Sensors & Supplies")
     def is_supp(s): return s.get(C_TYPE, "") in ("Supplies", "Sensors & Supplies")
 
+    def is_dual(s): return s.get(C_TYPE, "") == "Sensors & Supplies"
+
     def bucket(pred):
         g = [s for s in subs if pred(s)]
-        return dict(unique=len(g), sensors=sum(map(is_sens, g)), supplies=sum(map(is_supp, g)))
+        return dict(unique=len(g), sensors=sum(map(is_sens, g)),
+                    supplies=sum(map(is_supp, g)), dual=sum(map(is_dual, g)))
 
     def created_in_month(s):
         """Board item created during the target month (ET). New subscriptions
@@ -780,7 +783,7 @@ def compute(token, year, month):
             pause_res += 1
     churned = [by_id[p] for p in churned_ids if p in by_id]
     attr = dict(unique=len(churned_ids), sensors=sum(map(is_sens, churned)),
-                supplies=sum(map(is_supp, churned)))
+                supplies=sum(map(is_supp, churned)), dual=sum(map(is_dual, churned)))
     flows = dict(pause_new=pause_new, pause_res=pause_res,
                  churn_from_active=churn_from_active)
 
@@ -870,6 +873,11 @@ def write_column(svc, kpis, year, month, dry_run=False):
         R["paused_u"]: c["paused"]["unique"], R["paused_sens"]: c["paused"]["sensors"], R["paused_supp"]: c["paused"]["supplies"],
         R["new_u"]: c["new"]["unique"], R["new_sens"]: c["new"]["sensors"], R["new_supp"]: c["new"]["supplies"],
         R["attr_u"]: a["unique"], R["attr_sens"]: a["sensors"], R["attr_supp"]: a["supplies"],
+        # Dual (Sensors & Supplies) counts — exact values, not derived, so
+        # blank subscription types can't skew them
+        R["total_dual"]: c["total"]["dual"], R["active_dual"]: c["active"]["dual"],
+        R["paused_dual"]: c["paused"]["dual"], R["new_dual"]: c["new"]["dual"],
+        R["attr_dual"]: a["dual"],
         R["pause_new"]: kpis["flows"]["pause_new"],
         R["pause_res"]: kpis["flows"]["pause_res"],
         R["pause_net"]: f"={col}{R['pause_new']}-{col}{R['pause_res']}",
