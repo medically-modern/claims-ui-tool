@@ -125,10 +125,12 @@ HEADER_ROW = 3
 ROWS = {
     # Patient blocks (2026-08-01 layout): unique / half-height spacer /
     # sensors / supplies / subscriptions-total (=sensors+supplies formula).
-    "total_u": 5, "total_sens": 7, "total_supp": 8, "total_dual": 9,
-    "total_sonly": 10, "total_ponly": 11, "total_tot": 12,
-    "active_u": 14, "active_sens": 16, "active_supp": 17, "active_dual": 18,
-    "active_sonly": 19, "active_ponly": 20, "active_tot": 21,
+    # Total/Active blocks: unique, then its exclusive sub-segments
+    # (sensors-only / supplies-only / both), then product counts + subs total.
+    "total_u": 5, "total_sonly": 6, "total_ponly": 7, "total_dual": 8,
+    "total_sens": 10, "total_supp": 11, "total_tot": 12,
+    "active_u": 14, "active_sonly": 15, "active_ponly": 16, "active_dual": 17,
+    "active_sens": 19, "active_supp": 20, "active_tot": 21,
     "paused_u": 23, "paused_sens": 25, "paused_supp": 26, "paused_dual": 27, "paused_tot": 28,
     "new_u": 30, "new_sens": 32, "new_supp": 33, "new_dual": 34, "new_tot": 35,  # created in month
     # Churn = left the book (→Not Active/Dead) ONLY. Pure churn feeds LTV
