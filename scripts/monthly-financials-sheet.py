@@ -160,19 +160,21 @@ ROWS = {
     "ltv_churn": 139, "ltv_life": 140, "ltv_val": 141,
     "pb_new_pumps": 143, "pb_spend": 144, "pb_rentals": 145,
     "pb_rental_rev": 146, "pb_months": 147,
-    # Realization check (DOS month = target − 2): primary + secondary +
-    # patient (Stripe) collections vs Est. Pay
-    "real_month": 150, "real_est": 151, "real_coll": 152,
-    "real_sec": 153, "real_pt": 154, "real_tot": 155, "real_rate": 156,
-    "rem_prim": 157, "rem_sec": 158,   # remaining gap split (sums to est − collected)
     # Month-over-month deltas (formulas vs previous column; blank on first)
-    "d_rev": 161, "d_gp": 162, "d_np": 163, "d_arr": 164,
-    "d_active": 165, "d_new": 166, "d_attr": 167,
+    "d_rev": 150, "d_gp": 151, "d_np": 152, "d_arr": 153,
+    "d_active": 154, "d_new": 155, "d_attr": 156,
     # Self-audit footer
-    "audit_revsum": 170, "audit_gpsum": 171, "audit_unmatched": 172,
-    "audit_unknown": 173, "audit_blankstatus": 174, "audit_status": 175,
+    "audit_revsum": 159, "audit_gpsum": 160, "audit_unmatched": 161,
+    "audit_unknown": 162, "audit_blankstatus": 163, "audit_status": 164,
 }
-LAST_ROW = 175
+LAST_ROW = 164
+
+# ── Realization tab (own tab — vintage analysis by DOS month) ──────────────
+REAL_TAB = "Realization"
+REAL_START = (2026, 5)  # earliest DOS month with complete board data
+REAL_ROWS = {"age": 4, "est": 5, "coll": 6, "sec": 7, "pt": 8,
+             "tot": 9, "rate": 10, "rem_prim": 11, "rem_sec": 12}
+REAL_HEADER_ROW = 3
 
 SECONDARY_BOARD = 18413019028
 S2_PAID = "numeric_mm115q76"    # secondary ERA paid amount (secondary board)
@@ -336,13 +338,12 @@ def pull_secondary_collections(token, first_day, last_day):
     return round(sec, 2), round(pt, 2)
 
 
-def compute_realization(token, year, month):
-    """Realization for the DOS month two months before (year, month):
-    Est. Pay vs primary + secondary + patient collections to date."""
-    rm = month - 2 if month > 2 else month + 10
-    ry = year if month > 2 else year - 1
-    r_first = dt.date(ry, rm, 1)
-    r_last = dt.date(ry + (rm == 12), (rm % 12) + 1, 1) - dt.timedelta(days=1)
+def compute_realization(token, dos_year, dos_month):
+    """Realization for one DOS month: Est. Pay vs primary + secondary +
+    patient collections to date, plus the remaining-gap split."""
+    r_first = dt.date(dos_year, dos_month, 1)
+    r_last = (dt.date(dos_year + (dos_month == 12), (dos_month % 12) + 1, 1)
+              - dt.timedelta(days=1))
     r_est = r_coll = pr_total = 0.0
     for c in pull_month_claims(token, r_first.isoformat(), r_last.isoformat()):
         pcv = {v["id"]: (v["text"] or "") for v in c["column_values"]}
@@ -367,42 +368,93 @@ def compute_realization(token, year, month):
     rem_prim = remaining - rem_sec
     return dict(month=r_first.strftime("%b %Y"), est=round(r_est, 2),
                 collected=round(r_coll, 2), secondary=r_sec, patient=r_pt,
-                rem_prim=round(rem_prim, 2), rem_sec=round(rem_sec, 2))
+                rem_prim=round(rem_prim, 2), rem_sec=round(rem_sec, 2),
+                age_days=(dt.date.today() - r_last).days)
 
 
-def refresh_prior_realizations(svc, token, target_label):
-    """Re-measure the realization block of EVERY existing month column
-    (except the one just written) so collections keep maturing instead of
-    freezing at the ~2-month mark. Only the realization value cells are
-    touched — nothing else in old columns is rewritten."""
-    hdr = svc.spreadsheets().values().get(
-        spreadsheetId=SHEET_ID, range=f"'{TAB}'!{HEADER_ROW}:{HEADER_ROW}",
-        valueRenderOption="UNFORMATTED_VALUE").execute().get("values", [[]])[0]
+def _ensure_realization_tab(svc):
+    """Create the Realization tab with labels/formats if missing. Returns sheetId."""
+    meta = svc.spreadsheets().get(spreadsheetId=SHEET_ID, fields="sheets.properties").execute()
+    for s in meta["sheets"]:
+        if s["properties"]["title"] == REAL_TAB:
+            return s["properties"]["sheetId"]
+    r = svc.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": [{
+        "addSheet": {"properties": {"title": REAL_TAB, "gridProperties": {
+            "rowCount": 40, "columnCount": 30, "frozenRowCount": 3, "frozenColumnCount": 1}}}}]}
+    ).execute()
+    sid = r["replies"][0]["addSheet"]["properties"]["sheetId"]
+    labels = [
+        ["Realization by DOS month"],
+        ["One column per date-of-service month, RE-MEASURED on every monthly run — collections to date, so young months read low and mature as payments land."],
+        ["Metric"], ["Days since month end"], ["Est. Pay total"],
+        ["Collected — primary"], ["Collected — secondary insurance"],
+        ["Collected — patient (Stripe)"], ["Collected — total"],
+        ["Realization rate %"],
+        ["Remaining — primary side (unadjudicated / underpaid / denied)"],
+        ["Remaining — secondary & patient (PR established, not yet collected)"],
+        [""],
+        ["Numerator: primary paid (Claims Board) + secondary ERA paid + patient Stripe paid (Secondary Board), same DOS window. Denominator: Est. Pay of the month's claims (latest thread only). Remaining split: PR established by primary ERAs minus downstream collections = secondary/patient; the rest is primary-side."],
+    ]
+    svc.spreadsheets().values().update(
+        spreadsheetId=SHEET_ID, range=f"'{REAL_TAB}'!A1",
+        valueInputOption="RAW", body={"values": labels}).execute()
+    def numf(r1, r2, typ, pat):
+        return {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": r1 - 1, "endRowIndex": r2,
+                "startColumnIndex": 1, "endColumnIndex": 30},
+                "cell": {"userEnteredFormat": {"numberFormat": {"type": typ, "pattern": pat}}},
+                "fields": "userEnteredFormat.numberFormat"}}
+    svc.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": [
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1, "startColumnIndex": 0, "endColumnIndex": 1},
+         "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 14}}}, "fields": "userEnteredFormat.textFormat"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 2, "endRowIndex": 3, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.97}}},
+         "fields": "userEnteredFormat"}},
+        numf(4, 4, "NUMBER", "#,##0"), numf(5, 9, "CURRENCY", "$#,##0"),
+        numf(10, 10, "PERCENT", "0.0%"), numf(11, 12, "CURRENCY", "$#,##0"),
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 8, "endRowIndex": 10, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
+        {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
+         "properties": {"pixelSize": 300}, "fields": "pixelSize"}},
+    ]}).execute()
+    return sid
+
+
+def update_realization_tab(svc, token, upto_year, upto_month):
+    """Write/refresh one column per DOS month from REAL_START through
+    (upto_year, upto_month). Every column is fully re-measured each run."""
+    _ensure_realization_tab(svc)
+    months, y, m = [], *REAL_START
+    while (y, m) <= (upto_year, upto_month):
+        months.append((y, m))
+        m += 1
+        if m == 13:
+            y, m = y + 1, 1
     data = []
-    for idx, cell in enumerate(hdr):
-        if idx == 0:
-            continue
-        lab = norm_header(cell)
-        if not lab or lab == target_label:
-            continue
-        try:
-            d = dt.datetime.strptime(lab, "%b %Y")
-        except ValueError:
-            continue
-        r = compute_realization(token, d.year, d.month)
-        colx = col_letter(idx)
-        for key, val in (("real_month", r["month"]), ("real_est", r["est"]),
-                         ("real_coll", r["collected"]), ("real_sec", r["secondary"]),
-                         ("real_pt", r["patient"]), ("rem_prim", r["rem_prim"]),
-                         ("rem_sec", r["rem_sec"])):
-            data.append({"range": f"'{TAB}'!{colx}{ROWS[key]}", "values": [[val]]})
-        print(f"Re-measured realization for column {colx} ({lab}): "
-              f"{r['month']} est={r['est']} coll={r['collected']}+{r['secondary']}+{r['patient']}")
-    if data:
-        svc.spreadsheets().values().batchUpdate(
-            spreadsheetId=SHEET_ID,
-            body={"valueInputOption": "USER_ENTERED", "data": data}).execute()
-    return len(data) // 5
+    for i, (yy, mm) in enumerate(months):
+        r = compute_realization(token, yy, mm)
+        colx = col_letter(i + 1)  # B, C, ...
+        RR = REAL_ROWS
+        vals = {REAL_HEADER_ROW: r["month"], RR["age"]: r["age_days"],
+                RR["est"]: r["est"], RR["coll"]: r["collected"],
+                RR["sec"]: r["secondary"], RR["pt"]: r["patient"],
+                RR["tot"]: f"=SUM({colx}{RR['coll']}:{colx}{RR['pt']})",
+                RR["rate"]: f"=IF(N({colx}{RR['est']})=0,\"\",{colx}{RR['tot']}/{colx}{RR['est']})",
+                RR["rem_prim"]: r["rem_prim"], RR["rem_sec"]: r["rem_sec"]}
+        data += [{"range": f"'{REAL_TAB}'!{colx}{row}", "values": [[v]]}
+                 for row, v in vals.items()]
+        print(f"Realization {r['month']}: {r['collected']}+{r['secondary']}+{r['patient']} "
+              f"of {r['est']} (age {r['age_days']}d, rem P/S {r['rem_prim']}/{r['rem_sec']})")
+    svc.spreadsheets().values().batchUpdate(
+        spreadsheetId=SHEET_ID,
+        body={"valueInputOption": "USER_ENTERED", "data": data}).execute()
+    # month headers must stay literal text, not date serials
+    svc.spreadsheets().values().batchUpdate(
+        spreadsheetId=SHEET_ID,
+        body={"valueInputOption": "RAW", "data": [
+            {"range": f"'{REAL_TAB}'!{col_letter(i + 1)}{REAL_HEADER_ROW}",
+             "values": [[dt.date(yy, mm, 1).strftime('%b %Y')]]}
+            for i, (yy, mm) in enumerate(months)]}).execute()
+    return len(months)
 
 
 def pull_pause_events(token, from_iso, to_iso):
@@ -593,11 +645,7 @@ def compute(token, year, month):
     attr = dict(unique=len(lost), sensors=sum(map(is_sens, lost)),
                 supplies=sum(map(is_supp, lost)))
 
-    # 4. Realization check: DOS month two months back — how much of its
-    # Est. Pay has actually been collected by now (primary + secondary +
-    # patient). Prior columns are re-measured on every run (see
-    # refresh_prior_realizations), so these numbers mature over time.
-    realization = compute_realization(token, year, month)
+    # (Realization lives on its own tab now — see update_realization_tab.)
 
     return {
         "counts": counts, "attrition": attr,
@@ -616,7 +664,6 @@ def compute(token, year, month):
         "payer_mix": payer_mix,
         "payback": dict(new_pumps=new_pumps, rental_pumps=rental_pumps,
                         rental_rev=round(rental_rev, 2)),
-        "realization": realization,
         "audit": dict(unmatched=unmatched, unknown_lines=unknown_lines,
                       blank_status=sum(1 for s in subs if not s.get(C_STATUS, "").strip())),
         "claims_counted": len(claims),
@@ -756,17 +803,6 @@ def write_column(svc, kpis, year, month, dry_run=False):
     cells[R["pb_rental_rev"]] = pb["rental_rev"]
     cells[R["pb_months"]] = (f"=IF(OR(N({col}{R['pb_rentals']})=0,N({col}{R['pb_rental_rev']})=0),\"\","
                              f"{col}{R['unit_pump']}/({col}{R['pb_rental_rev']}/{col}{R['pb_rentals']}))")
-    # Realization check (DOS month −2, primary collections only for now)
-    rl = kpis["realization"]
-    cells[R["real_month"]] = rl["month"]
-    cells[R["real_est"]] = rl["est"]
-    cells[R["real_coll"]] = rl["collected"]
-    cells[R["real_sec"]] = rl["secondary"]
-    cells[R["real_pt"]] = rl["patient"]
-    cells[R["real_tot"]] = f"=SUM({col}{R['real_coll']}:{col}{R['real_pt']})"
-    cells[R["real_rate"]] = f"=IF(N({col}{R['real_est']})=0,\"\",{col}{R['real_tot']}/{col}{R['real_est']})"
-    cells[R["rem_prim"]] = rl["rem_prim"]
-    cells[R["rem_sec"]] = rl["rem_sec"]
     # Month-over-month deltas — reference the previous month column;
     # blank on the sheet's first month column.
     if idx > 1:
@@ -853,9 +889,8 @@ def main():
     print(f"{'Would write' if args.dry_run else 'Wrote'} column {col} "
           f"({'new' if created else 'existing — fixed costs preserved'}).")
     if not args.dry_run:
-        n = refresh_prior_realizations(
-            svc, token, dt.date(year, month, 1).strftime("%b %Y"))
-        print(f"Re-measured realization for {n} prior month column(s).")
+        n = update_realization_tab(svc, token, year, month)
+        print(f"Realization tab refreshed: {n} DOS month column(s) re-measured.")
 
 
 if __name__ == "__main__":
