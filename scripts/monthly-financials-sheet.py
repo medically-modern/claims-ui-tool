@@ -83,27 +83,29 @@ FIXED_COST_DEFAULT = 30000
 # Row map (1-indexed sheet rows; column A holds labels, months go B, C, ...)
 HEADER_ROW = 3
 ROWS = {
-    "total_u": 5, "total_sens": 6, "total_supp": 7,
-    "active_u": 9, "active_sens": 10, "active_supp": 11,
-    "paused_u": 13, "paused_sens": 14, "paused_supp": 15,
-    "new_u": 17, "new_sens": 18, "new_supp": 19,   # board items created in month
-    "attr_u": 21, "attr_sens": 22, "attr_supp": 23,
-    "arr_total": 26, "arr_sens": 27, "arr_supp": 28,
-    "rev_pump": 31, "rev_monitor": 32, "rev_sensor": 33, "rev_supplies": 34,
-    "rev_total": 35,
-    "pump_orders": 36, "monitor_orders": 37,   # claim counts by DOS, tie to rev rows
-    "avg_weighted": 39, "avg_sens": 40, "avg_supp": 41,
-    # Per-product P&L (restructured 2026-08-01): COGS / GP / margins / net
-    # all mirror the pump-monitor-sensor-supplies-total revenue layout.
-    "cogs_pump": 44, "cogs_monitor": 45, "cogs_sensor": 46,
-    "cogs_supplies": 47, "cogs_ship": 48, "cogs_total": 49,
-    "gp_pump": 52, "gp_monitor": 53, "gp_sensor": 54, "gp_supplies": 55, "gp_total": 56,
-    "gm_pump": 57, "gm_monitor": 58, "gm_sensor": 59, "gm_supplies": 60, "gm_total": 61,
-    "fixed": 64,
-    "np_pump": 65, "np_monitor": 66, "np_sensor": 67, "np_supplies": 68, "np_total": 69,
-    "nm_pump": 70, "nm_monitor": 71, "nm_sensor": 72, "nm_supplies": 73, "nm_total": 74,
+    # Patient blocks (2026-08-01 layout): unique / half-height spacer /
+    # sensors / supplies / subscriptions-total (=sensors+supplies formula).
+    "total_u": 5, "total_sens": 7, "total_supp": 8, "total_tot": 9,
+    "active_u": 11, "active_sens": 13, "active_supp": 14, "active_tot": 15,
+    "paused_u": 17, "paused_sens": 19, "paused_supp": 20, "paused_tot": 21,
+    "new_u": 23, "new_sens": 25, "new_supp": 26, "new_tot": 27,  # created in month
+    "attr_u": 29, "attr_sens": 31, "attr_supp": 32, "attr_tot": 33,
+    "arr_total": 36, "arr_sens": 37, "arr_supp": 38,
+    "rev_pump": 41, "rev_monitor": 42, "rev_sensor": 43, "rev_supplies": 44,
+    "rev_total": 45,
+    "pump_orders": 46, "monitor_orders": 47,   # claim counts by DOS, tie to rev rows
+    "avg_weighted": 49, "avg_sens": 50, "avg_supp": 51,
+    # Per-product P&L: COGS / GP / margins / net all mirror the
+    # pump-monitor-sensor-supplies-total revenue layout.
+    "cogs_pump": 54, "cogs_monitor": 55, "cogs_sensor": 56,
+    "cogs_supplies": 57, "cogs_ship": 58, "cogs_total": 59,
+    "gp_pump": 62, "gp_monitor": 63, "gp_sensor": 64, "gp_supplies": 65, "gp_total": 66,
+    "gm_pump": 67, "gm_monitor": 68, "gm_sensor": 69, "gm_supplies": 70, "gm_total": 71,
+    "fixed": 74,
+    "np_pump": 75, "np_monitor": 76, "np_sensor": 77, "np_supplies": 78, "np_total": 79,
+    "nm_pump": 80, "nm_monitor": 81, "nm_sensor": 82, "nm_supplies": 83, "nm_total": 84,
 }
-LAST_ROW = 74
+LAST_ROW = 84
 
 
 def num(v):
@@ -388,6 +390,9 @@ def write_column(svc, kpis, year, month, dry_run=False):
         R["paused_u"]: c["paused"]["unique"], R["paused_sens"]: c["paused"]["sensors"], R["paused_supp"]: c["paused"]["supplies"],
         R["new_u"]: c["new"]["unique"], R["new_sens"]: c["new"]["sensors"], R["new_supp"]: c["new"]["supplies"],
         R["attr_u"]: a["unique"], R["attr_sens"]: a["sensors"], R["attr_supp"]: a["supplies"],
+        # Block totals: subscriptions = sensors + supplies (dual-type counts once per product)
+        **{R[f"{blk}_tot"]: f"={col}{R[f'{blk}_sens']}+{col}{R[f'{blk}_supp']}"
+           for blk in ("total", "active", "paused", "new", "attr")},
         R["arr_total"]: arr["total"], R["arr_sens"]: arr["sensors"], R["arr_supp"]: arr["supplies"],
         R["rev_pump"]: rev["pump"], R["rev_monitor"]: rev["monitor"],
         R["rev_sensor"]: rev["sensors"], R["rev_supplies"]: rev["supplies"],
