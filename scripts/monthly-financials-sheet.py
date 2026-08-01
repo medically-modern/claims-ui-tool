@@ -91,9 +91,17 @@ ROWS = {
     "rev_pump": 27, "rev_monitor": 28, "rev_sensor": 29, "rev_supplies": 30,
     "rev_total": 31,
     "avg_weighted": 33, "avg_sens": 34, "avg_supp": 35,
-    "cogs": 38, "gp": 39, "gm": 40, "fixed": 41, "np": 42, "nm": 43,
+    # Per-product P&L (restructured 2026-08-01): COGS / GP / margins / net
+    # all mirror the pump-monitor-sensor-supplies-total revenue layout.
+    "cogs_pump": 38, "cogs_monitor": 39, "cogs_sensor": 40,
+    "cogs_supplies": 41, "cogs_ship": 42, "cogs_total": 43,
+    "gp_pump": 46, "gp_monitor": 47, "gp_sensor": 48, "gp_supplies": 49, "gp_total": 50,
+    "gm_pump": 51, "gm_monitor": 52, "gm_sensor": 53, "gm_supplies": 54, "gm_total": 55,
+    "fixed": 58,
+    "np_pump": 59, "np_monitor": 60, "np_sensor": 61, "np_supplies": 62, "np_total": 63,
+    "nm_pump": 64, "nm_monitor": 65, "nm_sensor": 66, "nm_supplies": 67, "nm_total": 68,
 }
-LAST_ROW = 43
+LAST_ROW = 68
 
 
 def num(v):
@@ -232,7 +240,7 @@ def compute(token, year, month):
     # 2. Month claims -> revenue by product + COGS
     claims = pull_month_claims(token, first.isoformat(), last.isoformat())
     rev = dict(pump=0.0, monitor=0.0, sensors=0.0, supplies=0.0)
-    cogs = 0.0
+    cogs = dict(pump=0.0, monitor=0.0, sensors=0.0, supplies=0.0, shipping=0.0)
     for c in claims:
         has_sens = has_supp = False
         codes = set()
@@ -253,13 +261,13 @@ def compute(token, year, month):
         patient = by_id.get(sub_item_id.strip()) or by_name.get(c["name"].strip().lower())
         if has_sens:
             cost = num(patient.get(C_SENS_COST)) if patient else 0
-            cogs += cost if cost > 0 else SENSORS_COST_FALLBACK
+            cogs["sensors"] += cost if cost > 0 else SENSORS_COST_FALLBACK
         if has_supp:
             cost = num(patient.get(C_SUPP_COST)) if patient else 0
-            cogs += cost if cost > 0 else SUPPLIES_COST_FALLBACK
+            cogs["supplies"] += cost if cost > 0 else SUPPLIES_COST_FALLBACK
         pump_only = codes and codes <= {"E0784"}
         if not pump_only:
-            cogs += SHIPPING_PER_ORDER
+            cogs["shipping"] += SHIPPING_PER_ORDER
 
     # 3. Attrition from activity log (whole calendar month, ET-agnostic UTC pad)
     events = pull_pause_events(
@@ -289,7 +297,8 @@ def compute(token, year, month):
         "arr": dict(total=round(arr_total, 2), sensors=round(arr_sens, 2), supplies=round(arr_supp, 2)),
         "revenue": {k: round(v, 2) for k, v in rev.items()},
         "avg": dict(weighted=avg_weighted, sensors=avg_sens, supplies=avg_supp),
-        "cogs": round(cogs, 2), "claims_counted": len(claims),
+        "cogs": {k: round(v, 2) for k, v in cogs.items()},
+        "claims_counted": len(claims),
     }
 
 
@@ -357,13 +366,33 @@ def write_column(svc, kpis, year, month, dry_run=False):
         R["rev_sensor"]: rev["sensors"], R["rev_supplies"]: rev["supplies"],
         R["rev_total"]: f"=SUM({col}{R['rev_pump']}:{col}{R['rev_supplies']})",
         R["avg_weighted"]: avg["weighted"], R["avg_sens"]: avg["sensors"], R["avg_supp"]: avg["supplies"],
-        R["cogs"]: kpis["cogs"],
-        R["gp"]: f"={col}{R['rev_total']}-{col}{R['cogs']}",
-        R["gm"]: f"=IF({col}{R['rev_total']}=0,\"\",{col}{R['gp']}/{col}{R['rev_total']})",
-        R["np"]: f"={col}{R['gp']}-{col}{R['fixed']}",
-        R["nm"]: f"=IF({col}{R['rev_total']}=0,\"\",{col}{R['np']}/{col}{R['rev_total']})",
-        HEADER_ROW: label,
     }
+    cg = kpis["cogs"]
+    cells.update({
+        R["cogs_pump"]: cg["pump"], R["cogs_monitor"]: cg["monitor"],
+        R["cogs_sensor"]: cg["sensors"], R["cogs_supplies"]: cg["supplies"],
+        R["cogs_ship"]: cg["shipping"],
+        R["cogs_total"]: f"=SUM({col}{R['cogs_pump']}:{col}{R['cogs_ship']})",
+    })
+    # Per-product GP / margins / net mirror the revenue rows. Shipping COGS
+    # and any GP-vs-fixed gap only hit the Total rows (product nets exclude
+    # shipping by design — Brandon 2026-08-01).
+    products = [("pump", "rev_pump"), ("monitor", "rev_monitor"),
+                ("sensor", "rev_sensor"), ("supplies", "rev_supplies")]
+    for key, rev_key in products:
+        rev_c, cogs_c = f"{col}{R[rev_key]}", f"{col}{R[f'cogs_{key}']}"
+        gp_c, np_c = f"{col}{R[f'gp_{key}']}", f"{col}{R[f'np_{key}']}"
+        cells[R[f"gp_{key}"]] = f"={rev_c}-{cogs_c}"
+        cells[R[f"gm_{key}"]] = f"=IF({rev_c}=0,\"\",{gp_c}/{rev_c})"
+        cells[R[f"np_{key}"]] = (f"={gp_c}-IF({col}{R['rev_total']}=0,0,"
+                                 f"{col}{R['fixed']}*{rev_c}/{col}{R['rev_total']})")
+        cells[R[f"nm_{key}"]] = f"=IF({rev_c}=0,\"\",{np_c}/{rev_c})"
+    rt = f"{col}{R['rev_total']}"
+    cells[R["gp_total"]] = f"={rt}-{col}{R['cogs_total']}"
+    cells[R["gm_total"]] = f"=IF({rt}=0,\"\",{col}{R['gp_total']}/{rt})"
+    cells[R["np_total"]] = f"={col}{R['gp_total']}-{col}{R['fixed']}"
+    cells[R["nm_total"]] = f"=IF({rt}=0,\"\",{col}{R['np_total']}/{rt})"
+    cells[HEADER_ROW] = label
     if created:
         cells[R["fixed"]] = FIXED_COST_DEFAULT  # never overwrite an existing month's fixed costs
 
