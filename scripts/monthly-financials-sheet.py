@@ -330,6 +330,61 @@ def pull_secondary_collections(token, first_day, last_day):
     return round(sec, 2), round(pt, 2)
 
 
+def compute_realization(token, year, month):
+    """Realization for the DOS month two months before (year, month):
+    Est. Pay vs primary + secondary + patient collections to date."""
+    rm = month - 2 if month > 2 else month + 10
+    ry = year if month > 2 else year - 1
+    r_first = dt.date(ry, rm, 1)
+    r_last = dt.date(ry + (rm == 12), (rm % 12) + 1, 1) - dt.timedelta(days=1)
+    r_est = r_coll = 0.0
+    for c in pull_month_claims(token, r_first.isoformat(), r_last.isoformat()):
+        pcv = {v["id"]: (v["text"] or "") for v in c["column_values"]}
+        r_coll += num(pcv.get(C_PPAID))
+        for sub in c.get("subitems") or []:
+            cv = {v["id"]: (v["text"] or "") for v in sub["column_values"]}
+            if cv.get(S_HCPC, "").strip().upper() in KNOWN_CODES:
+                r_est += num(cv.get(S_ESTPAY)) or num(cv.get(S_CHARGE))
+    r_sec, r_pt = pull_secondary_collections(
+        token, r_first.isoformat(), r_last.isoformat())
+    return dict(month=r_first.strftime("%b %Y"), est=round(r_est, 2),
+                collected=round(r_coll, 2), secondary=r_sec, patient=r_pt)
+
+
+def refresh_prior_realizations(svc, token, target_label):
+    """Re-measure the realization block of EVERY existing month column
+    (except the one just written) so collections keep maturing instead of
+    freezing at the ~2-month mark. Only the realization value cells are
+    touched — nothing else in old columns is rewritten."""
+    hdr = svc.spreadsheets().values().get(
+        spreadsheetId=SHEET_ID, range=f"'{TAB}'!{HEADER_ROW}:{HEADER_ROW}",
+        valueRenderOption="UNFORMATTED_VALUE").execute().get("values", [[]])[0]
+    data = []
+    for idx, cell in enumerate(hdr):
+        if idx == 0:
+            continue
+        lab = norm_header(cell)
+        if not lab or lab == target_label:
+            continue
+        try:
+            d = dt.datetime.strptime(lab, "%b %Y")
+        except ValueError:
+            continue
+        r = compute_realization(token, d.year, d.month)
+        colx = col_letter(idx)
+        for key, val in (("real_month", r["month"]), ("real_est", r["est"]),
+                         ("real_coll", r["collected"]), ("real_sec", r["secondary"]),
+                         ("real_pt", r["patient"])):
+            data.append({"range": f"'{TAB}'!{colx}{ROWS[key]}", "values": [[val]]})
+        print(f"Re-measured realization for column {colx} ({lab}): "
+              f"{r['month']} est={r['est']} coll={r['collected']}+{r['secondary']}+{r['patient']}")
+    if data:
+        svc.spreadsheets().values().batchUpdate(
+            spreadsheetId=SHEET_ID,
+            body={"valueInputOption": "USER_ENTERED", "data": data}).execute()
+    return len(data) // 5
+
+
 def pull_pause_events(token, from_iso, to_iso):
     """Status-column activity log events for the window."""
     events, page = [], 1
@@ -519,26 +574,10 @@ def compute(token, year, month):
                 supplies=sum(map(is_supp, lost)))
 
     # 4. Realization check: DOS month two months back — how much of its
-    # Est. Pay has actually been collected (parent Primary Paid) by now.
-    # Early version (Brandon 2026-08-01): primary collections only, will
-    # evolve as data comes in.
-    rm = month - 2 if month > 2 else month + 10
-    ry = year if month > 2 else year - 1
-    r_first = dt.date(ry, rm, 1)
-    r_last = dt.date(ry + (rm == 12), (rm % 12) + 1, 1) - dt.timedelta(days=1)
-    r_claims = pull_month_claims(token, r_first.isoformat(), r_last.isoformat())
-    r_est = r_coll = 0.0
-    for c in r_claims:
-        pcv = {v["id"]: (v["text"] or "") for v in c["column_values"]}
-        r_coll += num(pcv.get(C_PPAID))
-        for sub in c.get("subitems") or []:
-            cv = {v["id"]: (v["text"] or "") for v in sub["column_values"]}
-            if cv.get(S_HCPC, "").strip().upper() in KNOWN_CODES:
-                r_est += num(cv.get(S_ESTPAY)) or num(cv.get(S_CHARGE))
-    r_sec, r_pt = pull_secondary_collections(
-        token, r_first.isoformat(), r_last.isoformat())
-    realization = dict(month=r_first.strftime("%b %Y"), est=round(r_est, 2),
-                       collected=round(r_coll, 2), secondary=r_sec, patient=r_pt)
+    # Est. Pay has actually been collected by now (primary + secondary +
+    # patient). Prior columns are re-measured on every run (see
+    # refresh_prior_realizations), so these numbers mature over time.
+    realization = compute_realization(token, year, month)
 
     return {
         "counts": counts, "attrition": attr,
@@ -791,6 +830,10 @@ def main():
     col, created = write_column(svc, kpis, year, month, dry_run=args.dry_run)
     print(f"{'Would write' if args.dry_run else 'Wrote'} column {col} "
           f"({'new' if created else 'existing — fixed costs preserved'}).")
+    if not args.dry_run:
+        n = refresh_prior_realizations(
+            svc, token, dt.date(year, month, 1).strftime("%b %Y"))
+        print(f"Re-measured realization for {n} prior month column(s).")
 
 
 if __name__ == "__main__":
