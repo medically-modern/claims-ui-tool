@@ -86,23 +86,24 @@ ROWS = {
     "total_u": 5, "total_sens": 6, "total_supp": 7,
     "active_u": 9, "active_sens": 10, "active_supp": 11,
     "paused_u": 13, "paused_sens": 14, "paused_supp": 15,
-    "attr_u": 17, "attr_sens": 18, "attr_supp": 19,
-    "arr_total": 22, "arr_sens": 23, "arr_supp": 24,
-    "rev_pump": 27, "rev_monitor": 28, "rev_sensor": 29, "rev_supplies": 30,
-    "rev_total": 31,
-    "pump_orders": 32, "monitor_orders": 33,   # claim counts by DOS, tie to rev rows
-    "avg_weighted": 35, "avg_sens": 36, "avg_supp": 37,
+    "new_u": 17, "new_sens": 18, "new_supp": 19,   # board items created in month
+    "attr_u": 21, "attr_sens": 22, "attr_supp": 23,
+    "arr_total": 26, "arr_sens": 27, "arr_supp": 28,
+    "rev_pump": 31, "rev_monitor": 32, "rev_sensor": 33, "rev_supplies": 34,
+    "rev_total": 35,
+    "pump_orders": 36, "monitor_orders": 37,   # claim counts by DOS, tie to rev rows
+    "avg_weighted": 39, "avg_sens": 40, "avg_supp": 41,
     # Per-product P&L (restructured 2026-08-01): COGS / GP / margins / net
     # all mirror the pump-monitor-sensor-supplies-total revenue layout.
-    "cogs_pump": 40, "cogs_monitor": 41, "cogs_sensor": 42,
-    "cogs_supplies": 43, "cogs_ship": 44, "cogs_total": 45,
-    "gp_pump": 48, "gp_monitor": 49, "gp_sensor": 50, "gp_supplies": 51, "gp_total": 52,
-    "gm_pump": 53, "gm_monitor": 54, "gm_sensor": 55, "gm_supplies": 56, "gm_total": 57,
-    "fixed": 60,
-    "np_pump": 61, "np_monitor": 62, "np_sensor": 63, "np_supplies": 64, "np_total": 65,
-    "nm_pump": 66, "nm_monitor": 67, "nm_sensor": 68, "nm_supplies": 69, "nm_total": 70,
+    "cogs_pump": 44, "cogs_monitor": 45, "cogs_sensor": 46,
+    "cogs_supplies": 47, "cogs_ship": 48, "cogs_total": 49,
+    "gp_pump": 52, "gp_monitor": 53, "gp_sensor": 54, "gp_supplies": 55, "gp_total": 56,
+    "gm_pump": 57, "gm_monitor": 58, "gm_sensor": 59, "gm_supplies": 60, "gm_total": 61,
+    "fixed": 64,
+    "np_pump": 65, "np_monitor": 66, "np_sensor": 67, "np_supplies": 68, "np_total": 69,
+    "nm_pump": 70, "nm_monitor": 71, "nm_sensor": 72, "nm_supplies": 73, "nm_total": 74,
 }
-LAST_ROW = 70
+LAST_ROW = 74
 
 
 def num(v):
@@ -130,9 +131,9 @@ def pull_subscription_snapshot(token):
     """All Subscription Board items -> list of dicts keyed by column id."""
     items, cursor = [], None
     q_first = """query($b:[ID!],$c:[String!]){boards(ids:$b){items_page(limit:500){
-      cursor items{id name group{title} column_values(ids:$c){id text}}}}}"""
+      cursor items{id name created_at group{title} column_values(ids:$c){id text}}}}}"""
     q_next = """query($cur:String!,$c:[String!]){next_items_page(limit:500,cursor:$cur){
-      cursor items{id name group{title} column_values(ids:$c){id text}}}}"""
+      cursor items{id name created_at group{title} column_values(ids:$c){id text}}}}"""
     while True:
         if cursor is None:
             d = monday(q_first, {"b": [SUB_BOARD], "c": SUB_COLS}, token)
@@ -142,6 +143,7 @@ def pull_subscription_snapshot(token):
             page = d["next_items_page"]
         for it in page["items"]:
             row = {"id": it["id"], "name": it["name"],
+                   "created_at": it.get("created_at") or "",
                    "group": (it.get("group") or {}).get("title", "")}
             row.update({cv["id"]: (cv["text"] or "") for cv in it["column_values"]})
             items.append(row)
@@ -222,10 +224,24 @@ def compute(token, year, month):
         g = [s for s in subs if pred(s)]
         return dict(unique=len(g), sensors=sum(map(is_sens, g)), supplies=sum(map(is_supp, g)))
 
+    def created_in_month(s):
+        """Board item created during the target month (ET). New subscriptions
+        = new board items; un-pauses of existing patients don't count."""
+        raw = s.get("created_at", "")
+        if not raw:
+            return False
+        try:
+            d = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            d = d.astimezone(ZoneInfo("America/New_York")).date()
+        except ValueError:
+            return False
+        return first <= d <= last
+
     counts = {
         "total": bucket(lambda s: True),
         "active": bucket(lambda s: s.get(C_STATUS, "").lower() == "active"),
         "paused": bucket(lambda s: s.get(C_STATUS, "").lower() == "paused"),
+        "new": bucket(created_in_month),
     }
 
     active = [s for s in subs if s.get(C_STATUS, "").lower() == "active"]
@@ -370,6 +386,7 @@ def write_column(svc, kpis, year, month, dry_run=False):
         R["total_u"]: c["total"]["unique"], R["total_sens"]: c["total"]["sensors"], R["total_supp"]: c["total"]["supplies"],
         R["active_u"]: c["active"]["unique"], R["active_sens"]: c["active"]["sensors"], R["active_supp"]: c["active"]["supplies"],
         R["paused_u"]: c["paused"]["unique"], R["paused_sens"]: c["paused"]["sensors"], R["paused_supp"]: c["paused"]["supplies"],
+        R["new_u"]: c["new"]["unique"], R["new_sens"]: c["new"]["sensors"], R["new_supp"]: c["new"]["supplies"],
         R["attr_u"]: a["unique"], R["attr_sens"]: a["sensors"], R["attr_supp"]: a["supplies"],
         R["arr_total"]: arr["total"], R["arr_sens"]: arr["sensors"], R["arr_supp"]: arr["supplies"],
         R["rev_pump"]: rev["pump"], R["rev_monitor"]: rev["monitor"],
