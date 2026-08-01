@@ -173,7 +173,9 @@ LAST_ROW = 164
 REAL_TAB = "Realization"
 REAL_START = (2026, 5)  # earliest DOS month with complete board data
 REAL_ROWS = {"age": 4, "est": 5, "coll": 6, "sec": 7, "pt": 8,
-             "tot": 9, "rate": 10, "rem_prim": 11, "rem_sec": 12}
+             "tot": 9, "rate": 10, "rem_prim": 11,
+             "rp_unadj": 12, "rp_zero": 13, "rp_short": 14,  # components of rem_prim
+             "rem_sec": 15}
 REAL_HEADER_ROW = 3
 
 SECONDARY_BOARD = 18413019028
@@ -345,6 +347,7 @@ def compute_realization(token, dos_year, dos_month):
     r_last = (dt.date(dos_year + (dos_month == 12), (dos_month % 12) + 1, 1)
               - dt.timedelta(days=1))
     r_est = r_coll = pr_total = 0.0
+    rp_unadj = rp_zero = rp_short = 0.0
     for c in pull_month_claims(token, r_first.isoformat(), r_last.isoformat()):
         pcv = {v["id"]: (v["text"] or "") for v in c["column_values"]}
         paid = num(pcv.get(C_PPAID))
@@ -352,12 +355,23 @@ def compute_realization(token, dos_year, dos_month):
         # PR established by the primary ERA — the slice owed downstream
         # (secondary insurance and/or patient). Adjudicated = ERA landed.
         adjudicated = bool(pcv.get(C_ERA_DATE, "").strip()) or paid > 0
-        if adjudicated:
-            pr_total += num(pcv.get(C_RAW_PR)) or num(pcv.get(C_PR_AMT))
+        pr_c = (num(pcv.get(C_RAW_PR)) or num(pcv.get(C_PR_AMT))) if adjudicated else 0.0
+        pr_total += pr_c
+        est_c = 0.0
         for sub in c.get("subitems") or []:
             cv = {v["id"]: (v["text"] or "") for v in sub["column_values"]}
             if cv.get(S_HCPC, "").strip().upper() in KNOWN_CODES:
-                r_est += num(cv.get(S_ESTPAY)) or num(cv.get(S_CHARGE))
+                est_c += num(cv.get(S_ESTPAY)) or num(cv.get(S_CHARGE))
+        r_est += est_c
+        # Components of the primary-side gap: still in flight vs denied
+        # vs paid-short (the paid-short bucket at maturity ≈ Est. Pay set
+        # above the payer's actual allowed — estimate variance).
+        if not adjudicated:
+            rp_unadj += est_c
+        elif paid <= 0:
+            rp_zero += max(0.0, est_c - pr_c)
+        else:
+            rp_short += max(0.0, est_c - paid - pr_c)
     r_sec, r_pt = pull_secondary_collections(
         token, r_first.isoformat(), r_last.isoformat())
     # Split the remaining gap: downstream remainder = PR established minus
@@ -369,6 +383,8 @@ def compute_realization(token, dos_year, dos_month):
     return dict(month=r_first.strftime("%b %Y"), est=round(r_est, 2),
                 collected=round(r_coll, 2), secondary=r_sec, patient=r_pt,
                 rem_prim=round(rem_prim, 2), rem_sec=round(rem_sec, 2),
+                rp_unadj=round(rp_unadj, 2), rp_zero=round(rp_zero, 2),
+                rp_short=round(rp_short, 2),
                 age_days=(dt.date.today() - r_last).days)
 
 
@@ -390,10 +406,13 @@ def _ensure_realization_tab(svc):
         ["Collected — primary"], ["Collected — secondary insurance"],
         ["Collected — patient (Stripe)"], ["Collected — total"],
         ["Realization rate %"],
-        ["Remaining — primary side (unadjudicated / underpaid / denied)"],
+        ["Remaining — primary side (components below)"],
+        ["   · not yet adjudicated (in flight)"],
+        ["   · adjudicated, paid $0 (denied / stuck)"],
+        ["   · adjudicated, paid short (est. variance / underpay)"],
         ["Remaining — secondary & patient (PR established, not yet collected)"],
         [""],
-        ["Numerator: primary paid (Claims Board) + secondary ERA paid + patient Stripe paid (Secondary Board), same DOS window. Denominator: Est. Pay of the month's claims (latest thread only). Remaining split: PR established by primary ERAs minus downstream collections = secondary/patient; the rest is primary-side."],
+        ["Numerator: primary paid (Claims Board) + secondary ERA paid + patient Stripe paid (Secondary Board), same DOS window. Denominator: Est. Pay of the month's claims (latest thread only). Remaining split: PR established by primary ERAs minus downstream collections = secondary/patient; the rest is primary-side. Primary components: in-flight = no ERA yet; paid-$0 = denials to work; paid-short at maturity ≈ Est. Pay set above actual allowed (estimate error, not collectible). Components are unscaled and may differ slightly from the rem-primary total (overpay netting)."],
     ]
     svc.spreadsheets().values().update(
         spreadsheetId=SHEET_ID, range=f"'{REAL_TAB}'!A1",
@@ -410,7 +429,9 @@ def _ensure_realization_tab(svc):
          "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.97}}},
          "fields": "userEnteredFormat"}},
         numf(4, 4, "NUMBER", "#,##0"), numf(5, 9, "CURRENCY", "$#,##0"),
-        numf(10, 10, "PERCENT", "0.0%"), numf(11, 12, "CURRENCY", "$#,##0"),
+        numf(10, 10, "PERCENT", "0.0%"), numf(11, 15, "CURRENCY", "$#,##0"),
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 11, "endRowIndex": 14, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 8, "endRowIndex": 10, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
         {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
@@ -439,7 +460,9 @@ def update_realization_tab(svc, token, upto_year, upto_month):
                 RR["sec"]: r["secondary"], RR["pt"]: r["patient"],
                 RR["tot"]: f"=SUM({colx}{RR['coll']}:{colx}{RR['pt']})",
                 RR["rate"]: f"=IF(N({colx}{RR['est']})=0,\"\",{colx}{RR['tot']}/{colx}{RR['est']})",
-                RR["rem_prim"]: r["rem_prim"], RR["rem_sec"]: r["rem_sec"]}
+                RR["rem_prim"]: r["rem_prim"], RR["rp_unadj"]: r["rp_unadj"],
+                RR["rp_zero"]: r["rp_zero"], RR["rp_short"]: r["rp_short"],
+                RR["rem_sec"]: r["rem_sec"]}
         data += [{"range": f"'{REAL_TAB}'!{colx}{row}", "values": [[v]]}
                  for row, v in vals.items()]
         print(f"Realization {r['month']}: {r['collected']}+{r['secondary']}+{r['patient']} "
