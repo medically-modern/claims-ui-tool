@@ -72,6 +72,9 @@ SUB_COLS = [C_STATUS, C_TYPE, C_PRIMARY, C_SENSTYPE, C_SENS_REV, C_SENS_COST,
 
 C_PAYOR = "color_mkxmhypt"  # Claims Board: Primary Payor label (for payer mix)
 C_PPAID = "numeric_mm115q76"  # Claims Board: Primary Paid (A) — realization check
+C_PR_AMT = "numeric_mkxmc2rh"   # PR Amount (C) — patient responsibility per primary ERA
+C_RAW_PR = "numeric_mm1gdpjq"   # Raw Patient Responsibility (ERA-parsed)
+C_ERA_DATE = "text_mm2047g9"    # Raw ERA Date — nonblank = primary adjudicated
 KNOWN_CODES = {"E0784", "E2103", "A4239"} | {"A4224", "A4225", "A4230", "A4231", "A4232"}
 
 # Payer families for the mix section — fixed row order on the sheet.
@@ -161,14 +164,15 @@ ROWS = {
     # patient (Stripe) collections vs Est. Pay
     "real_month": 150, "real_est": 151, "real_coll": 152,
     "real_sec": 153, "real_pt": 154, "real_tot": 155, "real_rate": 156,
+    "rem_prim": 157, "rem_sec": 158,   # remaining gap split (sums to est − collected)
     # Month-over-month deltas (formulas vs previous column; blank on first)
-    "d_rev": 159, "d_gp": 160, "d_np": 161, "d_arr": 162,
-    "d_active": 163, "d_new": 164, "d_attr": 165,
+    "d_rev": 161, "d_gp": 162, "d_np": 163, "d_arr": 164,
+    "d_active": 165, "d_new": 166, "d_attr": 167,
     # Self-audit footer
-    "audit_revsum": 168, "audit_gpsum": 169, "audit_unmatched": 170,
-    "audit_unknown": 171, "audit_blankstatus": 172, "audit_status": 173,
+    "audit_revsum": 170, "audit_gpsum": 171, "audit_unmatched": 172,
+    "audit_unknown": 173, "audit_blankstatus": 174, "audit_status": 175,
 }
-LAST_ROW = 173
+LAST_ROW = 175
 
 SECONDARY_BOARD = 18413019028
 S2_PAID = "numeric_mm115q76"    # secondary ERA paid amount (secondary board)
@@ -227,13 +231,15 @@ def pull_month_claims(token, first_day, last_day):
     claims, cursor = [], None
     q_first = """query($b:ID!,$rules:CompareValue!){boards(ids:[$b]){items_page(limit:100,
       query_params:{rules:[{column_id:"%s",compare_value:$rules,operator:between}]}){
-      cursor items{id name group{title} column_values(ids:["%s","%s","%s"]){id text}
+      cursor items{id name group{title} column_values(ids:["%s","%s","%s","%s","%s","%s"]){id text}
         subitems{column_values(ids:["%s","%s","%s","%s"]){id text}}}}}}""" % (
-        C_DOS, C_SUBID, C_PAYOR, C_PPAID, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
+        C_DOS, C_SUBID, C_PAYOR, C_PPAID, C_PR_AMT, C_RAW_PR, C_ERA_DATE,
+        S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
     q_next = """query($cur:String!){next_items_page(limit:100,cursor:$cur){
-      cursor items{id name group{title} column_values(ids:["%s","%s","%s"]){id text}
+      cursor items{id name group{title} column_values(ids:["%s","%s","%s","%s","%s","%s"]){id text}
         subitems{column_values(ids:["%s","%s","%s","%s"]){id text}}}}}""" % (
-        C_SUBID, C_PAYOR, C_PPAID, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
+        C_SUBID, C_PAYOR, C_PPAID, C_PR_AMT, C_RAW_PR, C_ERA_DATE,
+        S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
     while True:
         if cursor is None:
             d = monday(q_first, {"b": CLAIMS_BOARD, "rules": [first_day, last_day]}, token)
@@ -337,18 +343,31 @@ def compute_realization(token, year, month):
     ry = year if month > 2 else year - 1
     r_first = dt.date(ry, rm, 1)
     r_last = dt.date(ry + (rm == 12), (rm % 12) + 1, 1) - dt.timedelta(days=1)
-    r_est = r_coll = 0.0
+    r_est = r_coll = pr_total = 0.0
     for c in pull_month_claims(token, r_first.isoformat(), r_last.isoformat()):
         pcv = {v["id"]: (v["text"] or "") for v in c["column_values"]}
-        r_coll += num(pcv.get(C_PPAID))
+        paid = num(pcv.get(C_PPAID))
+        r_coll += paid
+        # PR established by the primary ERA — the slice owed downstream
+        # (secondary insurance and/or patient). Adjudicated = ERA landed.
+        adjudicated = bool(pcv.get(C_ERA_DATE, "").strip()) or paid > 0
+        if adjudicated:
+            pr_total += num(pcv.get(C_RAW_PR)) or num(pcv.get(C_PR_AMT))
         for sub in c.get("subitems") or []:
             cv = {v["id"]: (v["text"] or "") for v in sub["column_values"]}
             if cv.get(S_HCPC, "").strip().upper() in KNOWN_CODES:
                 r_est += num(cv.get(S_ESTPAY)) or num(cv.get(S_CHARGE))
     r_sec, r_pt = pull_secondary_collections(
         token, r_first.isoformat(), r_last.isoformat())
+    # Split the remaining gap: downstream remainder = PR established minus
+    # what secondary + patient already paid (capped at the total gap);
+    # everything else is primary-side (unadjudicated, underpaid, denied).
+    remaining = max(0.0, r_est - (r_coll + r_sec + r_pt))
+    rem_sec = min(remaining, max(0.0, pr_total - r_sec - r_pt))
+    rem_prim = remaining - rem_sec
     return dict(month=r_first.strftime("%b %Y"), est=round(r_est, 2),
-                collected=round(r_coll, 2), secondary=r_sec, patient=r_pt)
+                collected=round(r_coll, 2), secondary=r_sec, patient=r_pt,
+                rem_prim=round(rem_prim, 2), rem_sec=round(rem_sec, 2))
 
 
 def refresh_prior_realizations(svc, token, target_label):
@@ -374,7 +393,8 @@ def refresh_prior_realizations(svc, token, target_label):
         colx = col_letter(idx)
         for key, val in (("real_month", r["month"]), ("real_est", r["est"]),
                          ("real_coll", r["collected"]), ("real_sec", r["secondary"]),
-                         ("real_pt", r["patient"])):
+                         ("real_pt", r["patient"]), ("rem_prim", r["rem_prim"]),
+                         ("rem_sec", r["rem_sec"])):
             data.append({"range": f"'{TAB}'!{colx}{ROWS[key]}", "values": [[val]]})
         print(f"Re-measured realization for column {colx} ({lab}): "
               f"{r['month']} est={r['est']} coll={r['collected']}+{r['secondary']}+{r['patient']}")
@@ -745,6 +765,8 @@ def write_column(svc, kpis, year, month, dry_run=False):
     cells[R["real_pt"]] = rl["patient"]
     cells[R["real_tot"]] = f"=SUM({col}{R['real_coll']}:{col}{R['real_pt']})"
     cells[R["real_rate"]] = f"=IF(N({col}{R['real_est']})=0,\"\",{col}{R['real_tot']}/{col}{R['real_est']})"
+    cells[R["rem_prim"]] = rl["rem_prim"]
+    cells[R["rem_sec"]] = rl["rem_sec"]
     # Month-over-month deltas — reference the previous month column;
     # blank on the sheet's first month column.
     if idx > 1:
