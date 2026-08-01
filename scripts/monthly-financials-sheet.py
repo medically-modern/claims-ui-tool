@@ -157,16 +157,22 @@ ROWS = {
     "ltv_churn": 139, "ltv_life": 140, "ltv_val": 141,
     "pb_new_pumps": 143, "pb_spend": 144, "pb_rentals": 145,
     "pb_rental_rev": 146, "pb_months": 147,
-    # Realization check (DOS month = target − 2; evolving)
-    "real_month": 150, "real_est": 151, "real_coll": 152, "real_rate": 153,
+    # Realization check (DOS month = target − 2): primary + secondary +
+    # patient (Stripe) collections vs Est. Pay
+    "real_month": 150, "real_est": 151, "real_coll": 152,
+    "real_sec": 153, "real_pt": 154, "real_tot": 155, "real_rate": 156,
     # Month-over-month deltas (formulas vs previous column; blank on first)
-    "d_rev": 156, "d_gp": 157, "d_np": 158, "d_arr": 159,
-    "d_active": 160, "d_new": 161, "d_attr": 162,
+    "d_rev": 159, "d_gp": 160, "d_np": 161, "d_arr": 162,
+    "d_active": 163, "d_new": 164, "d_attr": 165,
     # Self-audit footer
-    "audit_revsum": 165, "audit_gpsum": 166, "audit_unmatched": 167,
-    "audit_unknown": 168, "audit_blankstatus": 169, "audit_status": 170,
+    "audit_revsum": 168, "audit_gpsum": 169, "audit_unmatched": 170,
+    "audit_unknown": 171, "audit_blankstatus": 172, "audit_status": 173,
 }
-LAST_ROW = 170
+LAST_ROW = 173
+
+SECONDARY_BOARD = 18413019028
+S2_PAID = "numeric_mm115q76"    # secondary ERA paid amount (secondary board)
+S2_PT_PAID = "numeric_mm3q2vpb" # patient amount paid via Stripe pay-link
 
 
 def num(v):
@@ -290,6 +296,38 @@ def pull_hardware_costs(token, subs):
     detail = dict(pump_skus=len(pump_prices), g6_price=g6, g7_price=g7,
                   libre_price=libre_price, weights=w)
     return avg_pump, avg_monitor, detail
+
+
+def pull_secondary_collections(token, first_day, last_day):
+    """Secondary-board collections for a DOS window: (secondary insurance
+    paid, patient/Stripe paid). Separate items from the primary claims, so
+    no overlap with the primary Paid column."""
+    sec = pt = 0.0
+    cursor = None
+    q_first = """query($b:ID!,$rules:CompareValue!){boards(ids:[$b]){items_page(limit:200,
+      query_params:{rules:[{column_id:"%s",compare_value:$rules,operator:between}]}){
+      cursor items{group{title} column_values(ids:["%s","%s"]){id text}}}}}""" % (
+        C_DOS, S2_PAID, S2_PT_PAID)
+    q_next = """query($cur:String!){next_items_page(limit:200,cursor:$cur){
+      cursor items{group{title} column_values(ids:["%s","%s"]){id text}}}}""" % (
+        S2_PAID, S2_PT_PAID)
+    while True:
+        if cursor is None:
+            d = monday(q_first, {"b": SECONDARY_BOARD, "rules": [first_day, last_day]}, token)
+            page = d["boards"][0]["items_page"]
+        else:
+            d = monday(q_next, {"cur": cursor}, token)
+            page = d["next_items_page"]
+        for it in page["items"]:
+            if "non-latest" in (it.get("group") or {}).get("title", "").lower():
+                continue
+            cv = {c["id"]: (c["text"] or "") for c in it["column_values"]}
+            sec += num(cv.get(S2_PAID))
+            pt += num(cv.get(S2_PT_PAID))
+        cursor = page.get("cursor")
+        if not cursor:
+            break
+    return round(sec, 2), round(pt, 2)
 
 
 def pull_pause_events(token, from_iso, to_iso):
@@ -497,8 +535,10 @@ def compute(token, year, month):
             cv = {v["id"]: (v["text"] or "") for v in sub["column_values"]}
             if cv.get(S_HCPC, "").strip().upper() in KNOWN_CODES:
                 r_est += num(cv.get(S_ESTPAY)) or num(cv.get(S_CHARGE))
-    realization = dict(month=r_first.strftime("%b %Y"),
-                       est=round(r_est, 2), collected=round(r_coll, 2))
+    r_sec, r_pt = pull_secondary_collections(
+        token, r_first.isoformat(), r_last.isoformat())
+    realization = dict(month=r_first.strftime("%b %Y"), est=round(r_est, 2),
+                       collected=round(r_coll, 2), secondary=r_sec, patient=r_pt)
 
     return {
         "counts": counts, "attrition": attr,
@@ -662,7 +702,10 @@ def write_column(svc, kpis, year, month, dry_run=False):
     cells[R["real_month"]] = rl["month"]
     cells[R["real_est"]] = rl["est"]
     cells[R["real_coll"]] = rl["collected"]
-    cells[R["real_rate"]] = f"=IF(N({col}{R['real_est']})=0,\"\",{col}{R['real_coll']}/{col}{R['real_est']})"
+    cells[R["real_sec"]] = rl["secondary"]
+    cells[R["real_pt"]] = rl["patient"]
+    cells[R["real_tot"]] = f"=SUM({col}{R['real_coll']}:{col}{R['real_pt']})"
+    cells[R["real_rate"]] = f"=IF(N({col}{R['real_est']})=0,\"\",{col}{R['real_tot']}/{col}{R['real_est']})"
     # Month-over-month deltas — reference the previous month column;
     # blank on the sheet's first month column.
     if idx > 1:
