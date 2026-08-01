@@ -165,9 +165,12 @@ ROWS = {
     "d_active": 154, "d_new": 155, "d_attr": 156,
     # Self-audit footer
     "audit_revsum": 159, "audit_gpsum": 160, "audit_unmatched": 161,
-    "audit_unknown": 162, "audit_blankstatus": 163, "audit_status": 164,
+    "audit_unknown": 162, "audit_blankstatus": 163,
+    "audit_leftpool": 164,   # moved out of Active+Paused (→Dead/Not Active)
+    "audit_rollfwd": 165,    # Total − (prev Total + New − left pool)
+    "audit_status": 166,
 }
-LAST_ROW = 164
+LAST_ROW = 166
 
 # ── Realization tab (own tab — vintage analysis by DOS month) ──────────────
 REAL_TAB = "Realization"
@@ -618,7 +621,9 @@ def compute(token, year, month):
         return first <= d <= last
 
     counts = {
-        "total": bucket(lambda s: True),
+        # Total = the live book: Active + Paused only (Brandon 2026-08-01).
+        # Excludes Not Active/Dead and blank-status items.
+        "total": bucket(lambda s: s.get(C_STATUS, "").lower() in ("active", "paused")),
         "active": bucket(lambda s: s.get(C_STATUS, "").lower() == "active"),
         "paused": bucket(lambda s: s.get(C_STATUS, "").lower() == "paused"),
         "new": bucket(created_in_month),
@@ -746,6 +751,10 @@ def compute(token, year, month):
     lost = [by_id[p] for p in lost_ids if p in by_id]
     attr = dict(unique=len(lost), sensors=sum(map(is_sens, lost)),
                 supplies=sum(map(is_supp, lost)))
+    # Left the Active+Paused pool entirely (→Dead / Not Active / Cancelled)
+    # — this is what reduces the Total block, used by the roll-forward check.
+    left_pool = sum(1 for pid, (_, lab) in final_state.items()
+                    if any(k in lab.lower() for k in ("dead", "not active", "cancel")))
 
     # (Realization lives on its own tab now — see update_realization_tab.)
 
@@ -767,7 +776,8 @@ def compute(token, year, month):
         "payback": dict(new_pumps=new_pumps, rental_pumps=rental_pumps,
                         rental_rev=round(rental_rev, 2)),
         "audit": dict(unmatched=unmatched, unknown_lines=unknown_lines,
-                      blank_status=sum(1 for s in subs if not s.get(C_STATUS, "").strip())),
+                      blank_status=sum(1 for s in subs if not s.get(C_STATUS, "").strip()),
+                      left_pool=left_pool),
         "claims_counted": len(claims),
     }
 
@@ -926,10 +936,22 @@ def write_column(svc, kpis, year, month, dry_run=False):
     cells[R["audit_unmatched"]] = au["unmatched"]
     cells[R["audit_unknown"]] = au["unknown_lines"]
     cells[R["audit_blankstatus"]] = au["blank_status"]
+    cells[R["audit_leftpool"]] = au["left_pool"]
+    # Roll-forward tie: Total(A+P) should ≈ prev Total + New − left-pool.
+    # Small residuals come from reactivations and blank-status cleanups;
+    # |residual| > 5 flips the audit to CHECK.
+    if idx > 1:
+        pc = col_letter(idx - 1)
+        cells[R["audit_rollfwd"]] = (f"=IF({pc}{R['total_u']}=\"\",\"\","
+                                     f"{col}{R['total_u']}-({pc}{R['total_u']}"
+                                     f"+{col}{R['new_u']}-{col}{R['audit_leftpool']}))")
+    else:
+        cells[R["audit_rollfwd"]] = ""
     cells[R["audit_status"]] = (f"=IF(AND(ABS(N({col}{R['audit_revsum']}))<0.005,"
                                 f"ABS(N({col}{R['audit_gpsum']}))<0.005,"
                                 f"N({col}{R['audit_unmatched']})=0,"
-                                f"N({col}{R['audit_unknown']})=0),\"OK\",\"CHECK\")")
+                                f"N({col}{R['audit_unknown']})=0,"
+                                f"ABS(N({col}{R['audit_rollfwd']}))<=5),\"OK\",\"CHECK\")")
     cells[HEADER_ROW] = label
     if created:
         cells[R["fixed"]] = FIXED_COST_DEFAULT  # never overwrite an existing month's fixed costs
