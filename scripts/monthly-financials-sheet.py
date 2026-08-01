@@ -118,7 +118,7 @@ MEDICAID_PRIMARIES = {"Fidelis Medicaid", "Anthem BCBS Medicaid (JLJ)",
 SUPPLY_CODES = {"A4224", "A4225", "A4230", "A4231", "A4232"}
 SHIPPING_PER_ORDER = 8.25
 SENSORS_COST_FALLBACK, SUPPLIES_COST_FALLBACK = 500.0, 314.0
-FIXED_COST_DEFAULT = 30000
+FIXED_COST_DEFAULT = 70000  # updated from 30k per Brandon 2026-08-01
 
 # Row map (1-indexed sheet rows; column A holds labels, months go B, C, ...)
 HEADER_ROW = 3
