@@ -475,8 +475,8 @@ def _ensure_realization_tab(svc):
         ["Legit uncollected (adjusted est − collected)"],
         ["   · still collecting (open on boards + downstream pipeline)"],
         ["   · lost / closed short (Paid And Closed / Bad Debt)"],
-        ["   % still collecting"],
-        ["   % lost"],
+        ["   % still collecting (of adjusted Est. Pay)"],
+        ["   % lost (of adjusted Est. Pay)"],
         [""],
         ["True realization: denominator = Est. Pay minus rate variance (payer contract rates below our estimates — definitional, not collectible). Legit uncollected splits by Claims Board group: remainder on claims in Paid And Closed / Bad Debt = lost (we accepted it); everything else (Outstanding, Denied, Submitted, Medicaid Outstanding, secondary/patient pipeline) = still collecting."],
     ]
@@ -540,8 +540,8 @@ def update_realization_tab(svc, token, upto_year, upto_month):
                 RR["true_rate"]: f"=IF(N({colx}{RR['adj_est']})=0,\"\",{colx}{RR['tot']}/{colx}{RR['adj_est']})",
                 RR["legit"]: f"=MAX(0,{colx}{RR['adj_est']}-{colx}{RR['tot']})",
                 RR["still"]: r["still"], RR["lost"]: r["lost"],
-                RR["pct_still"]: f"=IF(N({colx}{RR['legit']})=0,\"\",{colx}{RR['still']}/{colx}{RR['legit']})",
-                RR["pct_lost"]: f"=IF(N({colx}{RR['legit']})=0,\"\",{colx}{RR['lost']}/{colx}{RR['legit']})"}
+                RR["pct_still"]: f"=IF(N({colx}{RR['adj_est']})=0,\"\",{colx}{RR['still']}/{colx}{RR['adj_est']})",
+                RR["pct_lost"]: f"=IF(N({colx}{RR['adj_est']})=0,\"\",{colx}{RR['lost']}/{colx}{RR['adj_est']})"}
         data += [{"range": f"'{REAL_TAB}'!{colx}{row}", "values": [[v]]}
                  for row, v in vals.items()]
         print(f"Realization {r['month']}: {r['collected']}+{r['secondary']}+{r['patient']} "
