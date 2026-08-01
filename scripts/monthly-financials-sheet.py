@@ -134,19 +134,21 @@ ROWS = {
     # pump-monitor-sensor-supplies-total revenue layout.
     "cogs_pump": 54, "cogs_monitor": 55, "cogs_sensor": 56,
     "cogs_supplies": 57, "cogs_ship": 58, "cogs_total": 59,
-    "gp_pump": 62, "gp_monitor": 63, "gp_sensor": 64, "gp_supplies": 65, "gp_total": 66,
-    "gm_pump": 67, "gm_monitor": 68, "gm_sensor": 69, "gm_supplies": 70, "gm_total": 71,
-    "fixed": 74,
-    "np_pump": 75, "np_monitor": 76, "np_sensor": 77, "np_supplies": 78, "np_total": 79,
-    "nm_pump": 80, "nm_monitor": 81, "nm_sensor": 82, "nm_supplies": 83, "nm_total": 84,
+    # Per-unit averages actually used this month (informational rows)
+    "unit_pump": 60, "unit_monitor": 61, "unit_sensor": 62, "unit_supplies": 63,
+    "gp_pump": 66, "gp_monitor": 67, "gp_sensor": 68, "gp_supplies": 69, "gp_total": 70,
+    "gm_pump": 71, "gm_monitor": 72, "gm_sensor": 73, "gm_supplies": 74, "gm_total": 75,
+    "fixed": 78,
+    "np_pump": 79, "np_monitor": 80, "np_sensor": 81, "np_supplies": 82, "np_total": 83,
+    "nm_pump": 84, "nm_monitor": 85, "nm_sensor": 86, "nm_supplies": 87, "nm_total": 88,
     # Mix section (2026-08-01): product shares are formulas off the rows
     # above; payer shares are computed values (12 fixed family rows).
-    "mixrev_pump": 87, "mixrev_monitor": 88, "mixrev_sensor": 89, "mixrev_supplies": 90,
-    "mixgp_pump": 92, "mixgp_monitor": 93, "mixgp_sensor": 94, "mixgp_supplies": 95,
-    "payer_rev_start": 98,   # 12 rows, PAYER_FAMILIES order
-    "payer_gp_start": 111,   # 12 rows, PAYER_FAMILIES order
+    "mixrev_pump": 91, "mixrev_monitor": 92, "mixrev_sensor": 93, "mixrev_supplies": 94,
+    "mixgp_pump": 96, "mixgp_monitor": 97, "mixgp_sensor": 98, "mixgp_supplies": 99,
+    "payer_rev_start": 102,   # 12 rows, PAYER_FAMILIES order
+    "payer_gp_start": 116,    # 12 rows, PAYER_FAMILIES order
 }
-LAST_ROW = 122
+LAST_ROW = 127
 
 
 def num(v):
@@ -358,6 +360,7 @@ def compute(token, year, month):
     cogs = dict(pump=0.0, monitor=0.0, sensors=0.0, supplies=0.0, shipping=0.0)
     avg_pump, avg_monitor, hw_detail = pull_hardware_costs(token, subs)
     pump_orders = monitor_orders = new_pumps = 0
+    sens_fills = supp_fills = 0
     payer_agg = {f: dict(rev=0.0, gp=0.0) for f in PAYER_FAMILIES}
     for c in claims:
         has_sens = has_supp = False
@@ -390,11 +393,11 @@ def compute(token, year, month):
         if has_sens:
             cost = num(patient.get(C_SENS_COST)) if patient else 0
             cost = cost if cost > 0 else SENSORS_COST_FALLBACK
-            cogs["sensors"] += cost; claim_cogs += cost
+            cogs["sensors"] += cost; claim_cogs += cost; sens_fills += 1
         if has_supp:
             cost = num(patient.get(C_SUPP_COST)) if patient else 0
             cost = cost if cost > 0 else SUPPLIES_COST_FALLBACK
-            cogs["supplies"] += cost; claim_cogs += cost
+            cogs["supplies"] += cost; claim_cogs += cost; supp_fills += 1
         pump_orders += "E0784" in codes
         monitor_orders += "E2103" in codes
         pump_only = codes and codes <= {"E0784"}
@@ -447,6 +450,10 @@ def compute(token, year, month):
         "orders": dict(pump=pump_orders, monitor=monitor_orders),
         "hardware": dict(new_pumps=new_pumps, avg_pump_cost=avg_pump,
                          avg_monitor_cost=avg_monitor, **hw_detail),
+        "unit_cogs": dict(
+            pump=avg_pump, monitor=avg_monitor,
+            sensors=round(cogs["sensors"] / sens_fills, 2) if sens_fills else 0,
+            supplies=round(cogs["supplies"] / supp_fills, 2) if supp_fills else 0),
         "payer_mix": payer_mix,
         "claims_counted": len(claims),
     }
@@ -528,6 +535,10 @@ def write_column(svc, kpis, year, month, dry_run=False):
         R["cogs_sensor"]: cg["sensors"], R["cogs_supplies"]: cg["supplies"],
         R["cogs_ship"]: cg["shipping"],
         R["cogs_total"]: f"=SUM({col}{R['cogs_pump']}:{col}{R['cogs_ship']})",
+        R["unit_pump"]: kpis["unit_cogs"]["pump"],
+        R["unit_monitor"]: kpis["unit_cogs"]["monitor"],
+        R["unit_sensor"]: kpis["unit_cogs"]["sensors"],
+        R["unit_supplies"]: kpis["unit_cogs"]["supplies"],
     })
     # Per-product GP / margins / net mirror the revenue rows. Shipping COGS
     # and any GP-vs-fixed gap only hit the Total rows (product nets exclude
