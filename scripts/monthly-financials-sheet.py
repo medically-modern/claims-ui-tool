@@ -129,48 +129,52 @@ ROWS = {
     "active_u": 11, "active_sens": 13, "active_supp": 14, "active_tot": 15,
     "paused_u": 17, "paused_sens": 19, "paused_supp": 20, "paused_tot": 21,
     "new_u": 23, "new_sens": 25, "new_supp": 26, "new_tot": 27,  # created in month
+    # Churn = left the book (→Not Active/Dead) ONLY. Pure churn feeds LTV
+    # (Brandon 2026-08-01; Paused-vs-Inactive hygiene enforced going fwd).
     "attr_u": 29, "attr_sens": 31, "attr_supp": 32, "attr_tot": 33,
-    "arr_total": 36, "arr_sens": 37, "arr_supp": 38,
-    "rev_pump": 41, "rev_monitor": 42, "rev_sensor": 43, "rev_supplies": 44,
-    "rev_total": 45,
-    "pump_orders": 46, "monitor_orders": 47,   # claim counts by DOS, tie to rev rows
-    "avg_weighted": 49, "avg_sens": 50, "avg_supp": 51,
+    # Pause flow (leading indicators, NOT attrition)
+    "pause_new": 35, "pause_res": 36, "pause_net": 37,
+    "arr_total": 40, "arr_sens": 41, "arr_supp": 42,
+    "rev_pump": 45, "rev_monitor": 46, "rev_sensor": 47, "rev_supplies": 48,
+    "rev_total": 49,
+    "pump_orders": 50, "monitor_orders": 51,   # claim counts by DOS, tie to rev rows
+    "avg_weighted": 53, "avg_sens": 54, "avg_supp": 55,
     # Per-product P&L: COGS / GP / margins / net all mirror the
     # pump-monitor-sensor-supplies-total revenue layout.
-    "cogs_pump": 54, "cogs_monitor": 55, "cogs_sensor": 56,
-    "cogs_supplies": 57, "cogs_ship": 58, "cogs_total": 59,
+    "cogs_pump": 58, "cogs_monitor": 59, "cogs_sensor": 60,
+    "cogs_supplies": 61, "cogs_ship": 62, "cogs_total": 63,
     # Per-unit averages actually used this month (informational rows)
-    "unit_pump": 60, "unit_monitor": 61, "unit_sensor": 62, "unit_supplies": 63,
-    "gp_pump": 66, "gp_monitor": 67, "gp_sensor": 68, "gp_supplies": 69, "gp_total": 70,
-    "gm_pump": 71, "gm_monitor": 72, "gm_sensor": 73, "gm_supplies": 74, "gm_total": 75,
-    "fixed": 78,
-    "np_pump": 79, "np_monitor": 80, "np_sensor": 81, "np_supplies": 82, "np_total": 83,
-    "nm_pump": 84, "nm_monitor": 85, "nm_sensor": 86, "nm_supplies": 87, "nm_total": 88,
+    "unit_pump": 64, "unit_monitor": 65, "unit_sensor": 66, "unit_supplies": 67,
+    "gp_pump": 70, "gp_monitor": 71, "gp_sensor": 72, "gp_supplies": 73, "gp_total": 74,
+    "gm_pump": 75, "gm_monitor": 76, "gm_sensor": 77, "gm_supplies": 78, "gm_total": 79,
+    "fixed": 82,
+    "np_pump": 83, "np_monitor": 84, "np_sensor": 85, "np_supplies": 86, "np_total": 87,
+    "nm_pump": 88, "nm_monitor": 89, "nm_sensor": 90, "nm_supplies": 91, "nm_total": 92,
     # Mix section (2026-08-01): product shares are formulas off the rows
     # above; payer shares are computed values (12 fixed family rows).
-    "mixrev_pump": 91, "mixrev_monitor": 92, "mixrev_sensor": 93, "mixrev_supplies": 94,
-    "mixgp_pump": 96, "mixgp_monitor": 97, "mixgp_sensor": 98, "mixgp_supplies": 99,
-    "payer_rev_start": 102,   # 12 rows, PAYER_FAMILIES order
-    "payer_gp_start": 116,    # 12 rows, PAYER_FAMILIES order
+    "mixrev_pump": 95, "mixrev_monitor": 96, "mixrev_sensor": 97, "mixrev_supplies": 98,
+    "mixgp_pump": 100, "mixgp_monitor": 101, "mixgp_sensor": 102, "mixgp_supplies": 103,
+    "payer_rev_start": 106,   # 12 rows, PAYER_FAMILIES order
+    "payer_gp_start": 120,    # 12 rows, PAYER_FAMILIES order
     # Per-patient unit economics (weighted over Active patients with
     # revenue; COGS = sensors+supplies only, no hardware/shipping)
-    "pp_order_rev": 130, "pp_order_cogs": 131, "pp_order_gp": 132,
-    "pp_ann_rev": 134, "pp_ann_cogs": 135, "pp_ann_gp": 136,
-    # LTV & pump payback (2026-08-01)
-    "ltv_churn": 139, "ltv_life": 140, "ltv_val": 141,
-    "pb_new_pumps": 143, "pb_spend": 144, "pb_rentals": 145,
-    "pb_rental_rev": 146, "pb_months": 147,
+    "pp_order_rev": 134, "pp_order_cogs": 135, "pp_order_gp": 136,
+    "pp_ann_rev": 138, "pp_ann_cogs": 139, "pp_ann_gp": 140,
+    # LTV & pump payback — churn basis = PURE churn (left book)
+    "ltv_churn": 143, "ltv_life": 144, "ltv_val": 145,
+    "pb_new_pumps": 147, "pb_spend": 148, "pb_rentals": 149,
+    "pb_rental_rev": 150, "pb_months": 151,
     # Month-over-month deltas (formulas vs previous column; blank on first)
-    "d_rev": 150, "d_gp": 151, "d_np": 152, "d_arr": 153,
-    "d_active": 154, "d_new": 155, "d_attr": 156,
+    "d_rev": 154, "d_gp": 155, "d_np": 156, "d_arr": 157,
+    "d_active": 158, "d_new": 159, "d_attr": 160,
     # Self-audit footer
-    "audit_revsum": 159, "audit_gpsum": 160, "audit_unmatched": 161,
-    "audit_unknown": 162, "audit_blankstatus": 163,
-    "audit_leftpool": 164,   # moved out of Active+Paused (→Dead/Not Active)
-    "audit_rollfwd": 165,    # Total − (prev Total + New − left pool)
-    "audit_status": 166,
+    "audit_revsum": 163, "audit_gpsum": 164, "audit_unmatched": 165,
+    "audit_unknown": 166, "audit_blankstatus": 167,
+    "audit_rollfwd_total": 168,   # Total − (prev Total + New − Churned)
+    "audit_rollfwd_active": 169,  # Active − (prev Active + New − Paused + Resumed − Churned)
+    "audit_status": 170,
 }
-LAST_ROW = 166
+LAST_ROW = 170
 
 # ── Realization tab (own tab — vintage analysis by DOS month) ──────────────
 REAL_TAB = "Realization"
@@ -733,28 +737,52 @@ def compute(token, year, month):
     events = pull_pause_events(
         token, f"{first.isoformat()}T00:00:00Z",
         (last + dt.timedelta(days=1)).isoformat() + "T04:00:00Z")
-    final_state = {}   # pulse_id -> (created_at, to_label)
+    # Patient flows: compare each item's state at the START of the month
+    # (previous_value of its first event) to its state at the END (value of
+    # its last event). Within-month round trips (pause→resume) net out.
+    per_item = {}
     for ev in events:
         try:
             data = json.loads(ev["data"])
         except (TypeError, ValueError):
             continue
         pid = str(data.get("pulse_id") or "")
-        to_label = label_from(data.get("value") or {})
-        if not pid or not to_label:
+        if not pid:
             continue
-        prev = final_state.get(pid)
-        if prev is None or ev["created_at"] > prev[0]:
-            final_state[pid] = (ev["created_at"], to_label)
-    lost_ids = [pid for pid, (_, lab) in final_state.items()
-                if any(k in lab.lower() for k in ("paus", "dead", "cancel"))]
-    lost = [by_id[p] for p in lost_ids if p in by_id]
-    attr = dict(unique=len(lost), sensors=sum(map(is_sens, lost)),
-                supplies=sum(map(is_supp, lost)))
-    # Left the Active+Paused pool entirely (→Dead / Not Active / Cancelled)
-    # — this is what reduces the Total block, used by the roll-forward check.
-    left_pool = sum(1 for pid, (_, lab) in final_state.items()
-                    if any(k in lab.lower() for k in ("dead", "not active", "cancel")))
+        per_item.setdefault(pid, []).append(
+            (ev["created_at"], label_from(data.get("previous_value") or {}),
+             label_from(data.get("value") or {})))
+
+    def state(lab):
+        l = (lab or "").lower()
+        if "not active" in l or "dead" in l or "cancel" in l:
+            return "gone"
+        if "paus" in l:
+            return "paused"
+        if "active" in l:
+            return "active"
+        return ""
+
+    churned_ids = []
+    churn_from_active = pause_new = pause_res = 0
+    for pid, evs in per_item.items():
+        evs.sort(key=lambda e: e[0])
+        start = state(evs[0][1]) or "active"
+        end = state(evs[-1][2])
+        if not end or start == end:
+            continue
+        if end == "gone":
+            churned_ids.append(pid)
+            churn_from_active += start == "active"
+        elif end == "paused" and start == "active":
+            pause_new += 1
+        elif end == "active":     # resumed from pause (or rare gone→active)
+            pause_res += 1
+    churned = [by_id[p] for p in churned_ids if p in by_id]
+    attr = dict(unique=len(churned_ids), sensors=sum(map(is_sens, churned)),
+                supplies=sum(map(is_supp, churned)))
+    flows = dict(pause_new=pause_new, pause_res=pause_res,
+                 churn_from_active=churn_from_active)
 
     # (Realization lives on its own tab now — see update_realization_tab.)
 
@@ -775,9 +803,9 @@ def compute(token, year, month):
         "payer_mix": payer_mix,
         "payback": dict(new_pumps=new_pumps, rental_pumps=rental_pumps,
                         rental_rev=round(rental_rev, 2)),
+        "flows": flows,
         "audit": dict(unmatched=unmatched, unknown_lines=unknown_lines,
-                      blank_status=sum(1 for s in subs if not s.get(C_STATUS, "").strip()),
-                      left_pool=left_pool),
+                      blank_status=sum(1 for s in subs if not s.get(C_STATUS, "").strip())),
         "claims_counted": len(claims),
     }
 
@@ -842,6 +870,9 @@ def write_column(svc, kpis, year, month, dry_run=False):
         R["paused_u"]: c["paused"]["unique"], R["paused_sens"]: c["paused"]["sensors"], R["paused_supp"]: c["paused"]["supplies"],
         R["new_u"]: c["new"]["unique"], R["new_sens"]: c["new"]["sensors"], R["new_supp"]: c["new"]["supplies"],
         R["attr_u"]: a["unique"], R["attr_sens"]: a["sensors"], R["attr_supp"]: a["supplies"],
+        R["pause_new"]: kpis["flows"]["pause_new"],
+        R["pause_res"]: kpis["flows"]["pause_res"],
+        R["pause_net"]: f"={col}{R['pause_new']}-{col}{R['pause_res']}",
         # Block totals: subscriptions = sensors + supplies (dual-type counts once per product)
         **{R[f"{blk}_tot"]: f"={col}{R[f'{blk}_sens']}+{col}{R[f'{blk}_supp']}"
            for blk in ("total", "active", "paused", "new", "attr")},
@@ -936,22 +967,31 @@ def write_column(svc, kpis, year, month, dry_run=False):
     cells[R["audit_unmatched"]] = au["unmatched"]
     cells[R["audit_unknown"]] = au["unknown_lines"]
     cells[R["audit_blankstatus"]] = au["blank_status"]
-    cells[R["audit_leftpool"]] = au["left_pool"]
-    # Roll-forward tie: Total(A+P) should ≈ prev Total + New − left-pool.
-    # Small residuals come from reactivations and blank-status cleanups;
-    # |residual| > 5 flips the audit to CHECK.
+    # Roll-forward ties (±5 tolerance — reactivations from Gone and
+    # blank-status cleanups cause small legitimate residuals):
+    #   Total(A+P)  = prev Total + New − Churned
+    #   Active      = prev Active + New − Newly paused + Resumed − Churned
+    # (Active uses total churn; churn-from-paused inflates the residual
+    # slightly, covered by the tolerance.)
     if idx > 1:
         pc = col_letter(idx - 1)
-        cells[R["audit_rollfwd"]] = (f"=IF({pc}{R['total_u']}=\"\",\"\","
-                                     f"{col}{R['total_u']}-({pc}{R['total_u']}"
-                                     f"+{col}{R['new_u']}-{col}{R['audit_leftpool']}))")
+        cells[R["audit_rollfwd_total"]] = (
+            f"=IF({pc}{R['total_u']}=\"\",\"\","
+            f"{col}{R['total_u']}-({pc}{R['total_u']}"
+            f"+{col}{R['new_u']}-{col}{R['attr_u']}))")
+        cells[R["audit_rollfwd_active"]] = (
+            f"=IF({pc}{R['active_u']}=\"\",\"\","
+            f"{col}{R['active_u']}-({pc}{R['active_u']}+{col}{R['new_u']}"
+            f"-{col}{R['pause_new']}+{col}{R['pause_res']}-{col}{R['attr_u']}))")
     else:
-        cells[R["audit_rollfwd"]] = ""
+        cells[R["audit_rollfwd_total"]] = ""
+        cells[R["audit_rollfwd_active"]] = ""
     cells[R["audit_status"]] = (f"=IF(AND(ABS(N({col}{R['audit_revsum']}))<0.005,"
                                 f"ABS(N({col}{R['audit_gpsum']}))<0.005,"
                                 f"N({col}{R['audit_unmatched']})=0,"
                                 f"N({col}{R['audit_unknown']})=0,"
-                                f"ABS(N({col}{R['audit_rollfwd']}))<=5),\"OK\",\"CHECK\")")
+                                f"ABS(N({col}{R['audit_rollfwd_total']}))<=5,"
+                                f"ABS(N({col}{R['audit_rollfwd_active']}))<=5),\"OK\",\"CHECK\")")
     cells[HEADER_ROW] = label
     if created:
         cells[R["fixed"]] = FIXED_COST_DEFAULT  # never overwrite an existing month's fixed costs
