@@ -90,18 +90,19 @@ ROWS = {
     "arr_total": 22, "arr_sens": 23, "arr_supp": 24,
     "rev_pump": 27, "rev_monitor": 28, "rev_sensor": 29, "rev_supplies": 30,
     "rev_total": 31,
-    "avg_weighted": 33, "avg_sens": 34, "avg_supp": 35,
+    "pump_orders": 32, "monitor_orders": 33,   # claim counts by DOS, tie to rev rows
+    "avg_weighted": 35, "avg_sens": 36, "avg_supp": 37,
     # Per-product P&L (restructured 2026-08-01): COGS / GP / margins / net
     # all mirror the pump-monitor-sensor-supplies-total revenue layout.
-    "cogs_pump": 38, "cogs_monitor": 39, "cogs_sensor": 40,
-    "cogs_supplies": 41, "cogs_ship": 42, "cogs_total": 43,
-    "gp_pump": 46, "gp_monitor": 47, "gp_sensor": 48, "gp_supplies": 49, "gp_total": 50,
-    "gm_pump": 51, "gm_monitor": 52, "gm_sensor": 53, "gm_supplies": 54, "gm_total": 55,
-    "fixed": 58,
-    "np_pump": 59, "np_monitor": 60, "np_sensor": 61, "np_supplies": 62, "np_total": 63,
-    "nm_pump": 64, "nm_monitor": 65, "nm_sensor": 66, "nm_supplies": 67, "nm_total": 68,
+    "cogs_pump": 40, "cogs_monitor": 41, "cogs_sensor": 42,
+    "cogs_supplies": 43, "cogs_ship": 44, "cogs_total": 45,
+    "gp_pump": 48, "gp_monitor": 49, "gp_sensor": 50, "gp_supplies": 51, "gp_total": 52,
+    "gm_pump": 53, "gm_monitor": 54, "gm_sensor": 55, "gm_supplies": 56, "gm_total": 57,
+    "fixed": 60,
+    "np_pump": 61, "np_monitor": 62, "np_sensor": 63, "np_supplies": 64, "np_total": 65,
+    "nm_pump": 66, "nm_monitor": 67, "nm_sensor": 68, "nm_supplies": 69, "nm_total": 70,
 }
-LAST_ROW = 68
+LAST_ROW = 70
 
 
 def num(v):
@@ -129,9 +130,9 @@ def pull_subscription_snapshot(token):
     """All Subscription Board items -> list of dicts keyed by column id."""
     items, cursor = [], None
     q_first = """query($b:[ID!],$c:[String!]){boards(ids:$b){items_page(limit:500){
-      cursor items{id name column_values(ids:$c){id text}}}}}"""
+      cursor items{id name group{title} column_values(ids:$c){id text}}}}}"""
     q_next = """query($cur:String!,$c:[String!]){next_items_page(limit:500,cursor:$cur){
-      cursor items{id name column_values(ids:$c){id text}}}}"""
+      cursor items{id name group{title} column_values(ids:$c){id text}}}}"""
     while True:
         if cursor is None:
             d = monday(q_first, {"b": [SUB_BOARD], "c": SUB_COLS}, token)
@@ -140,7 +141,8 @@ def pull_subscription_snapshot(token):
             d = monday(q_next, {"cur": cursor, "c": SUB_COLS}, token)
             page = d["next_items_page"]
         for it in page["items"]:
-            row = {"id": it["id"], "name": it["name"]}
+            row = {"id": it["id"], "name": it["name"],
+                   "group": (it.get("group") or {}).get("title", "")}
             row.update({cv["id"]: (cv["text"] or "") for cv in it["column_values"]})
             items.append(row)
         cursor = page.get("cursor")
@@ -228,9 +230,13 @@ def compute(token, year, month):
 
     active = [s for s in subs if s.get(C_STATUS, "").lower() == "active"]
     def mult(s): return 6 if s.get(C_PRIMARY, "").strip() in MEDICAID_PRIMARIES else 4
-    arr_total = sum(num(s.get(C_ARR)) for s in active)
-    arr_sens = sum(num(s.get(C_SENS_REV)) * mult(s) for s in active)
-    arr_supp = sum(num(s.get(C_SUPP_REV)) * mult(s) for s in active)
+    # ARR ties to the UI Financials dashboard (unifiedForecast.ts line ~112):
+    # everyone EXCEPT the "Not Active Patients" board group — Paused included.
+    # Brandon chose this basis 2026-08-01 so sheet == dashboard.
+    arr_pop = [s for s in subs if "not active" not in s.get("group", "").lower()]
+    arr_total = sum(num(s.get(C_ARR)) for s in arr_pop)
+    arr_sens = sum(num(s.get(C_SENS_REV)) * mult(s) for s in arr_pop)
+    arr_supp = sum(num(s.get(C_SUPP_REV)) * mult(s) for s in arr_pop)
 
     def avg(vals): return round(sum(vals) / len(vals), 2) if vals else 0
     avg_weighted = avg([num(s.get(C_TOT_REV)) for s in active if num(s.get(C_TOT_REV)) > 0])
@@ -241,6 +247,7 @@ def compute(token, year, month):
     claims = pull_month_claims(token, first.isoformat(), last.isoformat())
     rev = dict(pump=0.0, monitor=0.0, sensors=0.0, supplies=0.0)
     cogs = dict(pump=0.0, monitor=0.0, sensors=0.0, supplies=0.0, shipping=0.0)
+    pump_orders = monitor_orders = 0
     for c in claims:
         has_sens = has_supp = False
         codes = set()
@@ -265,6 +272,8 @@ def compute(token, year, month):
         if has_supp:
             cost = num(patient.get(C_SUPP_COST)) if patient else 0
             cogs["supplies"] += cost if cost > 0 else SUPPLIES_COST_FALLBACK
+        pump_orders += "E0784" in codes
+        monitor_orders += "E2103" in codes
         pump_only = codes and codes <= {"E0784"}
         if not pump_only:
             cogs["shipping"] += SHIPPING_PER_ORDER
@@ -298,6 +307,7 @@ def compute(token, year, month):
         "revenue": {k: round(v, 2) for k, v in rev.items()},
         "avg": dict(weighted=avg_weighted, sensors=avg_sens, supplies=avg_supp),
         "cogs": {k: round(v, 2) for k, v in cogs.items()},
+        "orders": dict(pump=pump_orders, monitor=monitor_orders),
         "claims_counted": len(claims),
     }
 
@@ -365,6 +375,7 @@ def write_column(svc, kpis, year, month, dry_run=False):
         R["rev_pump"]: rev["pump"], R["rev_monitor"]: rev["monitor"],
         R["rev_sensor"]: rev["sensors"], R["rev_supplies"]: rev["supplies"],
         R["rev_total"]: f"=SUM({col}{R['rev_pump']}:{col}{R['rev_supplies']})",
+        R["pump_orders"]: kpis["orders"]["pump"], R["monitor_orders"]: kpis["orders"]["monitor"],
         R["avg_weighted"]: avg["weighted"], R["avg_sens"]: avg["sensors"], R["avg_supp"]: avg["supplies"],
     }
     cg = kpis["cogs"]
