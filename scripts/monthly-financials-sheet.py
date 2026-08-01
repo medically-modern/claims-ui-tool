@@ -147,8 +147,12 @@ ROWS = {
     "mixgp_pump": 96, "mixgp_monitor": 97, "mixgp_sensor": 98, "mixgp_supplies": 99,
     "payer_rev_start": 102,   # 12 rows, PAYER_FAMILIES order
     "payer_gp_start": 116,    # 12 rows, PAYER_FAMILIES order
+    # Per-patient unit economics (weighted over Active patients with
+    # revenue; COGS = sensors+supplies only, no hardware/shipping)
+    "pp_order_rev": 130, "pp_order_cogs": 131, "pp_order_gp": 132,
+    "pp_ann_rev": 134, "pp_ann_cogs": 135, "pp_ann_gp": 136,
 }
-LAST_ROW = 127
+LAST_ROW = 136
 
 
 def num(v):
@@ -354,6 +358,18 @@ def compute(token, year, month):
     avg_sens = avg([num(s.get(C_SENS_REV)) for s in active if num(s.get(C_SENS_REV)) > 0])
     avg_supp = avg([num(s.get(C_SUPP_REV)) for s in active if num(s.get(C_SUPP_REV)) > 0])
 
+    # Per-patient unit economics: Active patients with revenue. Order
+    # COGS = sensors + supplies cost only (Brandon 2026-08-01 — no
+    # hardware/shipping). Annual = per-order × fills/year (4, ×6 Medicaid).
+    pp_pop = [s for s in active if num(s.get(C_TOT_REV)) > 0]
+    def pp_cogs(s): return num(s.get(C_SENS_COST)) + num(s.get(C_SUPP_COST))
+    pp = dict(
+        order_rev=avg_weighted,
+        order_cogs=avg([pp_cogs(s) for s in pp_pop]),
+        ann_rev=avg([num(s.get(C_TOT_REV)) * mult(s) for s in pp_pop]),
+        ann_cogs=avg([pp_cogs(s) * mult(s) for s in pp_pop]),
+    )
+
     # 2. Month claims -> revenue by product + COGS
     claims = pull_month_claims(token, first.isoformat(), last.isoformat())
     rev = dict(pump=0.0, monitor=0.0, sensors=0.0, supplies=0.0)
@@ -446,6 +462,7 @@ def compute(token, year, month):
         "arr": dict(total=round(arr_total, 2), sensors=round(arr_sens, 2), supplies=round(arr_supp, 2)),
         "revenue": {k: round(v, 2) for k, v in rev.items()},
         "avg": dict(weighted=avg_weighted, sensors=avg_sens, supplies=avg_supp),
+        "per_patient": pp,
         "cogs": {k: round(v, 2) for k, v in cogs.items()},
         "orders": dict(pump=pump_orders, monitor=monitor_orders),
         "hardware": dict(new_pumps=new_pumps, avg_pump_cost=avg_pump,
@@ -568,6 +585,14 @@ def write_column(svc, kpis, year, month, dry_run=False):
         share = kpis["payer_mix"].get(fam, {})
         cells[R["payer_rev_start"] + i] = round(share.get("rev_share", 0), 4)
         cells[R["payer_gp_start"] + i] = round(share.get("gp_share", 0), 4)
+    # Per-patient unit economics (GP rows are sheet formulas)
+    pp = kpis["per_patient"]
+    cells[R["pp_order_rev"]] = pp["order_rev"]
+    cells[R["pp_order_cogs"]] = pp["order_cogs"]
+    cells[R["pp_order_gp"]] = f"={col}{R['pp_order_rev']}-{col}{R['pp_order_cogs']}"
+    cells[R["pp_ann_rev"]] = pp["ann_rev"]
+    cells[R["pp_ann_cogs"]] = pp["ann_cogs"]
+    cells[R["pp_ann_gp"]] = f"={col}{R['pp_ann_rev']}-{col}{R['pp_ann_cogs']}"
     cells[HEADER_ROW] = label
     if created:
         cells[R["fixed"]] = FIXED_COST_DEFAULT  # never overwrite an existing month's fixed costs
