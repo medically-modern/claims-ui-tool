@@ -63,11 +63,41 @@ RAILWAY_IDS = dict(
 
 # Subscription Board columns
 C_STATUS, C_TYPE, C_PRIMARY = "color_mm2t7tdy", "color_mm273mv8", "color_mm254qxj"
+C_SENSTYPE = "color_mkxmdscr"   # Sensors Type — weights the monitor SKU average
 C_SENS_REV, C_SENS_COST = "numeric_mkxj6a3d", "numeric_mkxjxmga"
 C_SUPP_REV, C_SUPP_COST = "numeric_mm27rypj", "numeric_mm27hem2"
 C_TOT_REV, C_SHIP, C_ARR = "numeric_mm2xsjm5", "numeric_mm2xxmp4", "numeric_mm2xsqyd"
-SUB_COLS = [C_STATUS, C_TYPE, C_PRIMARY, C_SENS_REV, C_SENS_COST,
+SUB_COLS = [C_STATUS, C_TYPE, C_PRIMARY, C_SENSTYPE, C_SENS_REV, C_SENS_COST,
             C_SUPP_REV, C_SUPP_COST, C_TOT_REV, C_SHIP, C_ARR]
+
+C_PAYOR = "color_mkxmhypt"  # Claims Board: Primary Payor label (for payer mix)
+
+# Payer families for the mix section — fixed row order on the sheet.
+PAYER_FAMILIES = ["Medicare A&B", "Anthem BCBS", "Other Blues", "Fidelis",
+                  "United / UMR", "Aetna", "NY Medicaid", "Cigna", "Humana",
+                  "Wellcare", "NYSHIP", "Other"]
+
+
+def payer_family(label):
+    s = (label or "").strip()
+    sl = s.lower()
+    if s == "Medicare A&B":
+        return "Medicare A&B"
+    if sl.startswith("anthem"):
+        return "Anthem BCBS"
+    if sl.startswith("bcbs") or sl.startswith("horizon"):
+        return "Other Blues"
+    if sl.startswith("fidelis"):
+        return "Fidelis"
+    if sl.startswith("united") or sl == "umr":
+        return "United / UMR"
+    if sl.startswith("aetna"):
+        return "Aetna"
+    if s == "Medicaid":
+        return "NY Medicaid"
+    if s in ("Cigna", "Humana", "Wellcare", "NYSHIP"):
+        return s
+    return "Other"
 
 # Claims Board columns
 C_DOS, C_SUBID = "date_mkwr7spz", "text_mm3ahdn3"
@@ -109,8 +139,14 @@ ROWS = {
     "fixed": 74,
     "np_pump": 75, "np_monitor": 76, "np_sensor": 77, "np_supplies": 78, "np_total": 79,
     "nm_pump": 80, "nm_monitor": 81, "nm_sensor": 82, "nm_supplies": 83, "nm_total": 84,
+    # Mix section (2026-08-01): product shares are formulas off the rows
+    # above; payer shares are computed values (12 fixed family rows).
+    "mixrev_pump": 87, "mixrev_monitor": 88, "mixrev_sensor": 89, "mixrev_supplies": 90,
+    "mixgp_pump": 92, "mixgp_monitor": 93, "mixgp_sensor": 94, "mixgp_supplies": 95,
+    "payer_rev_start": 98,   # 12 rows, PAYER_FAMILIES order
+    "payer_gp_start": 111,   # 12 rows, PAYER_FAMILIES order
 }
-LAST_ROW = 84
+LAST_ROW = 122
 
 
 def num(v):
@@ -165,13 +201,13 @@ def pull_month_claims(token, first_day, last_day):
     claims, cursor = [], None
     q_first = """query($b:ID!,$rules:CompareValue!){boards(ids:[$b]){items_page(limit:100,
       query_params:{rules:[{column_id:"%s",compare_value:$rules,operator:between}]}){
-      cursor items{id name group{title} column_values(ids:["%s"]){id text}
+      cursor items{id name group{title} column_values(ids:["%s","%s"]){id text}
         subitems{column_values(ids:["%s","%s","%s","%s"]){id text}}}}}}""" % (
-        C_DOS, C_SUBID, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
+        C_DOS, C_SUBID, C_PAYOR, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
     q_next = """query($cur:String!){next_items_page(limit:100,cursor:$cur){
-      cursor items{id name group{title} column_values(ids:["%s"]){id text}
+      cursor items{id name group{title} column_values(ids:["%s","%s"]){id text}
         subitems{column_values(ids:["%s","%s","%s","%s"]){id text}}}}}""" % (
-        C_SUBID, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
+        C_SUBID, C_PAYOR, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
     while True:
         if cursor is None:
             d = monday(q_first, {"b": CLAIMS_BOARD, "rules": [first_day, last_day]}, token)
@@ -186,30 +222,54 @@ def pull_month_claims(token, first_day, last_day):
     return [c for c in claims if "non-latest" not in (c.get("group") or {}).get("title", "").lower()]
 
 
-def pull_hardware_avg_costs(token):
-    """Average pump and monitor hardware cost from the Cardinal SKU Tracker.
+def pull_hardware_costs(token, subs):
+    """Pump + monitor hardware costs from the Cardinal SKU Tracker.
 
-    Pumps = rows whose description mentions an insulin pump / starter kit
-    (Mobi, iLet, t:slim, 780G). Monitors = receiver/reader rows. Inactive
-    and zero-priced SKUs are excluded. Simple average per Brandon
-    (2026-08-01): 'just use an average'."""
+    Pump = simple average of the Mobi and t:slim pump SKUs (Brandon
+    2026-08-01: 'use an average of mobi and tandem' — 780G/iLet excluded
+    as outliers). Monitor = receiver/reader price weighted by the
+    historical subscription base's Sensors Type mix (Dexcom G6/G7 vs
+    FreeStyle Libre)."""
     q = """query{boards(ids:[%d]){items_page(limit:100){items{
       name column_values(ids:["%s","%s","%s"]){id text}}}}}""" % (
         SKU_BOARD, SKU_DESC, SKU_PRICE, SKU_STATUS)
     items = monday(q, {}, token)["boards"][0]["items_page"]["items"]
-    pumps, monitors = [], []
+    pump_prices, g6, g7, libre = [], 0.0, 0.0, []
     for it in items:
         cv = {c["id"]: (c["text"] or "") for c in it["column_values"]}
-        desc = cv.get(SKU_DESC, "").lower()
+        name, desc = it["name"].lower(), cv.get(SKU_DESC, "").lower()
         price = num(cv.get(SKU_PRICE))
         if price <= 0 or cv.get(SKU_STATUS, "").strip().lower() == "inactive":
             continue
-        if "insulin pump" in desc or "starter kit" in desc:
-            pumps.append(price)
-        elif "receiver" in desc or "reader" in desc:
-            monitors.append(price)
-    avg = lambda v: round(sum(v) / len(v), 2) if v else 0.0
-    return avg(pumps), avg(monitors), len(pumps), len(monitors)
+        if "insulin pump" in desc and ("mobi" in name or "t:slim" in name):
+            pump_prices.append(price)
+        elif "receiver" in desc or ("reader" in desc and "libre" in desc):
+            if "g6" in name.lower():
+                g6 = price
+            elif "g7" in name.lower():
+                g7 = price
+            elif "libre" in name.lower():
+                libre.append(price)
+    avg_pump = round(sum(pump_prices) / len(pump_prices), 2) if pump_prices else 0.0
+    libre_price = round(sum(libre) / len(libre), 2) if libre else 0.0
+
+    # Weight receiver price by the base's Sensors Type mix (Guardian/
+    # Simplera have no receiver SKU — display is the pump — excluded).
+    w = {"g6": 0, "g7": 0, "libre": 0}
+    for s in subs:
+        st = (s.get(C_SENSTYPE) or "").lower()
+        if "g6" in st:
+            w["g6"] += 1
+        elif "g7" in st or "dexcom" in st:
+            w["g7"] += 1
+        elif "libre" in st:
+            w["libre"] += 1
+    tot_w = sum(w.values())
+    avg_monitor = (round((w["g6"] * g6 + w["g7"] * g7 + w["libre"] * libre_price)
+                         / tot_w, 2) if tot_w else 0.0)
+    detail = dict(pump_skus=len(pump_prices), g6_price=g6, g7_price=g7,
+                  libre_price=libre_price, weights=w)
+    return avg_pump, avg_monitor, detail
 
 
 def pull_pause_events(token, from_iso, to_iso):
@@ -296,47 +356,64 @@ def compute(token, year, month):
     claims = pull_month_claims(token, first.isoformat(), last.isoformat())
     rev = dict(pump=0.0, monitor=0.0, sensors=0.0, supplies=0.0)
     cogs = dict(pump=0.0, monitor=0.0, sensors=0.0, supplies=0.0, shipping=0.0)
+    avg_pump, avg_monitor, hw_detail = pull_hardware_costs(token, subs)
     pump_orders = monitor_orders = new_pumps = 0
+    payer_agg = {f: dict(rev=0.0, gp=0.0) for f in PAYER_FAMILIES}
     for c in claims:
         has_sens = has_supp = False
         codes = set()
+        claim_rev = claim_cogs = 0.0
         for sub in c.get("subitems") or []:
             cv = {v["id"]: (v["text"] or "") for v in sub["column_values"]}
             code = cv.get(S_HCPC, "").strip().upper()
             val = num(cv.get(S_ESTPAY)) or num(cv.get(S_CHARGE))
             codes.add(code)
             if code == "E0784":
-                rev["pump"] += val
+                rev["pump"] += val; claim_rev += val
                 # Hardware ships on purchase / first rental month only —
                 # KI (months 2-3) and KJ (months 4-13) lines are rentals
                 # of a pump we already bought.
                 mods = cv.get(S_MODS, "").upper()
                 if "KI" not in mods and "KJ" not in mods:
                     new_pumps += 1
+                    claim_cogs += avg_pump
             elif code == "E2103":
-                rev["monitor"] += val
+                rev["monitor"] += val; claim_rev += val
+                claim_cogs += avg_monitor
             elif code == "A4239":
-                rev["sensors"] += val; has_sens = True
+                rev["sensors"] += val; claim_rev += val; has_sens = True
             elif code in SUPPLY_CODES:
-                rev["supplies"] += val; has_supp = True
-        sub_item_id = next((v["text"] for v in c["column_values"] if v["id"] == C_SUBID), "") or ""
-        patient = by_id.get(sub_item_id.strip()) or by_name.get(c["name"].strip().lower())
+                rev["supplies"] += val; claim_rev += val; has_supp = True
+        pcv = {v["id"]: (v["text"] or "") for v in c["column_values"]}
+        sub_item_id = (pcv.get(C_SUBID) or "").strip()
+        patient = by_id.get(sub_item_id) or by_name.get(c["name"].strip().lower())
         if has_sens:
             cost = num(patient.get(C_SENS_COST)) if patient else 0
-            cogs["sensors"] += cost if cost > 0 else SENSORS_COST_FALLBACK
+            cost = cost if cost > 0 else SENSORS_COST_FALLBACK
+            cogs["sensors"] += cost; claim_cogs += cost
         if has_supp:
             cost = num(patient.get(C_SUPP_COST)) if patient else 0
-            cogs["supplies"] += cost if cost > 0 else SUPPLIES_COST_FALLBACK
+            cost = cost if cost > 0 else SUPPLIES_COST_FALLBACK
+            cogs["supplies"] += cost; claim_cogs += cost
         pump_orders += "E0784" in codes
         monitor_orders += "E2103" in codes
         pump_only = codes and codes <= {"E0784"}
         if not pump_only:
-            cogs["shipping"] += SHIPPING_PER_ORDER
+            cogs["shipping"] += SHIPPING_PER_ORDER; claim_cogs += SHIPPING_PER_ORDER
+        fam = payer_family(pcv.get(C_PAYOR, ""))
+        payer_agg[fam]["rev"] += claim_rev
+        payer_agg[fam]["gp"] += claim_rev - claim_cogs
 
-    # Pump/monitor hardware COGS from Cardinal SKU averages (Brandon 2026-08-01).
-    avg_pump, avg_monitor, n_pump_skus, n_mon_skus = pull_hardware_avg_costs(token)
     cogs["pump"] = round(avg_pump * new_pumps, 2)
     cogs["monitor"] = round(avg_monitor * monitor_orders, 2)
+
+    tot_rev_mix = sum(v["rev"] for v in payer_agg.values())
+    tot_gp_mix = sum(v["gp"] for v in payer_agg.values())
+    payer_mix = {
+        f: dict(rev_share=(v["rev"] / tot_rev_mix if tot_rev_mix else 0),
+                gp_share=(v["gp"] / tot_gp_mix if tot_gp_mix else 0))
+        for f, v in payer_agg.items()
+    }
 
     # 3. Attrition from activity log (whole calendar month, ET-agnostic UTC pad)
     events = pull_pause_events(
@@ -369,8 +446,8 @@ def compute(token, year, month):
         "cogs": {k: round(v, 2) for k, v in cogs.items()},
         "orders": dict(pump=pump_orders, monitor=monitor_orders),
         "hardware": dict(new_pumps=new_pumps, avg_pump_cost=avg_pump,
-                         avg_monitor_cost=avg_monitor,
-                         pump_skus=n_pump_skus, monitor_skus=n_mon_skus),
+                         avg_monitor_cost=avg_monitor, **hw_detail),
+        "payer_mix": payer_mix,
         "claims_counted": len(claims),
     }
 
@@ -470,6 +547,16 @@ def write_column(svc, kpis, year, month, dry_run=False):
     cells[R["gm_total"]] = f"=IF({rt}=0,\"\",{col}{R['gp_total']}/{rt})"
     cells[R["np_total"]] = f"={col}{R['gp_total']}-{col}{R['fixed']}"
     cells[R["nm_total"]] = f"=IF({rt}=0,\"\",{col}{R['np_total']}/{rt})"
+    # Product mix — formulas off the revenue / GP rows above
+    gt = f"{col}{R['gp_total']}"
+    for key in ("pump", "monitor", "sensor", "supplies"):
+        cells[R[f"mixrev_{key}"]] = f"=IF({rt}=0,\"\",{col}{R[f'rev_{key}']}/{rt})"
+        cells[R[f"mixgp_{key}"]] = f"=IF({gt}=0,\"\",{col}{R[f'gp_{key}']}/{gt})"
+    # Payer mix — computed shares, PAYER_FAMILIES row order
+    for i, fam in enumerate(PAYER_FAMILIES):
+        share = kpis["payer_mix"].get(fam, {})
+        cells[R["payer_rev_start"] + i] = round(share.get("rev_share", 0), 4)
+        cells[R["payer_gp_start"] + i] = round(share.get("gp_share", 0), 4)
     cells[HEADER_ROW] = label
     if created:
         cells[R["fixed"]] = FIXED_COST_DEFAULT  # never overwrite an existing month's fixed costs
