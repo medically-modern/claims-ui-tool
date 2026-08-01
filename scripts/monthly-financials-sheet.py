@@ -118,6 +118,22 @@ MEDICAID_PRIMARIES = {"Fidelis Medicaid", "Anthem BCBS Medicaid (JLJ)",
 SUPPLY_CODES = {"A4224", "A4225", "A4230", "A4231", "A4232"}
 SHIPPING_PER_ORDER = 8.25
 SENSORS_COST_FALLBACK, SUPPLIES_COST_FALLBACK = 500.0, 314.0
+
+# Medicare E0784 capped-rental EST PAY by month, mirrored from
+# claim_board_service.py PUMP_RENTAL_EST_PAY + claim_assumptions month-1
+# (548.83 = allowed 557.75 x 0.984, verified against paid ERAs).
+PUMP_RENTAL_EST_SCHEDULE = [548.83] * 3 + [411.62] * 10
+
+
+def pump_payback_months(cost):
+    """Month where cumulative rental est-pay crosses the pump cost
+    (interpolated). None if the 13-month cap never covers it."""
+    cum = 0.0
+    for i, amt in enumerate(PUMP_RENTAL_EST_SCHEDULE, start=1):
+        if cum + amt >= cost:
+            return round(i - 1 + (cost - cum) / amt, 1)
+        cum += amt
+    return None
 FIXED_COST_DEFAULT = 70000  # updated from 30k per Brandon 2026-08-01
 
 # Row map (1-indexed sheet rows; column A holds labels, months go B, C, ...)
@@ -151,6 +167,7 @@ ROWS = {
     "unit_pump": 73, "unit_monitor": 74, "unit_sensor": 75, "unit_supplies": 76,
     "gp_pump": 79, "gp_monitor": 80, "gp_sensor": 81, "gp_supplies": 82, "gp_total": 83,
     "gm_pump": 84, "gm_monitor": 85, "gm_sensor": 86, "gm_supplies": 87, "gm_total": 88,
+    "sub_gm": 89,   # subscription (sensors+supplies only) gross margin
     "fixed": 91,
     # Net profit is total-only (fixed costs don't allocate to products —
     # Brandon 2026-08-01); per-product economics stop at gross profit.
@@ -922,6 +939,10 @@ def write_column(svc, kpis, year, month, dry_run=False):
         gp_c = f"{col}{R[f'gp_{key}']}"
         cells[R[f"gp_{key}"]] = f"={rev_c}-{cogs_c}"
         cells[R[f"gm_{key}"]] = f"=IF({rev_c}=0,\"\",{gp_c}/{rev_c})"
+    # Subscription-only gross margin: sensors+supplies GP over their revenue
+    sub_rev = f"({col}{R['rev_sensor']}+{col}{R['rev_supplies']})"
+    cells[R["sub_gm"]] = (f"=IF({sub_rev}=0,\"\","
+                          f"({col}{R['gp_sensor']}+{col}{R['gp_supplies']})/{sub_rev})")
     rt = f"{col}{R['rev_total']}"
     cells[R["gp_total"]] = f"={rt}-{col}{R['cogs_total']}"
     cells[R["gm_total"]] = f"=IF({rt}=0,\"\",{col}{R['gp_total']}/{rt})"
@@ -959,8 +980,11 @@ def write_column(svc, kpis, year, month, dry_run=False):
     cells[R["pb_spend"]] = f"={col}{R['cogs_pump']}"
     cells[R["pb_rentals"]] = pb["rental_pumps"]
     cells[R["pb_rental_rev"]] = pb["rental_rev"]
-    cells[R["pb_months"]] = (f"=IF(OR(N({col}{R['pb_rentals']})=0,N({col}{R['pb_rental_rev']})=0),\"\","
-                             f"{col}{R['unit_pump']}/({col}{R['pb_rental_rev']}/{col}{R['pb_rentals']}))")
+    # Cumulative crossing of the Medicare rental est-pay schedule
+    # (548.83 x3 then 411.62) against the SKU pump cost — not the
+    # observed rental average, which legacy \$600-billed months inflate.
+    pm = pump_payback_months(kpis["unit_cogs"]["pump"])
+    cells[R["pb_months"]] = pm if pm is not None else "n/a"
     # Month-over-month deltas — reference the previous month column;
     # blank on the sheet's first month column.
     if idx > 1:
