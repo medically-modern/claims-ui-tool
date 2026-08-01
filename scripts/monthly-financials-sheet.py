@@ -152,33 +152,34 @@ ROWS = {
     "gp_pump": 79, "gp_monitor": 80, "gp_sensor": 81, "gp_supplies": 82, "gp_total": 83,
     "gm_pump": 84, "gm_monitor": 85, "gm_sensor": 86, "gm_supplies": 87, "gm_total": 88,
     "fixed": 91,
-    "np_pump": 92, "np_monitor": 93, "np_sensor": 94, "np_supplies": 95, "np_total": 96,
-    "nm_pump": 97, "nm_monitor": 98, "nm_sensor": 99, "nm_supplies": 100, "nm_total": 101,
+    # Net profit is total-only (fixed costs don't allocate to products —
+    # Brandon 2026-08-01); per-product economics stop at gross profit.
+    "np_total": 92, "nm_total": 93,
     # Mix section (2026-08-01): product shares are formulas off the rows
     # above; payer shares are computed values (12 fixed family rows).
-    "mixrev_pump": 104, "mixrev_monitor": 105, "mixrev_sensor": 106, "mixrev_supplies": 107,
-    "mixgp_pump": 109, "mixgp_monitor": 110, "mixgp_sensor": 111, "mixgp_supplies": 112,
-    "payer_rev_start": 115,   # 12 rows, PAYER_FAMILIES order
-    "payer_gp_start": 129,    # 12 rows, PAYER_FAMILIES order
+    "mixrev_pump": 96, "mixrev_monitor": 97, "mixrev_sensor": 98, "mixrev_supplies": 99,
+    "mixgp_pump": 101, "mixgp_monitor": 102, "mixgp_sensor": 103, "mixgp_supplies": 104,
+    "payer_rev_start": 107,   # 12 rows, PAYER_FAMILIES order
+    "payer_gp_start": 121,    # 12 rows, PAYER_FAMILIES order
     # Per-patient unit economics (weighted over Active patients with
     # revenue; COGS = sensors+supplies only, no hardware/shipping)
-    "pp_order_rev": 143, "pp_order_cogs": 144, "pp_order_gp": 145,
-    "pp_ann_rev": 147, "pp_ann_cogs": 148, "pp_ann_gp": 149,
+    "pp_order_rev": 135, "pp_order_cogs": 136, "pp_order_gp": 137,
+    "pp_ann_rev": 139, "pp_ann_cogs": 140, "pp_ann_gp": 141,
     # LTV & pump payback — churn basis = PURE churn (left book)
-    "ltv_churn": 152, "ltv_life": 153, "ltv_val": 154,
-    "pb_new_pumps": 156, "pb_spend": 157, "pb_rentals": 158,
-    "pb_rental_rev": 159, "pb_months": 160,
+    "ltv_churn": 144, "ltv_life": 145, "ltv_val": 146,
+    "pb_new_pumps": 148, "pb_spend": 149, "pb_rentals": 150,
+    "pb_rental_rev": 151, "pb_months": 152,
     # Month-over-month deltas (formulas vs previous column; blank on first)
-    "d_rev": 163, "d_gp": 164, "d_np": 165, "d_arr": 166,
-    "d_active": 167, "d_new": 168, "d_attr": 169,
+    "d_rev": 155, "d_gp": 156, "d_np": 157, "d_arr": 158,
+    "d_active": 159, "d_new": 160, "d_attr": 161,
     # Self-audit footer
-    "audit_revsum": 172, "audit_gpsum": 173, "audit_unmatched": 174,
-    "audit_unknown": 175, "audit_blankstatus": 176,
-    "audit_rollfwd_total": 177,   # Total − (prev Total + New − Churned)
-    "audit_rollfwd_active": 178,  # Active − (prev Active + New − Paused + Resumed − Churned)
-    "audit_status": 179,
+    "audit_revsum": 164, "audit_gpsum": 165, "audit_unmatched": 166,
+    "audit_unknown": 167, "audit_blankstatus": 168,
+    "audit_rollfwd_total": 169,   # Total − (prev Total + New − Churned)
+    "audit_rollfwd_active": 170,  # Active − (prev Active + New − Paused + Resumed − Churned)
+    "audit_status": 171,
 }
-LAST_ROW = 179
+LAST_ROW = 171
 
 # ── Realization tab (own tab — vintage analysis by DOS month) ──────────────
 REAL_TAB = "Realization"
@@ -918,12 +919,9 @@ def write_column(svc, kpis, year, month, dry_run=False):
                 ("sensor", "rev_sensor"), ("supplies", "rev_supplies")]
     for key, rev_key in products:
         rev_c, cogs_c = f"{col}{R[rev_key]}", f"{col}{R[f'cogs_{key}']}"
-        gp_c, np_c = f"{col}{R[f'gp_{key}']}", f"{col}{R[f'np_{key}']}"
+        gp_c = f"{col}{R[f'gp_{key}']}"
         cells[R[f"gp_{key}"]] = f"={rev_c}-{cogs_c}"
         cells[R[f"gm_{key}"]] = f"=IF({rev_c}=0,\"\",{gp_c}/{rev_c})"
-        cells[R[f"np_{key}"]] = (f"={gp_c}-IF({col}{R['rev_total']}=0,0,"
-                                 f"{col}{R['fixed']}*{rev_c}/{col}{R['rev_total']})")
-        cells[R[f"nm_{key}"]] = f"=IF({rev_c}=0,\"\",{np_c}/{rev_c})"
     rt = f"{col}{R['rev_total']}"
     cells[R["gp_total"]] = f"={rt}-{col}{R['cogs_total']}"
     cells[R["gm_total"]] = f"=IF({rt}=0,\"\",{col}{R['gp_total']}/{rt})"
