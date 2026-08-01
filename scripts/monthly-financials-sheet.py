@@ -72,6 +72,11 @@ SUB_COLS = [C_STATUS, C_TYPE, C_PRIMARY, C_SENS_REV, C_SENS_COST,
 # Claims Board columns
 C_DOS, C_SUBID = "date_mkwr7spz", "text_mm3ahdn3"
 S_HCPC, S_ESTPAY, S_CHARGE = "color_mm1cdvq8", "numeric_mm1zspsy", "numeric_mm1za8v5"
+S_MODS = "dropdown_mm1z7je9"  # line modifiers — KI/KJ mark rental months 2-13
+
+# Cardinal SKU Tracker (live hardware costs; see cardinal_sku_service.py)
+SKU_BOARD = 18420366344
+SKU_DESC, SKU_PRICE, SKU_STATUS = "text_mm4wazkc", "numeric_mm4wd6b", "color_mm4wr14r"
 
 MEDICAID_PRIMARIES = {"Fidelis Medicaid", "Anthem BCBS Medicaid (JLJ)",
                       "United Medicaid", "Medicaid"}
@@ -161,12 +166,12 @@ def pull_month_claims(token, first_day, last_day):
     q_first = """query($b:ID!,$rules:CompareValue!){boards(ids:[$b]){items_page(limit:100,
       query_params:{rules:[{column_id:"%s",compare_value:$rules,operator:between}]}){
       cursor items{id name group{title} column_values(ids:["%s"]){id text}
-        subitems{column_values(ids:["%s","%s","%s"]){id text}}}}}}""" % (
-        C_DOS, C_SUBID, S_HCPC, S_ESTPAY, S_CHARGE)
+        subitems{column_values(ids:["%s","%s","%s","%s"]){id text}}}}}}""" % (
+        C_DOS, C_SUBID, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
     q_next = """query($cur:String!){next_items_page(limit:100,cursor:$cur){
       cursor items{id name group{title} column_values(ids:["%s"]){id text}
-        subitems{column_values(ids:["%s","%s","%s"]){id text}}}}}""" % (
-        C_SUBID, S_HCPC, S_ESTPAY, S_CHARGE)
+        subitems{column_values(ids:["%s","%s","%s","%s"]){id text}}}}}""" % (
+        C_SUBID, S_HCPC, S_ESTPAY, S_CHARGE, S_MODS)
     while True:
         if cursor is None:
             d = monday(q_first, {"b": CLAIMS_BOARD, "rules": [first_day, last_day]}, token)
@@ -179,6 +184,32 @@ def pull_month_claims(token, first_day, last_day):
         if not cursor:
             break
     return [c for c in claims if "non-latest" not in (c.get("group") or {}).get("title", "").lower()]
+
+
+def pull_hardware_avg_costs(token):
+    """Average pump and monitor hardware cost from the Cardinal SKU Tracker.
+
+    Pumps = rows whose description mentions an insulin pump / starter kit
+    (Mobi, iLet, t:slim, 780G). Monitors = receiver/reader rows. Inactive
+    and zero-priced SKUs are excluded. Simple average per Brandon
+    (2026-08-01): 'just use an average'."""
+    q = """query{boards(ids:[%d]){items_page(limit:100){items{
+      name column_values(ids:["%s","%s","%s"]){id text}}}}}""" % (
+        SKU_BOARD, SKU_DESC, SKU_PRICE, SKU_STATUS)
+    items = monday(q, {}, token)["boards"][0]["items_page"]["items"]
+    pumps, monitors = [], []
+    for it in items:
+        cv = {c["id"]: (c["text"] or "") for c in it["column_values"]}
+        desc = cv.get(SKU_DESC, "").lower()
+        price = num(cv.get(SKU_PRICE))
+        if price <= 0 or cv.get(SKU_STATUS, "").strip().lower() == "inactive":
+            continue
+        if "insulin pump" in desc or "starter kit" in desc:
+            pumps.append(price)
+        elif "receiver" in desc or "reader" in desc:
+            monitors.append(price)
+    avg = lambda v: round(sum(v) / len(v), 2) if v else 0.0
+    return avg(pumps), avg(monitors), len(pumps), len(monitors)
 
 
 def pull_pause_events(token, from_iso, to_iso):
@@ -265,7 +296,7 @@ def compute(token, year, month):
     claims = pull_month_claims(token, first.isoformat(), last.isoformat())
     rev = dict(pump=0.0, monitor=0.0, sensors=0.0, supplies=0.0)
     cogs = dict(pump=0.0, monitor=0.0, sensors=0.0, supplies=0.0, shipping=0.0)
-    pump_orders = monitor_orders = 0
+    pump_orders = monitor_orders = new_pumps = 0
     for c in claims:
         has_sens = has_supp = False
         codes = set()
@@ -276,6 +307,12 @@ def compute(token, year, month):
             codes.add(code)
             if code == "E0784":
                 rev["pump"] += val
+                # Hardware ships on purchase / first rental month only —
+                # KI (months 2-3) and KJ (months 4-13) lines are rentals
+                # of a pump we already bought.
+                mods = cv.get(S_MODS, "").upper()
+                if "KI" not in mods and "KJ" not in mods:
+                    new_pumps += 1
             elif code == "E2103":
                 rev["monitor"] += val
             elif code == "A4239":
@@ -295,6 +332,11 @@ def compute(token, year, month):
         pump_only = codes and codes <= {"E0784"}
         if not pump_only:
             cogs["shipping"] += SHIPPING_PER_ORDER
+
+    # Pump/monitor hardware COGS from Cardinal SKU averages (Brandon 2026-08-01).
+    avg_pump, avg_monitor, n_pump_skus, n_mon_skus = pull_hardware_avg_costs(token)
+    cogs["pump"] = round(avg_pump * new_pumps, 2)
+    cogs["monitor"] = round(avg_monitor * monitor_orders, 2)
 
     # 3. Attrition from activity log (whole calendar month, ET-agnostic UTC pad)
     events = pull_pause_events(
@@ -326,6 +368,9 @@ def compute(token, year, month):
         "avg": dict(weighted=avg_weighted, sensors=avg_sens, supplies=avg_supp),
         "cogs": {k: round(v, 2) for k, v in cogs.items()},
         "orders": dict(pump=pump_orders, monitor=monitor_orders),
+        "hardware": dict(new_pumps=new_pumps, avg_pump_cost=avg_pump,
+                         avg_monitor_cost=avg_monitor,
+                         pump_skus=n_pump_skus, monitor_skus=n_mon_skus),
         "claims_counted": len(claims),
     }
 
