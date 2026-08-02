@@ -104,6 +104,14 @@ function MonthEndPill({ m }: { m?: string }) {
     </span>
   );
 }
+function LiveSyncingPill() {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold tracking-wide text-emerald-700">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+      LIVE · SYNCING
+    </span>
+  );
+}
 
 function Sparkline({ values }: { values: (number | null)[] }) {
   const pts = values.filter((v): v is number => v !== null);
@@ -131,6 +139,10 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
   const { data: patients, usingMock } = useSubscriptionPatients();
   const live = useMemo(() => {
     if (!patients || usingMock) return null;
+    // Persisted cache from a pre-rawPatientStatus build would count 0
+    // actives — treat that shape as "not live yet" and let the refetch
+    // that's already in flight replace it.
+    if (!(patients as any[]).some((p) => p.rawPatientStatus !== undefined)) return null;
     let active = 0, arr = 0, arp = 0;
     for (const p of patients as any[]) {
       // strict board status — the ops-normalized patientStatus folds
@@ -160,7 +172,11 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
   const activeShown = live?.active ?? (typeof snapActive === "number" ? snapActive : undefined);
   const arrShown = live?.arr ?? (typeof snapArr === "number" ? snapArr : undefined);
   const arpShown = live?.arp ?? (typeof snapArp === "number" ? snapArp : undefined);
-  const heroPill = live ? <LivePill /> : <MonthEndPill m={asOf} />;
+  // Three hero states: live numbers in hand → LIVE; token present and the
+  // board pull still in flight → LIVE · SYNCING (snapshot values shown until
+  // it lands); mock / no token / hard error → MONTH-END fallback.
+  const liveSyncing = !live && !usingMock;
+  const heroPill = live ? <LivePill /> : liveSyncing ? <LiveSyncingPill /> : <MonthEndPill m={asOf} />;
 
   const metricRows = tab.rows.filter((r) => r.row >= 4 && r.row <= 14 && r.label);
 
@@ -181,12 +197,62 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
     const hist = data.history;
     const histRow = hist ? findRow(hist, "Total unique patients") : undefined;
     const certRow = findRow(m, "Total unique patients");
-    const pts: { month: string; backfilled: number | null; certified: number | null }[] = [];
+    // Merge by month label — the backfilled series overlaps the first
+    // certified month (Jul 2026: 676 as-tracked vs 666 certified), so
+    // both land on the same x-axis point instead of duplicating it.
+    const map = new Map<string, { month: string; backfilled: number | null; certified: number | null }>();
     hist?.months.forEach((mo, i) =>
-      pts.push({ month: mo, backfilled: histRow?.raw[i] ?? null, certified: null }));
-    m.months.forEach((mo, i) =>
-      pts.push({ month: mo, backfilled: null, certified: certRow?.raw[i] ?? null }));
-    return pts;
+      map.set(mo, { month: mo, backfilled: histRow?.raw[i] ?? null, certified: null }));
+    m.months.forEach((mo, i) => {
+      const e = map.get(mo) ?? { month: mo, backfilled: null, certified: null };
+      e.certified = certRow?.raw[i] ?? null;
+      map.set(mo, e);
+    });
+    return [...map.values()];
+  }, [data, m]);
+
+  // Book growth off the merged timeline (certified value wins on overlap).
+  // MoM = latest month-end vs the prior one; YoY = vs 12 months earlier
+  // (as-tracked backfill — pre-system definitions, close enough for growth).
+  const bookGrowth = useMemo(() => {
+    const series = bookHistory
+      .map((p) => ({ month: p.month, v: p.certified ?? p.backfilled }))
+      .filter((p): p is { month: string; v: number } => p.v !== null);
+    if (series.length < 2) return null;
+    const last = series[series.length - 1];
+    const prevPt = series[series.length - 2];
+    const yoyPt = series.length >= 13 ? series[series.length - 13] : undefined;
+    const pct = (a: number, b: number) => (b > 0 ? (a / b - 1) * 100 : null);
+    return {
+      month: last.month,
+      mom: pct(last.v, prevPt.v),
+      yoy: yoyPt ? pct(last.v, yoyPt.v) : null,
+      yoyBase: yoyPt?.month,
+    };
+  }, [bookHistory]);
+  const fmtPct = (p: number | null | undefined) =>
+    p === null || p === undefined ? "—" : `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
+
+  // ARR & ARP: backfilled (History tab) + certified (Monthly Financials),
+  // merged by month label like the patient book.
+  const arrArpHistory = useMemo(() => {
+    const hist = data.history;
+    const hArr = hist ? findRow(hist, "ARR") : undefined;
+    const hArp = hist ? findRow(hist, "ARP") : undefined;
+    type Pt = { month: string; arrBack: number | null; arpBack: number | null; arr: number | null; arp: number | null };
+    const map = new Map<string, Pt>();
+    hist?.months.forEach((mo, i) => {
+      const a = hArr?.raw[i] ?? null, p = hArp?.raw[i] ?? null;
+      if (a !== null || p !== null)
+        map.set(mo, { month: mo, arrBack: a, arpBack: p, arr: null, arp: null });
+    });
+    m.months.forEach((mo, i) => {
+      const e = map.get(mo) ?? { month: mo, arrBack: null, arpBack: null, arr: null, arp: null };
+      e.arr = findRow(m, "Annualized gross revenue")?.raw[i] ?? null;
+      e.arp = findRow(m, "Annualized recurring profit")?.raw[i] ?? null;
+      map.set(mo, e);
+    });
+    return [...map.values()];
   }, [data, m]);
 
   return (
@@ -212,6 +278,10 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
               <span>
                 <span className="text-muted-foreground">Churn </span>
                 <span className="font-semibold tabular-nums italic">{churn ?? "—"}</span>
+              </span>
+              <span>
+                <span className="text-muted-foreground">Book MoM </span>
+                <span className="font-semibold tabular-nums">{fmtPct(bookGrowth?.mom)}</span>
               </span>
               <MonthEndPill m={asOf} />
             </div>
@@ -282,8 +352,22 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
       {/* Month-end trend charts */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="p-4">
-          <div className="flex items-center gap-2 text-[13px] font-semibold">
+          <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold">
             Total patient book (Active + Paused) <MonthEndPill />
+            {bookGrowth && (
+              <span className="ml-auto flex items-center gap-3 text-[12px] font-medium tabular-nums">
+                <span>
+                  <span className="text-muted-foreground font-normal">MoM </span>
+                  {fmtPct(bookGrowth.mom)}
+                </span>
+                <span>
+                  <span className="text-muted-foreground font-normal">
+                    YoY{bookGrowth.yoyBase ? ` (vs ${bookGrowth.yoyBase})` : ""}{" "}
+                  </span>
+                  {fmtPct(bookGrowth.yoy)}
+                </span>
+              </span>
+            )}
           </div>
           <div className="text-[12px] text-muted-foreground mb-1">
             Dashed = backfilled pre-system tracking · solid = certified snapshots (from Jul 2026).
@@ -339,17 +423,26 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
           <div className="flex items-center gap-2 text-[13px] font-semibold">
             ARR & ARP <MonthEndPill />
           </div>
+          <div className="text-[12px] text-muted-foreground mb-1">
+            Dashed = backfilled pre-system tracking · solid = certified snapshots (from Jul 2026).
+          </div>
           <ResponsiveContainer width="100%" height={190}>
-            <LineChart data={chartData} margin={{ top: 16, right: 16, bottom: 0, left: 0 }}>
+            <LineChart data={arrArpHistory} margin={{ top: 16, right: 16, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
               <XAxis dataKey="month" fontSize={11} tickLine={false} />
               <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} tickLine={false} width={52} />
               <Tooltip formatter={(v: number) => `$${Math.round(v).toLocaleString()}`} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Line dataKey="arrBack" name="ARR (backfilled)" stroke={SERIES_2.a} strokeWidth={2}
+                strokeDasharray="6 4" dot={{ r: 3, fill: SERIES_2.a }}
+                connectNulls={false} isAnimationActive={false} />
+              <Line dataKey="arpBack" name="ARP (backfilled)" stroke={SERIES_2.b} strokeWidth={2}
+                strokeDasharray="6 4" dot={{ r: 3, fill: SERIES_2.b }}
+                connectNulls={false} isAnimationActive={false} />
               <Line dataKey="arr" name="ARR" stroke={SERIES_2.a} strokeWidth={2}
-                dot={{ r: 5, fill: SERIES_2.a }} isAnimationActive={false} />
+                dot={{ r: 5, fill: SERIES_2.a }} connectNulls={false} isAnimationActive={false} />
               <Line dataKey="arp" name="ARP" stroke={SERIES_2.b} strokeWidth={2}
-                dot={{ r: 5, fill: SERIES_2.b }} isAnimationActive={false} />
+                dot={{ r: 5, fill: SERIES_2.b }} connectNulls={false} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         </Card>
@@ -380,6 +473,8 @@ const SUM_LABELS = [
   "Subscription gross margin %", "Net profit", "Net margin %",
   "Annualized gross revenue", "Annualized recurring profit",
   "Est. LTV", "Audit status",
+  // Per-patient sums — rev − COGS math up, so they read as results too.
+  "Avg order gross profit", "Avg annual gross profit per patient",
 ];
 
 function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
@@ -398,6 +493,32 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
         if (r.label.length > 120) continue;
         current.rows.push(r);
       }
+    }
+    // Insurance breakdowns: sort each payer run (≥6 consecutive value rows
+    // between subheads) highest → lowest by the latest month. Row numbers
+    // are re-assigned within the run so spacer/gap logic stays intact.
+    const lastIdx = tab.months.length - 1;
+    for (const s of out) {
+      if (!s.title.toUpperCase().startsWith("PRODUCT & INSURANCE MIX")) continue;
+      const sorted: SheetRow[] = [];
+      let run: SheetRow[] = [];
+      const flush = () => {
+        if (run.length >= 6) {
+          const rowNums = run.map((r) => r.row);
+          run = [...run]
+            .sort((a, b) => (b.raw[lastIdx] ?? -1) - (a.raw[lastIdx] ?? -1))
+            .map((r, i) => ({ ...r, row: rowNums[i] }));
+        }
+        sorted.push(...run);
+        run = [];
+      };
+      for (const r of s.rows) {
+        const isSubhead = !r.values.some((v) => v !== "");
+        if (isSubhead) { flush(); sorted.push(r); }
+        else run.push(r);
+      }
+      flush();
+      s.rows = sorted;
     }
     return out;
   }, [tab]);
@@ -473,7 +594,9 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
                       }
                       const isSub = r.label.startsWith("   ");
                       const isSum = SUM_LABELS.some((l) => label.startsWith(l));
-                      const isUnit = PER_UNIT_LABELS.some((l) => label.startsWith(l));
+                      // isSum wins over isUnit — "Avg order gross profit" etc.
+                      // are sums even though they share the "Avg" prefix.
+                      const isUnit = !isSum && PER_UNIT_LABELS.some((l) => label.startsWith(l));
                       const isPct = r.values.some((v) => v.endsWith("%"));
                       return (
                         <Fragment key={r.row}>

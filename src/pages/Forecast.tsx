@@ -65,13 +65,25 @@ function buildMonthly(claims: ClaimRow[], valueOf: (r: ClaimRow) => number, incl
     if (other !== 0) { row["Other"] = other; hasOther = true; }
     row.total = tot; return row;
   });
-  const sumCat = (key: string) => months.reduce((s, m) => s + (prod[m]?.[key] || 0), 0);
+  // Pies show the LATEST COMPLETE month (the current partial month would
+  // skew the mix), not the cumulative total.
+  const now = new Date();
+  const nowKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const full = months.filter((m) => m < nowKey);
+  const pieMonth = full.length ? full[full.length - 1] : months[months.length - 1];
+  const pieProd = prod[pieMonth] ?? {};
   const prodPie = [["Pump", "pump"], ["CGM", "cgm"], ["Supplies", "supplies"], ["Other", "other"]]
-    .map(([name, key]) => ({ name, value: sumCat(key) })).filter((d) => d.value > 0);
-  const otherTot = Object.entries(payTot).filter(([p]) => !topPayers.includes(p)).reduce((s, [, v]) => s + v, 0);
-  const payerPie = [...topPayers.map((p) => ({ name: p, value: payTot[p] })), ...(otherTot > 0 ? [{ name: "Other", value: otherTot }] : [])].filter((d) => d.value > 0);
+    .map(([name, key]) => ({ name, value: pieProd[key] || 0 })).filter((d) => d.value > 0);
+  const piePay: Record<string, number> = {};
+  for (const [p, v] of Object.entries(pay[pieMonth] ?? {})) {
+    if (p === "month") continue;
+    const k = topPayers.includes(p) ? p : "Other";
+    piePay[k] = (piePay[k] || 0) + (v as number);
+  }
+  const payerPie = [...topPayers, "Other"]
+    .map((p) => ({ name: p, value: piePay[p] || 0 })).filter((d) => d.value > 0);
   const total = Object.values(payTot).reduce((s, v) => s + v, 0);
-  return { byProduct, byPayer, payerKeys: [...topPayers, ...(hasOther ? ["Other"] : [])], prodPie, payerPie, total };
+  return { byProduct, byPayer, payerKeys: [...topPayers, ...(hasOther ? ["Other"] : [])], prodPie, payerPie, pieMonth, total };
 }
 const PUMP_COST = 3800;  // flat pump COGS (not on the subscription board)
 
@@ -604,7 +616,20 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
         </Card>
 
         {monthlyRev.byProduct.length > 0 && (
-          <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground pt-2">Revenue</h2>
+          <div className="pt-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Historical cash flow · revenue collected
+              </h2>
+              <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-bold tracking-wide text-amber-700">
+                CASH · BY PAY DATE — NOT A FORECAST
+              </span>
+            </div>
+            <p className="text-[12px] text-muted-foreground mt-0.5">
+              Actual dollars in the door, bucketed by when we got paid — not by date of service.
+              For the DOS accrual view of revenue &amp; gross profit, see the KPIs / Monthly Model tabs.
+            </p>
+          </div>
         )}
         {monthlyRev.byProduct.length > 0 && (
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -653,7 +678,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             </Card>
             <Card className="p-6">
               <h3 className="text-[18px] font-semibold">Revenue mix · by product</h3>
-              <p className="text-[13px] text-muted-foreground mt-1">Share of total collected (Apr onward).</p>
+              <p className="text-[13px] text-muted-foreground mt-1">Share of {monLabel(monthlyRev.pieMonth)} collections — latest complete month, by pay date.</p>
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie data={monthlyRev.prodPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100}
@@ -667,7 +692,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             </Card>
             <Card className="p-6">
               <h3 className="text-[18px] font-semibold">Revenue mix · by payer</h3>
-              <p className="text-[13px] text-muted-foreground mt-1">Share of total collected (Apr onward), top 8 + Other.</p>
+              <p className="text-[13px] text-muted-foreground mt-1">Share of {monLabel(monthlyRev.pieMonth)} collections (latest complete month, by pay date), top 8 + Other.</p>
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie data={monthlyRev.payerPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100}
@@ -684,8 +709,18 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
 
         {monthlyGP.byProduct.length > 0 && (
           <div className="pt-2">
-            <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground">Gross Profit</h2>
-            <p className="text-[12px] text-muted-foreground mt-0.5">Excludes Medicare A&amp;B pumps — they bill as a 13-month rental, so COGS doesn't map cleanly to a single month yet.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-[15px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Historical cash flow · gross profit on collections
+              </h2>
+              <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-bold tracking-wide text-amber-700">
+                CASH · BY PAY DATE — NOT A FORECAST
+              </span>
+            </div>
+            <p className="text-[12px] text-muted-foreground mt-0.5">
+              Collected revenue − COGS, bucketed by pay date (not DOS). Excludes Medicare A&amp;B pumps —
+              they bill as a 13-month rental, so COGS doesn't map cleanly to a single month yet.
+            </p>
           </div>
         )}
         {monthlyGP.byProduct.length > 0 && (
@@ -735,7 +770,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             </Card>
             <Card className="p-6">
               <h3 className="text-[18px] font-semibold">Gross profit mix · by product</h3>
-              <p className="text-[13px] text-muted-foreground mt-1">Share of total gross profit (Apr onward).</p>
+              <p className="text-[13px] text-muted-foreground mt-1">Share of {monLabel(monthlyGP.pieMonth)} gross profit — latest complete month, by pay date.</p>
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie data={monthlyGP.prodPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100}
@@ -749,7 +784,7 @@ export function ForecastDashboard({ embedded = false }: { embedded?: boolean }) 
             </Card>
             <Card className="p-6">
               <h3 className="text-[18px] font-semibold">Gross profit mix · by payer</h3>
-              <p className="text-[13px] text-muted-foreground mt-1">Share of total gross profit (Apr onward), top 8 + Other.</p>
+              <p className="text-[13px] text-muted-foreground mt-1">Share of {monLabel(monthlyGP.pieMonth)} gross profit (latest complete month, by pay date), top 8 + Other.</p>
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie data={monthlyGP.payerPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100}
