@@ -68,8 +68,9 @@ C_SENS_REV, C_SENS_COST = "numeric_mkxj6a3d", "numeric_mkxjxmga"
 C_SUPP_REV, C_SUPP_COST = "numeric_mm27rypj", "numeric_mm27hem2"
 C_TOT_REV, C_SHIP, C_ARR = "numeric_mm2xsjm5", "numeric_mm2xxmp4", "numeric_mm2xsqyd"
 C_ARP = "numeric_mm2xdsvh"   # Annual Recurring Profit
+C_DOB = "text_mkvdefh1"      # DOB — patient identity key with name (dedupe)
 SUB_COLS = [C_STATUS, C_TYPE, C_PRIMARY, C_SENSTYPE, C_SENS_REV, C_SENS_COST,
-            C_SUPP_REV, C_SUPP_COST, C_TOT_REV, C_SHIP, C_ARR, C_ARP]
+            C_SUPP_REV, C_SUPP_COST, C_TOT_REV, C_SHIP, C_ARR, C_ARP, C_DOB]
 
 C_PAYOR = "color_mkxmhypt"  # Claims Board: Primary Payor label (for payer mix)
 C_PPAID = "numeric_mm115q76"  # Claims Board: Primary Paid (A) — realization check
@@ -641,10 +642,25 @@ def compute(token, year, month):
 
     def is_dual(s): return s.get(C_TYPE, "") == "Sensors & Supplies"
 
-    def bucket(pred):
-        g = [s for s in subs if pred(s)]
-        return dict(unique=len(g), sensors=sum(map(is_sens, g)),
-                    supplies=sum(map(is_supp, g)), dual=sum(map(is_dual, g)))
+    # ── Patient identity: name + DOB (Brandon 2026-08-02). Some patients
+    # intentionally carry SEPARATE Sensors and Supplies items (different
+    # order dates), so unique counts dedupe by (name, DOB); component
+    # counts (sensors/supplies subscriptions) stay per-item. A patient
+    # whose items span both products counts as dual even across two items.
+    def pkey(s):
+        return (s["name"].strip().lower(), (s.get(C_DOB, "") or "").strip())
+
+    by_patient_all = {}
+    for s in subs:
+        by_patient_all.setdefault(pkey(s), []).append(s)
+
+    def patient_bucket(keys, item_pred=lambda s: True):
+        sens = supp = dual = 0
+        for k in keys:
+            its = [s for s in by_patient_all.get(k, []) if item_pred(s)]
+            hs, hp = any(map(is_sens, its)), any(map(is_supp, its))
+            sens += hs; supp += hp; dual += hs and hp
+        return dict(unique=len(keys), sensors=sens, supplies=supp, dual=dual)
 
     def created_in_month(s):
         """Board item created during the target month (ET). New subscriptions
@@ -659,13 +675,49 @@ def compute(token, year, month):
             return False
         return first <= d <= last
 
+    # Patient-level status: Active if ANY of the patient's items is Active,
+    # else Paused if any is Paused — so Active + Paused = Total exactly
+    # (a patient with an active sensors item and a paused supplies item is
+    # one Active patient, not one of each).
+    def istat(s):
+        return s.get(C_STATUS, "").lower()
+
+    live_keys = [k for k, its in by_patient_all.items()
+                 if any(istat(s) in ("active", "paused") for s in its)]
+    active_keys = [k for k in live_keys
+                   if any(istat(s) == "active" for s in by_patient_all[k])]
+    paused_keys = [k for k in live_keys if k not in set(active_keys)]
+
+    # New = patient whose FIRST-EVER board item was created this month
+    # (a long-standing patient adding a second product item is not new).
+    def created_date(s):
+        raw = s.get("created_at", "")
+        if not raw:
+            return None
+        try:
+            d = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return d.astimezone(ZoneInfo("America/New_York")).date()
+        except ValueError:
+            return None
+
+    first_created = {}
+    for s in subs:
+        d = created_date(s)
+        if d is None:
+            continue
+        k = pkey(s)
+        if k not in first_created or d < first_created[k]:
+            first_created[k] = d
+    new_keys = [k for k, d in first_created.items() if first <= d <= last]
+
     counts = {
         # Total = the live book: Active + Paused only (Brandon 2026-08-01).
         # Excludes Not Active/Dead and blank-status items.
-        "total": bucket(lambda s: s.get(C_STATUS, "").lower() in ("active", "paused")),
-        "active": bucket(lambda s: s.get(C_STATUS, "").lower() == "active"),
-        "paused": bucket(lambda s: s.get(C_STATUS, "").lower() == "paused"),
-        "new": bucket(created_in_month),
+        "total": patient_bucket(live_keys,
+                                lambda s: istat(s) in ("active", "paused")),
+        "active": patient_bucket(active_keys, lambda s: istat(s) == "active"),
+        "paused": patient_bucket(paused_keys, lambda s: istat(s) == "paused"),
+        "new": patient_bucket(new_keys, created_in_month),
     }
 
     active = [s for s in subs if s.get(C_STATUS, "").lower() == "active"]
@@ -814,9 +866,17 @@ def compute(token, year, month):
             pause_new += 1
         elif end == "active":     # resumed from pause (or rare gone→active)
             pause_res += 1
-    churned = [by_id[p] for p in churned_ids if p in by_id]
-    attr = dict(unique=len(churned_ids), sensors=sum(map(is_sens, churned)),
-                supplies=sum(map(is_supp, churned)), dual=sum(map(is_dual, churned)))
+    # Patient-level churn: a patient churns only when they have NO Active/
+    # Paused item left at snapshot (dropping one of two product items while
+    # keeping the other live is a component change, not churn).
+    churned_items = [by_id[p] for p in churned_ids if p in by_id]
+    live_key_set = set(live_keys)
+    churned_by_key = {}
+    for s in churned_items:
+        churned_by_key.setdefault(pkey(s), []).append(s)
+    churned_keys = [k for k in churned_by_key if k not in live_key_set]
+    churned_id_set = {s["id"] for k in churned_keys for s in churned_by_key[k]}
+    attr = patient_bucket(churned_keys, lambda s: s["id"] in churned_id_set)
     flows = dict(pause_new=pause_new, pause_res=pause_res,
                  churn_from_active=churn_from_active)
 

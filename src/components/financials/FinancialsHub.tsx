@@ -144,10 +144,17 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
     // that's already in flight replace it.
     if (!(patients as any[]).some((p) => p.rawPatientStatus !== undefined)) return null;
     let active = 0, arr = 0, arp = 0;
+    // Dedupe by name + DOB — some patients intentionally carry separate
+    // Sensors and Supplies items (different order dates) and must count
+    // once, matching the sheet's patient-level unique counts.
+    const seenActive = new Set<string>();
     for (const p of patients as any[]) {
       // strict board status — the ops-normalized patientStatus folds
       // blank/"Not Active" into Active and would overcount (652 vs 613)
-      if (p.rawPatientStatus === "Active") active++;
+      if (p.rawPatientStatus === "Active") {
+        const k = `${(p.name || "").trim().toLowerCase()}|${(p.dob || "").trim()}`;
+        if (!seenActive.has(k)) { seenActive.add(k); active++; }
+      }
       if (!p.isNotActive) {
         // ARR on the components basis (sensors+supplies × fills/yr), same
         // as the sheet's Total ARR sum row; per-patient multiplier is
