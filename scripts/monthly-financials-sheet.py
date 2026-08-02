@@ -1165,6 +1165,7 @@ def _ensure_kpi_tab(svc):
         ["North star: 1,000 ACTIVE PATIENTS. All cells are formulas off the Monthly Financials / Realization tabs — edit those, never this one."],
         ["Metric"],
         ["Active unique patients"],
+        ["Total unique patients (Active + Paused)"],
         ["Active subscriptions"],
         ["Attach rate (subscriptions ÷ patient)"],
         ["Net patient adds (new − churned)"],
@@ -1192,14 +1193,14 @@ def _ensure_kpi_tab(svc):
          "fields": "userEnteredFormat"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 3, "endRowIndex": 4, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
-        numf(4, 5, "NUMBER", "#,##0"), numf(6, 6, "NUMBER", "0.00"),
-        numf(7, 7, "NUMBER", "+#,##0;-#,##0;0"), numf(8, 8, "PERCENT", "0.00%"),
-        numf(9, 9, "NUMBER", "#,##0"),
-        numf(10, 13, "CURRENCY", "$#,##0"), numf(14, 15, "PERCENT", "0.0%"),
+        numf(4, 6, "NUMBER", "#,##0"), numf(7, 7, "NUMBER", "0.00"),
+        numf(8, 8, "NUMBER", "+#,##0;-#,##0;0"), numf(9, 9, "PERCENT", "0.00%"),
+        numf(10, 10, "NUMBER", "#,##0"),
+        numf(11, 14, "CURRENCY", "$#,##0"), numf(15, 16, "PERCENT", "0.0%"),
         # % rows italicized (Brandon 2026-08-01)
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 7, "endRowIndex": 8, "startColumnIndex": 0, "endColumnIndex": 30},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 8, "endRowIndex": 9, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 13, "endRowIndex": 15, "startColumnIndex": 0, "endColumnIndex": 30},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 14, "endRowIndex": 16, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
         {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
          "properties": {"pixelSize": 320}, "fields": "pixelSize"}},
@@ -1225,19 +1226,20 @@ def write_kpi_column(svc, mcol, label):
     R = ROWS
     rows = {
         4: f"={mf}{R['active_u']}",
-        5: f"={mf}{R['active_tot']}",
-        6: f'=IF(N({kcol}4)=0,"",{kcol}5/{kcol}4)',
-        7: f"={mf}{R['net_adds']}",
-        8: f"={mf}{R['ltv_churn']}",
+        5: f"={mf}{R['total_u']}",
+        6: f"={mf}{R['active_tot']}",
+        7: f'=IF(N({kcol}4)=0,"",{kcol}6/{kcol}4)',
+        8: f"={mf}{R['net_adds']}",
+        9: f"={mf}{R['ltv_churn']}",
         # New patients onboarded — pipeline speed regardless of churn;
         # ties to the Monthly board's "New unique patients" row.
-        9: f"={mf}{R['new_u']}",
-        10: f"={mf}{R['arr_total']}",
-        11: f"={mf}{R['arp_total']}",
-        12: f"={mf}{R['pp_ann_rev']}",
-        13: f"={mf}{R['pp_ann_gp']}",
-        14: f"={mf}{R['sub_gm']}",
-        15: (f"=IFERROR(INDEX('{REAL_TAB}'!$12:$12,"
+        10: f"={mf}{R['new_u']}",
+        11: f"={mf}{R['arr_total']}",
+        12: f"={mf}{R['arp_total']}",
+        13: f"={mf}{R['pp_ann_rev']}",
+        14: f"={mf}{R['pp_ann_gp']}",
+        15: f"={mf}{R['sub_gm']}",
+        16: (f"=IFERROR(INDEX('{REAL_TAB}'!$12:$12,"
              f"MATCH({kcol}$3,'{REAL_TAB}'!$3:$3,0)),"")"),
     }
     data = [{"range": f"'{KPI_TAB}'!{kcol}{r}", "values": [[v]]} for r, v in rows.items()]

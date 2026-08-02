@@ -191,7 +191,7 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
   const liveSyncing = !live && !usingMock;
   const heroPill = live ? <LivePill /> : liveSyncing ? <LiveSyncingPill /> : <MonthEndPill m={asOf} />;
 
-  const metricRows = tab.rows.filter((r) => r.row >= 4 && r.row <= 15 && r.label);
+  const metricRows = tab.rows.filter((r) => r.row >= 4 && r.row <= 16 && r.label);
 
   // Month-end chart data from the Monthly Financials tab
   const m = data.monthly;
