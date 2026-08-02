@@ -14,7 +14,7 @@
  * numbers, summed from the Subscription Board query, and are labeled LIVE.
  */
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart,
@@ -397,33 +397,48 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {s.rows.filter((r) => r.values.some((v) => v !== "")).map((r) => {
+                    {(() => {
+                      let prev: SheetRow | null = null;
+                      return s.rows.filter((r) => r.values.some((v) => v !== "")).map((r) => {
                       const label = r.label.trim();
+                      const gapRows = prev ? r.row - prev.row - 1 : 0;
+                      const prevWasSum = prev !== null &&
+                        SUM_LABELS.some((l) => prev!.label.trim().startsWith(l));
+                      prev = r;
                       const isSub = r.label.startsWith("   ");
                       const isSum = SUM_LABELS.some((l) => label.startsWith(l));
                       const isUnit = PER_UNIT_LABELS.some((l) => label.startsWith(l));
                       const isPct = r.values.some((v) => v.endsWith("%"));
                       return (
-                        <tr key={r.row}>
-                          <td className={cn("py-1.5 pr-6",
-                            isSub && "pl-5 italic text-slate-400",
-                            isUnit && !isSub && "italic text-slate-500",
-                            isSum && "font-semibold border-t border-slate-300 pt-2",
-                            !isSub && !isSum && !isUnit && "font-medium")}>
-                            {label}
-                          </td>
-                          {r.values.map((v, i) => (
-                            <td key={i} className={cn("py-1.5 px-3 text-right tabular-nums",
-                              isSub && "italic text-slate-400",
+                        <Fragment key={r.row}>
+                          {gapRows > 0 && (
+                            <tr aria-hidden="true">
+                              <td colSpan={tab.months.length + 1}
+                                className={prevWasSum ? "h-5" : "h-2"} />
+                            </tr>
+                          )}
+                          <tr>
+                            <td className={cn("py-1.5 pr-6",
+                              isSub && "pl-5 italic text-slate-400",
                               isUnit && !isSub && "italic text-slate-500",
                               isSum && "font-semibold border-t border-slate-300 pt-2",
-                              !isSub && !isUnit && isPct && "italic text-slate-600")}>
-                              {v || "—"}
+                              !isSub && !isSum && !isUnit && "font-medium")}>
+                              {label}
                             </td>
-                          ))}
-                        </tr>
+                            {r.values.map((v, i) => (
+                              <td key={i} className={cn("py-1.5 px-3 text-right tabular-nums",
+                                isSub && "italic text-slate-400",
+                                isUnit && !isSub && "italic text-slate-500",
+                                isSum && "font-semibold border-t border-slate-300 pt-2",
+                                !isSub && !isUnit && isPct && "italic text-slate-600")}>
+                                {v || "—"}
+                              </td>
+                            ))}
+                          </tr>
+                        </Fragment>
                       );
-                    })}
+                      });
+                    })()}
                   </tbody>
                 </table>
               </div>
@@ -528,33 +543,45 @@ function RealizationView({ data }: { data: MonthlyFinancialsPayload }) {
             </tr>
           </thead>
           <tbody>
-            {tab.rows
+            {(() => {
+              let prev: SheetRow | null = null;
+              return tab.rows
               .filter((r) => r.row >= 4 && r.label && r.label.length < 120 && r.values.some((v) => v !== ""))
               .map((r) => {
                 const label = r.label.trim();
+                const gapRows = prev ? r.row - prev.row - 1 : 0;
+                prev = r;
                 const isSub = r.label.startsWith("   ");
                 const isSum = ["Adjusted Est. Pay", "Collected — total", "TRUE realization", "Remaining ("]
                   .some((l) => label.startsWith(l));
                 const isPct = r.values.some((v) => v.endsWith("%"));
                 return (
-                  <tr key={r.row}>
-                    <td className={cn("py-1.5 pr-6",
-                      isSub && "pl-5 italic text-slate-400",
-                      isSum && "font-semibold border-t border-slate-300",
-                      !isSub && !isSum && "font-medium")}>
-                      {label}
-                    </td>
-                    {r.values.map((v, i) => (
-                      <td key={i} className={cn("py-1.5 px-3 text-right tabular-nums",
-                        isSub && "italic text-slate-400",
+                  <Fragment key={r.row}>
+                    {gapRows > 0 && (
+                      <tr aria-hidden="true">
+                        <td colSpan={months.length + 1} className="h-4" />
+                      </tr>
+                    )}
+                    <tr>
+                      <td className={cn("py-1.5 pr-6",
+                        isSub && "pl-5 italic text-slate-400",
                         isSum && "font-semibold border-t border-slate-300",
-                        !isSub && isPct && "italic text-slate-600")}>
-                        {v || "—"}
+                        !isSub && !isSum && "font-medium")}>
+                        {label}
                       </td>
-                    ))}
-                  </tr>
+                      {r.values.map((v, i) => (
+                        <td key={i} className={cn("py-1.5 px-3 text-right tabular-nums",
+                          isSub && "italic text-slate-400",
+                          isSum && "font-semibold border-t border-slate-300",
+                          !isSub && isPct && "italic text-slate-600")}>
+                          {v || "—"}
+                        </td>
+                      ))}
+                    </tr>
+                  </Fragment>
                 );
-              })}
+              });
+            })()}
           </tbody>
         </table>
       </Card>
