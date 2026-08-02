@@ -1205,15 +1205,26 @@ def _ensure_kpi_tab(svc):
     return sid
 
 
-def write_kpi_column(svc, col, label):
-    """One formula column on the KPIs tab, same column letter as Monthly."""
+def write_kpi_column(svc, mcol, label):
+    """One formula column on the KPIs tab.
+
+    The KPI column is resolved by matching the month label in header row 3
+    (NOT by reusing Monthly's column letter — the KPIs tab carries extra
+    backfill columns, e.g. May/Jun 2026 ARR/ARP, so letters can differ).
+    `mcol` is the Monthly Financials column the formulas point at.
+    """
     _ensure_kpi_tab(svc)
-    mf = f"'{TAB}'!{col}"
+    hdr = svc.spreadsheets().values().get(
+        spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!3:3",
+        valueRenderOption="UNFORMATTED_VALUE").execute().get("values", [[]])[0]
+    norm = [norm_header(h) for h in hdr]
+    kcol = col_letter(norm.index(label) if label in norm else max(len(hdr), 1))
+    mf = f"'{TAB}'!{mcol}"
     R = ROWS
     rows = {
         4: f"={mf}{R['active_u']}",
         5: f"={mf}{R['active_tot']}",
-        6: f'=IF(N({col}4)=0,"",{col}5/{col}4)',
+        6: f'=IF(N({kcol}4)=0,"",{kcol}5/{kcol}4)',
         7: f"={mf}{R['net_adds']}",
         8: f"={mf}{R['ltv_churn']}",
         # New patients onboarded — pipeline speed regardless of churn;
@@ -1225,12 +1236,12 @@ def write_kpi_column(svc, col, label):
         13: f"={mf}{R['pp_ann_gp']}",
         14: f"={mf}{R['sub_gm']}",
         15: (f"=IFERROR(INDEX('{REAL_TAB}'!$12:$12,"
-             f"MATCH({col}{3},'{REAL_TAB}'!$3:$3,0)),"")"),
+             f"MATCH({kcol}$3,'{REAL_TAB}'!$3:$3,0)),"")"),
     }
-    data = [{"range": f"'{KPI_TAB}'!{col}{r}", "values": [[v]]} for r, v in rows.items()]
+    data = [{"range": f"'{KPI_TAB}'!{kcol}{r}", "values": [[v]]} for r, v in rows.items()]
     svc.spreadsheets().values().batchUpdate(spreadsheetId=SHEET_ID,
         body={"valueInputOption": "USER_ENTERED", "data": data}).execute()
-    svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!{col}3",
+    svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!{kcol}3",
         valueInputOption="RAW", body={"values": [[label]]}).execute()
 
 
