@@ -40,6 +40,7 @@ interface MonthlyFinancialsPayload {
   kpis: SheetTab;
   monthly: SheetTab;
   realization: SheetTab;
+  history?: SheetTab;
   error?: string;
 }
 
@@ -174,6 +175,20 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
     arp: findRow(m, "Annualized recurring profit")?.raw[i] ?? null,
   }));
 
+  // Patient book history: backfilled (pre-system tracking) + certified
+  // month-end snapshots, one continuous timeline with a visible handoff.
+  const bookHistory = useMemo(() => {
+    const hist = data.history;
+    const histRow = hist ? findRow(hist, "Total unique patients") : undefined;
+    const certRow = findRow(m, "Total unique patients");
+    const pts: { month: string; backfilled: number | null; certified: number | null }[] = [];
+    hist?.months.forEach((mo, i) =>
+      pts.push({ month: mo, backfilled: histRow?.raw[i] ?? null, certified: null }));
+    m.months.forEach((mo, i) =>
+      pts.push({ month: mo, backfilled: null, certified: certRow?.raw[i] ?? null }));
+    return pts;
+  }, [data, m]);
+
   return (
     <div className="space-y-4">
       {/* Hero: LIVE north stars — patients left, key financials right */}
@@ -265,7 +280,30 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
       </Card>
 
       {/* Month-end trend charts */}
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-[13px] font-semibold">
+            Total patient book (Active + Paused) <MonthEndPill />
+          </div>
+          <div className="text-[12px] text-muted-foreground mb-1">
+            Dashed = backfilled pre-system tracking · solid = certified snapshots (from Jul 2026).
+          </div>
+          <ResponsiveContainer width="100%" height={190}>
+            <LineChart data={bookHistory} margin={{ top: 12, right: 16, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+              <XAxis dataKey="month" fontSize={10} tickLine={false} interval="preserveStartEnd" />
+              <YAxis fontSize={11} tickLine={false} width={40} />
+              <Tooltip />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Line dataKey="backfilled" name="Backfilled (as tracked)" stroke="#64748b"
+                strokeWidth={2} strokeDasharray="6 4" dot={{ r: 3, fill: "#64748b" }}
+                connectNulls={false} isAnimationActive={false} />
+              <Line dataKey="certified" name="Certified month-end" stroke="#0284c7"
+                strokeWidth={2} dot={{ r: 5, fill: "#0284c7" }}
+                connectNulls={false} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
         <Card className="p-4">
           <div className="flex items-center gap-2 text-[13px] font-semibold">
             Active unique patients <MonthEndPill />
