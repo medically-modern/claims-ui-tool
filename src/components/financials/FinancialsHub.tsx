@@ -403,22 +403,6 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
         </Card>
         <Card className="p-4">
           <div className="flex items-center gap-2 text-[13px] font-semibold">
-            Revenue & gross profit <MonthEndPill />
-          </div>
-          <ResponsiveContainer width="100%" height={190}>
-            <BarChart data={chartData} margin={{ top: 16, right: 8, bottom: 0, left: 0 }} barCategoryGap="30%">
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-              <XAxis dataKey="month" fontSize={11} tickLine={false} />
-              <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} tickLine={false} width={52} />
-              <Tooltip formatter={(v: number) => `$${Math.round(v).toLocaleString()}`} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar dataKey="revenue" name="Revenue" fill={SERIES_2.a} radius={[4, 4, 0, 0]} isAnimationActive={false} />
-              <Bar dataKey="gp" name="Gross profit" fill={SERIES_2.b} radius={[4, 4, 0, 0]} isAnimationActive={false} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 text-[13px] font-semibold">
             ARR & ARP <MonthEndPill />
           </div>
           <ResponsiveContainer width="100%" height={190}>
@@ -430,6 +414,22 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Bar dataKey="arr" name="ARR" fill={SERIES_2.a} radius={[4, 4, 0, 0]} isAnimationActive={false} />
               <Bar dataKey="arp" name="ARP" fill={SERIES_2.b} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-[13px] font-semibold">
+            Revenue & gross profit <MonthEndPill />
+          </div>
+          <ResponsiveContainer width="100%" height={190}>
+            <BarChart data={chartData} margin={{ top: 16, right: 8, bottom: 0, left: 0 }} barCategoryGap="30%">
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+              <XAxis dataKey="month" fontSize={11} tickLine={false} />
+              <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} tickLine={false} width={52} />
+              <Tooltip formatter={(v: number) => `$${Math.round(v).toLocaleString()}`} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Bar dataKey="revenue" name="Revenue" fill={SERIES_2.a} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              <Bar dataKey="gp" name="Gross profit" fill={SERIES_2.b} radius={[4, 4, 0, 0]} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
         </Card>
