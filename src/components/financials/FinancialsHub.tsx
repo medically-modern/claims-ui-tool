@@ -330,22 +330,28 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
             {metricRows.map((r) => {
               const isPct = r.values.some((v) => v.endsWith("%"));
               const isRealization = r.label.toLowerCase().startsWith("true realization");
-              const immature = isRealization && asOf !== undefined && monthsOld(asOf) < 2;
+              const rowImmature = isRealization && asOf !== undefined && monthsOld(asOf) < 2;
               return (
-                <tr key={r.row} className={cn("border-b last:border-0 border-slate-100", immature && "opacity-50")}>
+                <tr key={r.row} className="border-b last:border-0 border-slate-100">
                   <td className={cn("py-2 pr-4 font-medium", isPct && "italic")}>
                     {isRealization ? "True realization %" : r.label}
-                    {immature && (
+                    {rowImmature && (
                       <Badge variant="outline" className="ml-2 text-[10px] border-amber-300 bg-amber-50 text-amber-700">
-                        matures — ignore until 2+ mo old
+                        young months mature in place — ignore until 2+ mo old
                       </Badge>
                     )}
                   </td>
-                  {r.values.map((v, i) => (
-                    <td key={i} className={cn("py-2 px-3 text-right tabular-nums", isPct && "italic text-slate-600")}>
-                      {v || "—"}
-                    </td>
-                  ))}
+                  {r.values.map((v, i) => {
+                    // Dim only the immature CELLS (young DOS months), not the
+                    // whole row — May/Jun backfill columns are already mature.
+                    const cellImmature = isRealization && monthsOld(tab.months[i] ?? "") < 2;
+                    return (
+                      <td key={i} className={cn("py-2 px-3 text-right tabular-nums",
+                        isPct && "italic text-slate-600", cellImmature && "opacity-40")}>
+                        {v || "—"}
+                      </td>
+                    );
+                  })}
                   <td className="py-2 pl-5"><Sparkline values={r.raw} /></td>
                 </tr>
               );
