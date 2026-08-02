@@ -350,6 +350,21 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
       {/* Month-end trend charts */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="p-4">
+          <div className="flex items-center gap-2 text-[13px] font-semibold">
+            Active unique patients <MonthEndPill />
+          </div>
+          <ResponsiveContainer width="100%" height={190}>
+            <LineChart data={chartData} margin={{ top: 16, right: 16, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+              <XAxis dataKey="month" fontSize={11} tickLine={false} />
+              <YAxis fontSize={11} tickLine={false} width={40} />
+              <Tooltip />
+              <Line dataKey="active" name="Active unique patients" stroke={SERIES_2.a}
+                strokeWidth={2} dot={{ r: 5, fill: SERIES_2.a }} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+        <Card className="p-4">
           <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold">
             Total patient book (Active + Paused) <MonthEndPill />
             {bookGrowth && (
@@ -381,21 +396,6 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
         </Card>
         <Card className="p-4">
           <div className="flex items-center gap-2 text-[13px] font-semibold">
-            Active unique patients <MonthEndPill />
-          </div>
-          <ResponsiveContainer width="100%" height={190}>
-            <LineChart data={chartData} margin={{ top: 16, right: 16, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-              <XAxis dataKey="month" fontSize={11} tickLine={false} />
-              <YAxis fontSize={11} tickLine={false} width={40} />
-              <Tooltip />
-              <Line dataKey="active" name="Active unique patients" stroke={SERIES_2.a}
-                strokeWidth={2} dot={{ r: 5, fill: SERIES_2.a }} isAnimationActive={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 text-[13px] font-semibold">
             Revenue & gross profit <MonthEndPill />
           </div>
           <ResponsiveContainer width="100%" height={190}>
@@ -415,17 +415,15 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
             ARR & ARP <MonthEndPill />
           </div>
           <ResponsiveContainer width="100%" height={190}>
-            <LineChart data={arrArpHistory} margin={{ top: 16, right: 16, bottom: 0, left: 0 }}>
+            <BarChart data={arrArpHistory} margin={{ top: 16, right: 8, bottom: 0, left: 0 }} barCategoryGap="30%">
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
               <XAxis dataKey="month" fontSize={11} tickLine={false} />
               <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} tickLine={false} width={52} />
               <Tooltip formatter={(v: number) => `$${Math.round(v).toLocaleString()}`} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Line dataKey="arr" name="ARR" stroke={SERIES_2.a} strokeWidth={2}
-                dot={{ r: 4, fill: SERIES_2.a }} connectNulls={false} isAnimationActive={false} />
-              <Line dataKey="arp" name="ARP" stroke={SERIES_2.b} strokeWidth={2}
-                dot={{ r: 4, fill: SERIES_2.b }} connectNulls={false} isAnimationActive={false} />
-            </LineChart>
+              <Bar dataKey="arr" name="ARR" fill={SERIES_2.a} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              <Bar dataKey="arp" name="ARP" fill={SERIES_2.b} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+            </BarChart>
           </ResponsiveContainer>
         </Card>
       </div>
