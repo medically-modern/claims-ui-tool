@@ -192,23 +192,20 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
   }));
 
   // Patient book history: backfilled (pre-system tracking) + certified
-  // month-end snapshots, one continuous timeline with a visible handoff.
+  // month-end snapshots merged by month label into ONE continuous series
+  // (certified wins on overlap). Rendered uniformly per Brandon 2026-08-02.
   const bookHistory = useMemo(() => {
     const hist = data.history;
     const histRow = hist ? findRow(hist, "Total unique patients") : undefined;
     const certRow = findRow(m, "Total unique patients");
-    // Merge by month label — the backfilled series overlaps the first
-    // certified month (Jul 2026: 676 as-tracked vs 666 certified), so
-    // both land on the same x-axis point instead of duplicating it.
-    const map = new Map<string, { month: string; backfilled: number | null; certified: number | null }>();
-    hist?.months.forEach((mo, i) =>
-      map.set(mo, { month: mo, backfilled: histRow?.raw[i] ?? null, certified: null }));
+    const map = new Map<string, number | null>();
+    hist?.months.forEach((mo, i) => map.set(mo, histRow?.raw[i] ?? null));
     m.months.forEach((mo, i) => {
-      const e = map.get(mo) ?? { month: mo, backfilled: null, certified: null };
-      e.certified = certRow?.raw[i] ?? null;
-      map.set(mo, e);
+      const v = certRow?.raw[i];
+      if (v !== null && v !== undefined) map.set(mo, v);
+      else if (!map.has(mo)) map.set(mo, null);
     });
-    return [...map.values()];
+    return [...map.entries()].map(([month, book]) => ({ month, book }));
   }, [data, m]);
 
   // Book growth off the merged timeline (certified value wins on overlap).
@@ -216,7 +213,7 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
   // (as-tracked backfill — pre-system definitions, close enough for growth).
   const bookGrowth = useMemo(() => {
     const series = bookHistory
-      .map((p) => ({ month: p.month, v: p.certified ?? p.backfilled }))
+      .map((p) => ({ month: p.month, v: p.book }))
       .filter((p): p is { month: string; v: number } => p.v !== null);
     if (series.length < 2) return null;
     const last = series[series.length - 1];
@@ -239,17 +236,18 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
     const hist = data.history;
     const hArr = hist ? findRow(hist, "ARR") : undefined;
     const hArp = hist ? findRow(hist, "ARP") : undefined;
-    type Pt = { month: string; arrBack: number | null; arpBack: number | null; arr: number | null; arp: number | null };
+    type Pt = { month: string; arr: number | null; arp: number | null };
     const map = new Map<string, Pt>();
     hist?.months.forEach((mo, i) => {
       const a = hArr?.raw[i] ?? null, p = hArp?.raw[i] ?? null;
-      if (a !== null || p !== null)
-        map.set(mo, { month: mo, arrBack: a, arpBack: p, arr: null, arp: null });
+      if (a !== null || p !== null) map.set(mo, { month: mo, arr: a, arp: p });
     });
     m.months.forEach((mo, i) => {
-      const e = map.get(mo) ?? { month: mo, arrBack: null, arpBack: null, arr: null, arp: null };
-      e.arr = findRow(m, "Annualized gross revenue")?.raw[i] ?? null;
-      e.arp = findRow(m, "Annualized recurring profit")?.raw[i] ?? null;
+      const e = map.get(mo) ?? { month: mo, arr: null, arp: null };
+      const a = findRow(m, "Annualized gross revenue")?.raw[i];
+      const p = findRow(m, "Annualized recurring profit")?.raw[i];
+      if (a !== null && a !== undefined) e.arr = a;
+      if (p !== null && p !== undefined) e.arp = p;
       map.set(mo, e);
     });
     return [...map.values()];
@@ -369,21 +367,14 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
               </span>
             )}
           </div>
-          <div className="text-[12px] text-muted-foreground mb-1">
-            Dashed = backfilled pre-system tracking · solid = certified snapshots (from Jul 2026).
-          </div>
           <ResponsiveContainer width="100%" height={190}>
             <LineChart data={bookHistory} margin={{ top: 12, right: 16, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
               <XAxis dataKey="month" fontSize={10} tickLine={false} interval="preserveStartEnd" />
               <YAxis fontSize={11} tickLine={false} width={40} />
               <Tooltip />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Line dataKey="backfilled" name="Backfilled (as tracked)" stroke="#64748b"
-                strokeWidth={2} strokeDasharray="6 4" dot={{ r: 3, fill: "#64748b" }}
-                connectNulls={false} isAnimationActive={false} />
-              <Line dataKey="certified" name="Certified month-end" stroke="#0284c7"
-                strokeWidth={2} dot={{ r: 5, fill: "#0284c7" }}
+              <Line dataKey="book" name="Total patient book" stroke="#0284c7"
+                strokeWidth={2} dot={{ r: 3, fill: "#0284c7" }}
                 connectNulls={false} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
@@ -423,9 +414,6 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
           <div className="flex items-center gap-2 text-[13px] font-semibold">
             ARR & ARP <MonthEndPill />
           </div>
-          <div className="text-[12px] text-muted-foreground mb-1">
-            Dashed = backfilled pre-system tracking · solid = certified snapshots (from Jul 2026).
-          </div>
           <ResponsiveContainer width="100%" height={190}>
             <LineChart data={arrArpHistory} margin={{ top: 16, right: 16, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
@@ -433,16 +421,10 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
               <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} tickLine={false} width={52} />
               <Tooltip formatter={(v: number) => `$${Math.round(v).toLocaleString()}`} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Line dataKey="arrBack" name="ARR (backfilled)" stroke={SERIES_2.a} strokeWidth={2}
-                strokeDasharray="6 4" dot={{ r: 3, fill: SERIES_2.a }}
-                connectNulls={false} isAnimationActive={false} />
-              <Line dataKey="arpBack" name="ARP (backfilled)" stroke={SERIES_2.b} strokeWidth={2}
-                strokeDasharray="6 4" dot={{ r: 3, fill: SERIES_2.b }}
-                connectNulls={false} isAnimationActive={false} />
               <Line dataKey="arr" name="ARR" stroke={SERIES_2.a} strokeWidth={2}
-                dot={{ r: 5, fill: SERIES_2.a }} connectNulls={false} isAnimationActive={false} />
+                dot={{ r: 4, fill: SERIES_2.a }} connectNulls={false} isAnimationActive={false} />
               <Line dataKey="arp" name="ARP" stroke={SERIES_2.b} strokeWidth={2}
-                dot={{ r: 5, fill: SERIES_2.b }} connectNulls={false} isAnimationActive={false} />
+                dot={{ r: 4, fill: SERIES_2.b }} connectNulls={false} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         </Card>
