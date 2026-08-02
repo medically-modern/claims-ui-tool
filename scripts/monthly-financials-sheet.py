@@ -1167,6 +1167,7 @@ def _ensure_kpi_tab(svc):
         ["Attach rate (subscriptions ÷ patient)"],
         ["Net patient adds (new − churned)"],
         ["Churn % (pure — left the book)"],
+        ["New patients (onboarded this month)"],
         ["ARR"],
         ["ARP (annual recurring profit)"],
         ["Avg gross revenue / patient (annual)"],
@@ -1191,11 +1192,12 @@ def _ensure_kpi_tab(svc):
          "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
         numf(4, 5, "NUMBER", "#,##0"), numf(6, 6, "NUMBER", "0.00"),
         numf(7, 7, "NUMBER", "+#,##0;-#,##0;0"), numf(8, 8, "PERCENT", "0.00%"),
-        numf(9, 12, "CURRENCY", "$#,##0"), numf(13, 14, "PERCENT", "0.0%"),
+        numf(9, 9, "NUMBER", "#,##0"),
+        numf(10, 13, "CURRENCY", "$#,##0"), numf(14, 15, "PERCENT", "0.0%"),
         # % rows italicized (Brandon 2026-08-01)
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 7, "endRowIndex": 8, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 12, "endRowIndex": 14, "startColumnIndex": 0, "endColumnIndex": 30},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 13, "endRowIndex": 15, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
         {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
          "properties": {"pixelSize": 320}, "fields": "pixelSize"}},
@@ -1214,12 +1216,15 @@ def write_kpi_column(svc, col, label):
         6: f'=IF(N({col}4)=0,"",{col}5/{col}4)',
         7: f"={mf}{R['net_adds']}",
         8: f"={mf}{R['ltv_churn']}",
-        9: f"={mf}{R['arr_total']}",
-        10: f"={mf}{R['arp_total']}",
-        11: f"={mf}{R['pp_ann_rev']}",
-        12: f"={mf}{R['pp_ann_gp']}",
-        13: f"={mf}{R['sub_gm']}",
-        14: (f"=IFERROR(INDEX('{REAL_TAB}'!$12:$12,"
+        # New patients onboarded — pipeline speed regardless of churn;
+        # ties to the Monthly board's "New unique patients" row.
+        9: f"={mf}{R['new_u']}",
+        10: f"={mf}{R['arr_total']}",
+        11: f"={mf}{R['arp_total']}",
+        12: f"={mf}{R['pp_ann_rev']}",
+        13: f"={mf}{R['pp_ann_gp']}",
+        14: f"={mf}{R['sub_gm']}",
+        15: (f"=IFERROR(INDEX('{REAL_TAB}'!$12:$12,"
              f"MATCH({col}{3},'{REAL_TAB}'!$3:$3,0)),"")"),
     }
     data = [{"range": f"'{KPI_TAB}'!{col}{r}", "values": [[v]]} for r, v in rows.items()]
