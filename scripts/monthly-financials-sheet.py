@@ -157,7 +157,7 @@ ROWS = {
     "net_adds": 45,   # new − churned (formula)
     # Pause flow (leading indicators, NOT attrition)
     "pause_new": 46, "pause_res": 47, "pause_net": 48,
-    "arr_total": 51, "arr_sens": 52, "arr_supp": 53,
+    "arr_sens": 51, "arr_supp": 52, "arr_total": 53,  # total = sum row below components
     "arp_total": 54,  # Annual Recurring Profit (board ARP col, same population as ARR)
     "rev_pump": 56, "rev_monitor": 57, "rev_sensor": 58, "rev_supplies": 59,
     "rev_total": 60,
@@ -924,7 +924,10 @@ def write_column(svc, kpis, year, month, dry_run=False):
         **{R[f"{blk}_tot"]: f"={col}{R[f'{blk}_sens']}+{col}{R[f'{blk}_supp']}"
            for blk in ("total", "active", "paused", "new", "attr")},
         R["net_adds"]: f"={col}{R['new_u']}-{col}{R['attr_u']}",
-        R["arr_total"]: arr["total"], R["arr_sens"]: arr["sensors"], R["arr_supp"]: arr["supplies"],
+        R["arr_sens"]: arr["sensors"], R["arr_supp"]: arr["supplies"],
+        # Total ARR ties to its components by construction (Brandon 2026-08-02);
+        # the board ARR column sum differs ~0.4% (shipping/rounding) — components win.
+        R["arr_total"]: f"={col}{R['arr_sens']}+{col}{R['arr_supp']}",
         R["arp_total"]: arr["arp"],
         R["rev_pump"]: rev["pump"], R["rev_monitor"]: rev["monitor"],
         R["rev_sensor"]: rev["sensors"], R["rev_supplies"]: rev["supplies"],

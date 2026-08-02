@@ -399,12 +399,33 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
                   <tbody>
                     {(() => {
                       let prev: SheetRow | null = null;
-                      return s.rows.filter((r) => r.values.some((v) => v !== "")).map((r) => {
+                      return s.rows
+                        .filter((r) => r.values.some((v) => v !== "") || r.label.trim().length > 0)
+                        .map((r) => {
+                      const isSubhead = !r.values.some((v) => v !== "");
                       const label = r.label.trim();
                       const gapRows = prev ? r.row - prev.row - 1 : 0;
                       const prevWasSum = prev !== null &&
                         SUM_LABELS.some((l) => prev!.label.trim().startsWith(l));
                       prev = r;
+                      if (isSubhead) {
+                        return (
+                          <Fragment key={r.row}>
+                            {gapRows > 0 && (
+                              <tr aria-hidden="true">
+                                <td colSpan={tab.months.length + 1}
+                                  className={prevWasSum ? "h-5" : "h-2"} />
+                              </tr>
+                            )}
+                            <tr>
+                              <td colSpan={tab.months.length + 1}
+                                className="pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                {r.label.trim()}
+                              </td>
+                            </tr>
+                          </Fragment>
+                        );
+                      }
                       const isSub = r.label.startsWith("   ");
                       const isSum = SUM_LABELS.some((l) => label.startsWith(l));
                       const isUnit = PER_UNIT_LABELS.some((l) => label.startsWith(l));
