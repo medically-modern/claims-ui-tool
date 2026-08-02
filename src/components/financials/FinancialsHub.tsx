@@ -136,8 +136,15 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
       // blank/"Not Active" into Active and would overcount (652 vs 613)
       if (p.rawPatientStatus === "Active") active++;
       if (!p.isNotActive) {
-        arr += p.financials?.arr ?? 0;
-        arp += p.financials?.arp ?? 0;
+        // ARR on the components basis (sensors+supplies × fills/yr), same
+        // as the sheet's Total ARR sum row; per-patient multiplier is
+        // recovered from the board's own arr/totalRevenue ratio.
+        const f = p.financials;
+        if (f) {
+          const mult = f.totalRevenue > 0 ? f.arr / f.totalRevenue : 0;
+          arr += (f.sensorsRevenue + f.suppliesRevenue) * mult;
+          arp += f.arp ?? 0;
+        }
       }
     }
     return { active, arr, arp };
