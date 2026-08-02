@@ -179,31 +179,34 @@ ROWS = {
     # Net profit is total-only (fixed costs don't allocate to products —
     # Brandon 2026-08-01); per-product economics stop at gross profit.
     "np_total": 95, "nm_total": 96,
-    # Mix section (2026-08-01): product shares are formulas off the rows
-    # above; payer shares are computed values (12 fixed family rows).
-    "mixrev_pump": 99, "mixrev_monitor": 100, "mixrev_sensor": 101, "mixrev_supplies": 102,
-    "mixgp_pump": 104, "mixgp_monitor": 105, "mixgp_sensor": 106, "mixgp_supplies": 107,
-    "payer_rev_start": 110,   # 12 rows, PAYER_FAMILIES order
-    "payer_gp_start": 124,    # 12 rows, PAYER_FAMILIES order
+    # Mix section (2026-08-02 layout): "% of revenue"/"% of gross profit"
+    # subhead rows at 99/105; product rows carry plain names. Product
+    # shares are formulas off the rows above; payer shares are computed
+    # values (12 fixed family rows).
+    "mixrev_pump": 100, "mixrev_monitor": 101, "mixrev_sensor": 102, "mixrev_supplies": 103,
+    "mixgp_pump": 106, "mixgp_monitor": 107, "mixgp_sensor": 108, "mixgp_supplies": 109,
+    "payer_rev_start": 112,   # 12 rows, PAYER_FAMILIES order
+    "payer_gp_start": 126,    # 12 rows, PAYER_FAMILIES order
     # Per-patient unit economics (weighted over Active patients with
-    # revenue; COGS = sensors+supplies only, no hardware/shipping)
-    "pp_order_rev": 138, "pp_order_cogs": 139, "pp_order_gp": 140,
-    "pp_ann_rev": 142, "pp_ann_cogs": 143, "pp_ann_gp": 144,
+    # revenue; COGS = sensors + supplies + shipping, no hardware).
+    # GM rows (2026-08-02): gp ÷ rev formulas.
+    "pp_order_rev": 140, "pp_order_cogs": 141, "pp_order_gp": 142, "pp_order_gm": 143,
+    "pp_ann_rev": 145, "pp_ann_cogs": 146, "pp_ann_gp": 147, "pp_ann_gm": 148,
     # LTV & pump payback — churn basis = PURE churn (left book)
-    "ltv_churn": 147, "ltv_life": 148, "ltv_val": 149,
-    "pb_new_pumps": 151, "pb_spend": 152, "pb_rentals": 153,
-    "pb_rental_rev": 154, "pb_months": 155,
+    "ltv_churn": 151, "ltv_life": 152, "ltv_val": 153,
+    "pb_new_pumps": 155, "pb_spend": 156, "pb_rentals": 157,
+    "pb_rental_rev": 158, "pb_months": 159,
     # Month-over-month deltas (formulas vs previous column; blank on first)
-    "d_rev": 158, "d_gp": 159, "d_np": 160, "d_arr": 161,
-    "d_active": 162, "d_new": 163, "d_attr": 164,
+    "d_rev": 162, "d_gp": 163, "d_np": 164, "d_arr": 165,
+    "d_active": 166, "d_new": 167, "d_attr": 168,
     # Self-audit footer
-    "audit_revsum": 167, "audit_gpsum": 168, "audit_unmatched": 169,
-    "audit_unknown": 170, "audit_blankstatus": 171,
-    "audit_rollfwd_total": 172,   # Total − (prev Total + New − Churned)
-    "audit_rollfwd_active": 173,  # Active − (prev Active + New − Paused + Resumed − Churned)
-    "audit_status": 174,
+    "audit_revsum": 171, "audit_gpsum": 172, "audit_unmatched": 173,
+    "audit_unknown": 174, "audit_blankstatus": 175,
+    "audit_rollfwd_total": 176,   # Total − (prev Total + New − Churned)
+    "audit_rollfwd_active": 177,  # Active − (prev Active + New − Paused + Resumed − Churned)
+    "audit_status": 178,
 }
-LAST_ROW = 174
+LAST_ROW = 178
 
 # ── Realization tab (own tab — vintage analysis by DOS month) ──────────────
 REAL_TAB = "Realization"
@@ -1045,9 +1048,13 @@ def write_column(svc, kpis, year, month, dry_run=False):
     cells[R["pp_order_rev"]] = pp["order_rev"]
     cells[R["pp_order_cogs"]] = pp["order_cogs"]
     cells[R["pp_order_gp"]] = f"={col}{R['pp_order_rev']}-{col}{R['pp_order_cogs']}"
+    cells[R["pp_order_gm"]] = (f'=IF(N({col}{R["pp_order_rev"]})=0,"",'
+                               f'{col}{R["pp_order_gp"]}/{col}{R["pp_order_rev"]})')
     cells[R["pp_ann_rev"]] = pp["ann_rev"]
     cells[R["pp_ann_cogs"]] = pp["ann_cogs"]
     cells[R["pp_ann_gp"]] = f"={col}{R['pp_ann_rev']}-{col}{R['pp_ann_cogs']}"
+    cells[R["pp_ann_gm"]] = (f'=IF(N({col}{R["pp_ann_rev"]})=0,"",'
+                             f'{col}{R["pp_ann_gp"]}/{col}{R["pp_ann_rev"]})')
 
     # LTV: churn = attrition / active; lifetime = 1/churn months; LTV =
     # lifetime in years × annual GP per patient.
