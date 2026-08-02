@@ -113,19 +113,25 @@ function LiveSyncingPill() {
   );
 }
 
-function Sparkline({ values }: { values: (number | null)[] }) {
+/**
+ * MoM delta between the last two populated months of a KPI row.
+ * $/count rows → % change; %-typed rows (churn, GM, realization) →
+ * percentage-POINT delta (pp), since "% change of a %" misleads.
+ */
+function MomDelta({ values, isPct }: { values: (number | null)[]; isPct: boolean }) {
   const pts = values.filter((v): v is number => v !== null);
   if (pts.length < 2) return <span className="text-slate-300 text-xs">—</span>;
-  const min = Math.min(...pts), max = Math.max(...pts), span = max - min || 1;
-  const coords = pts
-    .map((v, i) => `${(i / (pts.length - 1)) * 56},${18 - ((v - min) / span) * 16}`)
-    .join(" ");
-  return (
-    <svg width="60" height="20" className="inline-block align-middle">
-      <polyline points={coords} fill="none" stroke="#64748b" strokeWidth="2"
-        strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+  const prev = pts[pts.length - 2], last = pts[pts.length - 1];
+  let text: string;
+  if (isPct) {
+    const pp = (last - prev) * 100;
+    text = `${pp >= 0 ? "+" : ""}${pp.toFixed(1)}pp`;
+  } else {
+    if (prev === 0) return <span className="text-slate-300 text-xs">—</span>;
+    const pct = (last / prev - 1) * 100;
+    text = `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+  }
+  return <span className="tabular-nums text-[13px] font-medium text-slate-600">{text}</span>;
 }
 
 // ─── KPIs view ───────────────────────────────────────────────────────────────
@@ -323,7 +329,7 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
               {tab.months.map((mo) => (
                 <th key={mo} className="w-28 py-2 px-3 text-right font-semibold">{mo}</th>
               ))}
-              <th className="py-2 pl-5 font-semibold">Trend</th>
+              <th className="py-2 pl-5 font-semibold text-right">MoM</th>
             </tr>
           </thead>
           <tbody>
@@ -352,7 +358,7 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
                       </td>
                     );
                   })}
-                  <td className="py-2 pl-5"><Sparkline values={r.raw} /></td>
+                  <td className="py-2 pl-5 text-right"><MomDelta values={r.raw} isPct={isPct} /></td>
                 </tr>
               );
             })}
