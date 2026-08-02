@@ -132,7 +132,9 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
     if (!patients || usingMock) return null;
     let active = 0, arr = 0, arp = 0;
     for (const p of patients as any[]) {
-      if (p.patientStatus === "Active") active++;
+      // strict board status — the ops-normalized patientStatus folds
+      // blank/"Not Active" into Active and would overcount (652 vs 613)
+      if (p.rawPatientStatus === "Active") active++;
       if (!p.isNotActive) {
         arr += p.financials?.arr ?? 0;
         arp += p.financials?.arp ?? 0;

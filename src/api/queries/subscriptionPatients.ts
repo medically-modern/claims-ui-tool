@@ -217,6 +217,9 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   suppliesAuthStart: string; suppliesAuthEnd: string; suppliesAuthUnits: string;
   priorAuthReq: string;
   triggerDvs: string;
+  /** Strict board Status label ("Active"/"Paused"/"Not Active"/"") — use
+   *  for KPIs; patientStatus is ops-normalized and folds blanks to Active. */
+  rawPatientStatus: string;
   // Eligibility
   active: string;
   stediMemberId: string; stediPayerName: string; stediPlanName: string;
@@ -540,6 +543,10 @@ function normalizeStatus(raw: string): PatientStatus {
   if (raw === "Paused" || raw === "Dead") return raw;
   return "Active";
 }
+// NOTE: normalizeStatus is an OPS-board convenience (blank/"Not Active"
+// fold into "Active" so items keep flowing through lanes). KPI surfaces
+// must use rawPatientStatus below — the strict board value — or they
+// overcount actives (FinancialsHub hero bug, 2026-08-02).
 
 // ─── Map one item ───────────────────────────────────────────────────────────
 function mapItem(item: MondayItem): LiveSubscriptionPatient {
@@ -560,6 +567,7 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
     subscriptionType: subType,
     runCheck: "—",
     patientStatus: normalizeStatus(get(item, SUB_COL.status)),
+    rawPatientStatus: get(item, SUB_COL.status),
     pauseReason: get(item, SUB_COL.pause_reason) || undefined,
     deadReason:  get(item, SUB_COL.dead_reason)  || undefined,
     orderingCycle: get(item, SUB_COL.ordering_cycle) || undefined,
