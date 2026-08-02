@@ -358,7 +358,12 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
                       </td>
                     );
                   })}
-                  <td className="py-2 pl-5 text-right"><MomDelta values={r.raw} isPct={isPct} /></td>
+                  <td className="py-2 pl-5 text-right">
+                    {/* realization columns are different-age vintages — a MoM delta is meaningless */}
+                    {isRealization
+                      ? <span className="text-slate-300 text-xs">—</span>
+                      : <MomDelta values={r.raw} isPct={isPct} />}
+                  </td>
                 </tr>
               );
             })}
