@@ -67,8 +67,9 @@ C_SENSTYPE = "color_mkxmdscr"   # Sensors Type — weights the monitor SKU avera
 C_SENS_REV, C_SENS_COST = "numeric_mkxj6a3d", "numeric_mkxjxmga"
 C_SUPP_REV, C_SUPP_COST = "numeric_mm27rypj", "numeric_mm27hem2"
 C_TOT_REV, C_SHIP, C_ARR = "numeric_mm2xsjm5", "numeric_mm2xxmp4", "numeric_mm2xsqyd"
+C_ARP = "numeric_mm2xdsvh"   # Annual Recurring Profit
 SUB_COLS = [C_STATUS, C_TYPE, C_PRIMARY, C_SENSTYPE, C_SENS_REV, C_SENS_COST,
-            C_SUPP_REV, C_SUPP_COST, C_TOT_REV, C_SHIP, C_ARR]
+            C_SUPP_REV, C_SUPP_COST, C_TOT_REV, C_SHIP, C_ARR, C_ARP]
 
 C_PAYOR = "color_mkxmhypt"  # Claims Board: Primary Payor label (for payer mix)
 C_PPAID = "numeric_mm115q76"  # Claims Board: Primary Paid (A) — realization check
@@ -152,9 +153,11 @@ ROWS = {
     # Churn = left the book (→Not Active/Dead) ONLY. Pure churn feeds LTV
     # (Brandon 2026-08-01; Paused-vs-Inactive hygiene enforced going fwd).
     "attr_u": 37, "attr_sens": 39, "attr_supp": 40, "attr_dual": 41, "attr_tot": 42,
+    "net_adds": 43,   # new − churned (formula)
     # Pause flow (leading indicators, NOT attrition)
     "pause_new": 44, "pause_res": 45, "pause_net": 46,
     "arr_total": 49, "arr_sens": 50, "arr_supp": 51,
+    "arp_total": 52,  # Annual Recurring Profit (board ARP col, same population as ARR)
     "rev_pump": 54, "rev_monitor": 55, "rev_sensor": 56, "rev_supplies": 57,
     "rev_total": 58,
     "pump_orders": 59, "monitor_orders": 60,   # claim counts by DOS, tie to rev rows
@@ -665,6 +668,7 @@ def compute(token, year, month):
     # Brandon chose this basis 2026-08-01 so sheet == dashboard.
     arr_pop = [s for s in subs if "not active" not in s.get("group", "").lower()]
     arr_total = sum(num(s.get(C_ARR)) for s in arr_pop)
+    arp_total = sum(num(s.get(C_ARP)) for s in arr_pop)
     arr_sens = sum(num(s.get(C_SENS_REV)) * mult(s) for s in arr_pop)
     arr_supp = sum(num(s.get(C_SUPP_REV)) * mult(s) for s in arr_pop)
 
@@ -813,7 +817,8 @@ def compute(token, year, month):
 
     return {
         "counts": counts, "attrition": attr,
-        "arr": dict(total=round(arr_total, 2), sensors=round(arr_sens, 2), supplies=round(arr_supp, 2)),
+        "arr": dict(total=round(arr_total, 2), sensors=round(arr_sens, 2), supplies=round(arr_supp, 2),
+                    arp=round(arp_total, 2)),
         "revenue": {k: round(v, 2) for k, v in rev.items()},
         "avg": dict(weighted=avg_weighted, sensors=avg_sens, supplies=avg_supp),
         "per_patient": pp,
@@ -911,7 +916,9 @@ def write_column(svc, kpis, year, month, dry_run=False):
         # Block totals: subscriptions = sensors + supplies (dual-type counts once per product)
         **{R[f"{blk}_tot"]: f"={col}{R[f'{blk}_sens']}+{col}{R[f'{blk}_supp']}"
            for blk in ("total", "active", "paused", "new", "attr")},
+        R["net_adds"]: f"={col}{R['new_u']}-{col}{R['attr_u']}",
         R["arr_total"]: arr["total"], R["arr_sens"]: arr["sensors"], R["arr_supp"]: arr["supplies"],
+        R["arp_total"]: arr["arp"],
         R["rev_pump"]: rev["pump"], R["rev_monitor"]: rev["monitor"],
         R["rev_sensor"]: rev["sensors"], R["rev_supplies"]: rev["supplies"],
         R["rev_total"]: f"=SUM({col}{R['rev_pump']}:{col}{R['rev_supplies']})",
@@ -1066,6 +1073,85 @@ def write_column(svc, kpis, year, month, dry_run=False):
     return col, created
 
 
+KPI_TAB = "KPIs"
+
+
+def _ensure_kpi_tab(svc):
+    meta = svc.spreadsheets().get(spreadsheetId=SHEET_ID, fields="sheets.properties").execute()
+    for s in meta["sheets"]:
+        if s["properties"]["title"] == KPI_TAB:
+            return s["properties"]["sheetId"]
+    r = svc.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": [{
+        "addSheet": {"properties": {"title": KPI_TAB, "index": 0, "gridProperties": {
+            "rowCount": 25, "columnCount": 30, "frozenRowCount": 3, "frozenColumnCount": 1}}}}]}).execute()
+    sid = r["replies"][0]["addSheet"]["properties"]["sheetId"]
+    labels = [
+        ["KPI SUMMARY — team goals"],
+        ["North star: 1,000 ACTIVE PATIENTS. All cells are formulas off the Monthly Financials / Realization tabs — edit those, never this one."],
+        ["Metric"],
+        ["Active patients  (goal: 1,000)"],
+        ["Active subscriptions"],
+        ["Attach rate (subscriptions ÷ patient)"],
+        ["Net patient adds (new − churned)"],
+        ["Churn % (pure — left the book)"],
+        ["ARR"],
+        ["ARP (annual recurring profit)"],
+        ["Avg gross revenue / patient (annual)"],
+        ["Subscription gross margin %"],
+        ["Avg gross profit / patient (annual)"],
+        ["True realization % (same DOS month — matures over time)"],
+    ]
+    svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!A1",
+        valueInputOption="RAW", body={"values": labels}).execute()
+    def numf(r1, r2, typ, pat):
+        return {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": r1 - 1, "endRowIndex": r2,
+                "startColumnIndex": 1, "endColumnIndex": 30},
+                "cell": {"userEnteredFormat": {"numberFormat": {"type": typ, "pattern": pat}}},
+                "fields": "userEnteredFormat.numberFormat"}}
+    svc.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": [
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1, "startColumnIndex": 0, "endColumnIndex": 1},
+         "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 14}}}, "fields": "userEnteredFormat.textFormat"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 2, "endRowIndex": 3, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.97}}},
+         "fields": "userEnteredFormat"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 3, "endRowIndex": 4, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
+        numf(4, 5, "NUMBER", "#,##0"), numf(6, 6, "NUMBER", "0.00"),
+        numf(7, 7, "NUMBER", "+#,##0;-#,##0;0"), numf(8, 8, "PERCENT", "0.00%"),
+        numf(9, 11, "CURRENCY", "$#,##0"), numf(12, 12, "PERCENT", "0.0%"),
+        numf(13, 13, "CURRENCY", "$#,##0"), numf(14, 14, "PERCENT", "0.0%"),
+        {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
+         "properties": {"pixelSize": 320}, "fields": "pixelSize"}},
+    ]}).execute()
+    return sid
+
+
+def write_kpi_column(svc, col, label):
+    """One formula column on the KPIs tab, same column letter as Monthly."""
+    _ensure_kpi_tab(svc)
+    mf = f"'{TAB}'!{col}"
+    R = ROWS
+    rows = {
+        4: f"={mf}{R['active_u']}",
+        5: f"={mf}{R['active_tot']}",
+        6: f'=IF(N({col}4)=0,"",{col}5/{col}4)',
+        7: f"={mf}{R['net_adds']}",
+        8: f"={mf}{R['ltv_churn']}",
+        9: f"={mf}{R['arr_total']}",
+        10: f"={mf}{R['arp_total']}",
+        11: f"={mf}{R['pp_ann_rev']}",
+        12: f"={mf}{R['sub_gm']}",
+        13: f"={mf}{R['pp_ann_gp']}",
+        14: (f"=IFERROR(INDEX('{REAL_TAB}'!$19:$19,"
+             f"MATCH({col}{3},'{REAL_TAB}'!$3:$3,0)),"")"),
+    }
+    data = [{"range": f"'{KPI_TAB}'!{col}{r}", "values": [[v]]} for r, v in rows.items()]
+    svc.spreadsheets().values().batchUpdate(spreadsheetId=SHEET_ID,
+        body={"valueInputOption": "USER_ENTERED", "data": data}).execute()
+    svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!{col}3",
+        valueInputOption="RAW", body={"values": [[label]]}).execute()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--month", help="YYYY-MM to compute (default: previous month, ET)")
@@ -1094,6 +1180,8 @@ def main():
     if not args.dry_run:
         n = update_realization_tab(svc, token, year, month)
         print(f"Realization tab refreshed: {n} DOS month column(s) re-measured.")
+        write_kpi_column(svc, col, dt.date(year, month, 1).strftime("%b %Y"))
+        print("KPIs tab column written.")
 
 
 if __name__ == "__main__":
