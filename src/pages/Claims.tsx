@@ -31,6 +31,7 @@ import { hasMondayToken } from "@/api/monday";
 import { LoadingOverlay } from "@/components/claims/LoadingOverlay";
 import { CashFlowSummary } from "@/components/claims/CashFlowSummary";
 import { ForecastDashboard } from "@/pages/Forecast";
+import FinancialsHub from "@/components/financials/FinancialsHub";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
@@ -1149,7 +1150,7 @@ const Claims = () => {
         </Tabs>
 
         {topLevel === "subscription" && <SubscriptionBoard />}
-        {topLevel === "financials" && <ForecastDashboard embedded />}
+        {topLevel === "financials" && <FinancialsHub />}
         {topLevel === "claims" && (
         <>
         {/* Top app row: Board tabs (left) | Action Items inbox
