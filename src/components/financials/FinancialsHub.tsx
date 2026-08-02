@@ -2,15 +2,16 @@
  * FinancialsHub.tsx — the Financials top-level tab.
  *
  * Four sub-tabs with a hard LIVE vs SNAPSHOT split:
- *   - KPIs        (SNAPSHOT · default) — north-star goal view from the sheet
+ *   - KPIs        (default) — LIVE north-star hero + month-end snapshot table/charts
  *   - Monthly     (SNAPSHOT)           — the Monthly Financials model, verbatim
  *   - Realization (SNAPSHOT)           — vintage collections, maturity chart
  *   - Forecast    (LIVE)               — the existing forward-looking dashboard
  *
- * SNAPSHOT tabs render the Cash Flow Forecast Google Sheet via the backend
- * proxy (GET /monthly-financials). The sheet is the single source of truth,
- * written on the 1st of each month by the scheduled job — this component
- * deliberately computes NOTHING itself, so UI and sheet can never disagree.
+ * SNAPSHOT data renders the Cash Flow Forecast Google Sheet via the backend
+ * proxy (GET /monthly-financials) — the sheet is the single source of truth,
+ * written on the 1st by the scheduled job; this component recomputes nothing
+ * from it. The KPI hero's Active patients / ARR / ARP are the only LIVE
+ * numbers, summed from the Subscription Board query, and are labeled LIVE.
  */
 
 import { useMemo, useState } from "react";
@@ -27,6 +28,7 @@ import { Card } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { ForecastDashboard } from "@/pages/Forecast";
+import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 
 // ─── Types from GET /monthly-financials ─────────────────────────────────────
 interface SheetRow { row: number; label: string; values: string[]; raw: (number | null)[] }
@@ -44,15 +46,14 @@ interface MonthlyFinancialsPayload {
 const API_BASE = import.meta.env.VITE_API_BASE_URL as string | undefined;
 const SHEET_URL = (id: string) => `https://docs.google.com/spreadsheets/d/${id}`;
 
-// Validated categorical palette (scripts/validate_palette.js — all checks
-// pass; contrast WARN on sky/amber is relieved by legend + table view).
+// Validated categorical palettes (dataviz scripts/validate_palette.js).
 const GAP_COLORS = {
   inflight: "#0ea5e9",   // waiting on payer
-  ratevar: "#f59e0b",    // estimate above contract — fix the estimate
   pipeline: "#8b5cf6",   // secondary / patient pipeline
   denied: "#f43f5e",     // adjudicated $0 — work it
   partial: "#9f1239",    // partial denial — appeal it
 } as const;
+const SERIES_2 = { a: "#0284c7", b: "#7c3aed" } as const; // rev/GP, ARR/ARP
 
 function useMonthlyFinancials() {
   return useQuery<MonthlyFinancialsPayload>({
@@ -71,31 +72,35 @@ function useMonthlyFinancials() {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-const findRow = (tab: SheetTab, prefix: string) =>
-  tab.rows.find((r) => r.label.toLowerCase().startsWith(prefix.toLowerCase()));
+const findRow = (tab: SheetTab | undefined, prefix: string) =>
+  tab?.rows.find((r) => r.label.trim().toLowerCase().startsWith(prefix.toLowerCase()));
 
-const latest = <T,>(arr: T[]): T | undefined => arr[arr.length - 1];
+const latest = <T,>(arr: T[] | undefined): T | undefined =>
+  arr && arr.length ? arr[arr.length - 1] : undefined;
 
-/** Months since a "Jul 2026"-style label (approx, for maturity badges). */
 function monthsOld(label: string): number {
   const d = new Date(`1 ${label}`);
   if (isNaN(+d)) return 99;
   return (Date.now() - +new Date(d.getFullYear(), d.getMonth() + 1, 1)) / (30.4 * 864e5);
 }
 
-function SnapshotBadge({ asOf }: { asOf?: string }) {
+const fmtMoney = (n: number) =>
+  n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(2)}M`
+    : n >= 1000 ? `$${Math.round(n / 1000).toLocaleString()}k`
+      : `$${Math.round(n).toLocaleString()}`;
+
+function LivePill() {
   return (
-    <Badge variant="outline" className="border-slate-300 bg-slate-50 text-slate-600 font-medium">
-      SNAPSHOT · as of {asOf ?? "—"} · updates on the 1st
-    </Badge>
+    <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold tracking-wide text-emerald-700">
+      LIVE
+    </span>
   );
 }
-
-function LiveBadge() {
+function MonthEndPill({ m }: { m?: string }) {
   return (
-    <Badge variant="outline" className="border-emerald-300 bg-emerald-50 text-emerald-700 font-medium">
-      LIVE · computed from the boards right now
-    </Badge>
+    <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-bold tracking-wide text-slate-500">
+      MONTH-END{m ? ` · ${m.toUpperCase()}` : ""}
+    </span>
   );
 }
 
@@ -118,77 +123,119 @@ function Sparkline({ values }: { values: (number | null)[] }) {
 function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
   const tab = data.kpis;
   const asOf = latest(tab.months);
-  const activeRow = findRow(tab, "Active patients");
-  const active = latest(activeRow?.raw ?? [])
-  const netAdds = latest(findRow(tab, "Net patient adds")?.values ?? []);
-  const churn = latest(findRow(tab, "Churn %")?.values ?? []);
-  const arr = latest(findRow(tab, "ARR")?.values ?? []);
-  const arp = latest(findRow(tab, "ARP")?.values ?? []);
-  const goal = 1000;
-  const pct = typeof active === "number" ? Math.min(100, (active / goal) * 100) : 0;
+
+  // LIVE numbers — summed from the Subscription Board right now, same
+  // bases as the sheet: active = Status "Active"; ARR/ARP exclude only
+  // the Not Active Patients group.
+  const { data: patients, usingMock } = useSubscriptionPatients();
+  const live = useMemo(() => {
+    if (!patients || usingMock) return null;
+    let active = 0, arr = 0, arp = 0;
+    for (const p of patients as any[]) {
+      if (p.patientStatus === "Active") active++;
+      if (!p.isNotActive) {
+        arr += p.financials?.arr ?? 0;
+        arp += p.financials?.arp ?? 0;
+      }
+    }
+    return { active, arr, arp };
+  }, [patients, usingMock]);
+
+  const snapActive = latest(findRow(tab, "Active unique patients")?.raw);
+  const netAdds = latest(findRow(tab, "Net patient adds")?.values);
+  const churn = latest(findRow(tab, "Churn %")?.values);
+  const snapArr = latest(findRow(tab, "ARR")?.raw);
+  const snapArp = latest(findRow(tab, "ARP")?.raw);
+
+  const activeShown = live?.active ?? (typeof snapActive === "number" ? snapActive : undefined);
+  const arrShown = live?.arr ?? (typeof snapArr === "number" ? snapArr : undefined);
+  const arpShown = live?.arp ?? (typeof snapArp === "number" ? snapArp : undefined);
+  const heroPill = live ? <LivePill /> : <MonthEndPill m={asOf} />;
 
   const metricRows = tab.rows.filter((r) => r.row >= 4 && r.row <= 14 && r.label);
 
+  // Month-end chart data from the Monthly Financials tab
+  const m = data.monthly;
+  const chartData = m.months.map((month, i) => ({
+    month,
+    active: findRow(m, "Active unique patients")?.raw[i] ?? null,
+    revenue: findRow(m, "Total revenue")?.raw[i] ?? null,
+    gp: findRow(m, "Total gross profit")?.raw[i] ?? null,
+    arr: findRow(m, "Annualized gross revenue")?.raw[i] ?? null,
+    arp: findRow(m, "Annualized recurring profit")?.raw[i] ?? null,
+  }));
+
   return (
     <div className="space-y-4">
-      {/* Hero: north star */}
+      {/* Hero: LIVE north stars — patients left, key financials right */}
       <Card className="p-6">
-        <div className="flex flex-wrap items-end justify-between gap-6">
+        <div className="grid gap-8 md:grid-cols-2">
           <div>
-            <div className="text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Active patients — north star
+            <div className="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Patients {heroPill}
             </div>
             <div className="flex items-baseline gap-3">
-              <span className="text-[44px] font-bold tabular-nums tracking-tight">
-                {typeof active === "number" ? active.toLocaleString() : "—"}
+              <span className="text-[46px] font-bold tabular-nums tracking-tight">
+                {activeShown !== undefined ? activeShown.toLocaleString() : "—"}
               </span>
-              <span className="text-[15px] text-muted-foreground">of {goal.toLocaleString()} goal</span>
+              <span className="text-[15px] text-muted-foreground">active unique patients</span>
             </div>
-            <div className="mt-2 h-2.5 w-[340px] max-w-full rounded-full bg-slate-100">
-              <div className="h-2.5 rounded-full bg-sky-600" style={{ width: `${pct}%` }} />
+            <div className="mt-2 flex items-center gap-6 text-[13px]">
+              <span>
+                <span className="text-muted-foreground">Net adds </span>
+                <span className="font-semibold tabular-nums">{netAdds ?? "—"}</span>
+              </span>
+              <span>
+                <span className="text-muted-foreground">Churn </span>
+                <span className="font-semibold tabular-nums italic">{churn ?? "—"}</span>
+              </span>
+              <MonthEndPill m={asOf} />
             </div>
           </div>
-          <div className="flex gap-8">
-            <div>
-              <div className="text-[12px] text-muted-foreground">Net adds ({asOf})</div>
-              <div className="text-[24px] font-semibold tabular-nums">{netAdds ?? "—"}</div>
+          <div className="md:border-l md:pl-8">
+            <div className="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Key financials {heroPill}
             </div>
-            <div>
-              <div className="text-[12px] text-muted-foreground">Churn (pure)</div>
-              <div className="text-[24px] font-semibold tabular-nums">{churn ?? "—"}</div>
+            <div className="flex items-baseline gap-3">
+              <span className="text-[46px] font-bold tabular-nums tracking-tight">
+                {arpShown !== undefined ? fmtMoney(arpShown) : "—"}
+              </span>
+              <span className="text-[15px] text-muted-foreground">ARP</span>
             </div>
-            <div>
-              <div className="text-[12px] text-muted-foreground">ARR</div>
-              <div className="text-[24px] font-semibold tabular-nums">{arr ?? "—"}</div>
-            </div>
-            <div>
-              <div className="text-[12px] text-muted-foreground">ARP — value scoreboard</div>
-              <div className="text-[24px] font-semibold tabular-nums">{arp ?? "—"}</div>
+            <div className="mt-2 text-[13px]">
+              <span className="text-muted-foreground">ARR </span>
+              <span className="text-[17px] font-semibold tabular-nums">
+                {arrShown !== undefined ? fmtMoney(arrShown) : "—"}
+              </span>
             </div>
           </div>
         </div>
       </Card>
 
-      {/* Trend table: metrics × months */}
+      {/* Month-end snapshot table */}
       <Card className="p-4 overflow-x-auto">
-        <table className="w-full text-[13px]">
+        <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Month-end snapshots <MonthEndPill />
+        </div>
+        <table className="text-[13px]">
           <thead>
             <tr className="border-b text-left text-muted-foreground">
-              <th className="py-2 pr-4 font-semibold">Metric</th>
-              {tab.months.map((m) => (
-                <th key={m} className="py-2 px-3 text-right font-semibold">{m}</th>
+              <th className="w-[340px] py-2 pr-4 font-semibold">Metric</th>
+              {tab.months.map((mo) => (
+                <th key={mo} className="w-28 py-2 px-3 text-right font-semibold">{mo}</th>
               ))}
-              <th className="py-2 pl-4 font-semibold">Trend</th>
+              <th className="py-2 pl-5 font-semibold">Trend</th>
             </tr>
           </thead>
           <tbody>
             {metricRows.map((r) => {
+              const isPct = r.values.some((v) => v.endsWith("%"));
               const isRealization = r.label.toLowerCase().startsWith("true realization");
               const immature = isRealization && asOf !== undefined && monthsOld(asOf) < 2;
               return (
-                <tr key={r.row} className={cn("border-b last:border-0", immature && "opacity-50")}>
-                  <td className="py-2 pr-4 font-medium">
-                    {r.label}
+                <tr key={r.row} className={cn("border-b last:border-0 border-slate-100", immature && "opacity-50")}>
+                  <td className={cn("py-2 pr-4 font-medium", isPct && "italic")}>
+                    {isRealization ? "True realization %" : r.label}
                     {immature && (
                       <Badge variant="outline" className="ml-2 text-[10px] border-amber-300 bg-amber-50 text-amber-700">
                         matures — ignore until 2+ mo old
@@ -196,15 +243,70 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
                     )}
                   </td>
                   {r.values.map((v, i) => (
-                    <td key={i} className="py-2 px-3 text-right tabular-nums">{v || "—"}</td>
+                    <td key={i} className={cn("py-2 px-3 text-right tabular-nums", isPct && "italic text-slate-600")}>
+                      {v || "—"}
+                    </td>
                   ))}
-                  <td className="py-2 pl-4"><Sparkline values={r.raw} /></td>
+                  <td className="py-2 pl-5"><Sparkline values={r.raw} /></td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </Card>
+
+      {/* Month-end trend charts */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-[13px] font-semibold">
+            Active unique patients <MonthEndPill />
+          </div>
+          <ResponsiveContainer width="100%" height={190}>
+            <LineChart data={chartData} margin={{ top: 16, right: 16, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+              <XAxis dataKey="month" fontSize={11} tickLine={false} />
+              <YAxis fontSize={11} tickLine={false} width={40} />
+              <Tooltip />
+              <Line dataKey="active" name="Active unique patients" stroke={SERIES_2.a}
+                strokeWidth={2} dot={{ r: 5, fill: SERIES_2.a }} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-[13px] font-semibold">
+            Revenue & gross profit <MonthEndPill />
+          </div>
+          <ResponsiveContainer width="100%" height={190}>
+            <BarChart data={chartData} margin={{ top: 16, right: 8, bottom: 0, left: 0 }} barCategoryGap="30%">
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+              <XAxis dataKey="month" fontSize={11} tickLine={false} />
+              <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} tickLine={false} width={52} />
+              <Tooltip formatter={(v: number) => `$${Math.round(v).toLocaleString()}`} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Bar dataKey="revenue" name="Revenue" fill={SERIES_2.a} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              <Bar dataKey="gp" name="Gross profit" fill={SERIES_2.b} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-[13px] font-semibold">
+            ARR & ARP <MonthEndPill />
+          </div>
+          <ResponsiveContainer width="100%" height={190}>
+            <LineChart data={chartData} margin={{ top: 16, right: 16, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+              <XAxis dataKey="month" fontSize={11} tickLine={false} />
+              <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} tickLine={false} width={52} />
+              <Tooltip formatter={(v: number) => `$${Math.round(v).toLocaleString()}`} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Line dataKey="arr" name="ARR" stroke={SERIES_2.a} strokeWidth={2}
+                dot={{ r: 5, fill: SERIES_2.a }} isAnimationActive={false} />
+              <Line dataKey="arp" name="ARP" stroke={SERIES_2.b} strokeWidth={2}
+                dot={{ r: 5, fill: SERIES_2.b }} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+      </div>
     </div>
   );
 }
@@ -214,6 +316,23 @@ const SECTION_HEADERS = [
   "PATIENTS", "REVENUE", "COGS", "GROSS PROFIT", "FIXED COSTS",
   "PRODUCT & INSURANCE MIX", "PER-PATIENT UNIT ECONOMICS",
   "LTV & PUMP PAYBACK", "MONTH-OVER-MONTH DELTAS", "SELF-AUDIT",
+];
+
+// Per-unit / per-patient average rows render italic (vs totals bold).
+const PER_UNIT_LABELS = [
+  "Pump COGS per unit", "Monitor COGS per unit", "Sensor COGS per fill",
+  "Supplies COGS per fill", "Average order", "Avg order", "Avg annual",
+  "Avg patient lifetime", "Est. pump payback", "Attach rate",
+];
+
+// Rows that read as sums / key results: bold with a rule above.
+const SUM_LABELS = [
+  "Total subscriptions", "Active subscriptions", "Paused subscriptions",
+  "New subscriptions", "Churned subscriptions", "Net patient adds",
+  "Total revenue", "Total COGS", "Total gross profit", "Total gross margin %",
+  "Subscription gross margin %", "Net profit", "Net margin %",
+  "Annualized gross revenue", "Annualized recurring profit",
+  "Est. LTV", "Audit status",
 ];
 
 function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
@@ -229,8 +348,7 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
         current = { title: r.label, rows: [] };
         out.push(current);
       } else if (current && r.label && !r.label.startsWith("Definitions")) {
-        // stop collecting once the definitions block starts
-        if (out.length && r.label.length > 120) continue;
+        if (r.label.length > 120) continue;
         current.rows.push(r);
       }
     }
@@ -238,7 +356,7 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
   }, [tab]);
 
   const auditRow = findRow(tab, "Audit status");
-  const auditOk = latest(auditRow?.values ?? []) === "OK";
+  const auditOk = latest(auditRow?.values) === "OK";
 
   return (
     <div className="space-y-3">
@@ -255,8 +373,8 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
       </div>
 
       {sections.map((s) => {
-        const isOpen = open[s.title.split(" ")[0]] ?? false;
         const key = s.title.split(" ")[0];
+        const isOpen = open[key] ?? false;
         return (
           <Card key={s.title} className="overflow-hidden">
             <button
@@ -267,27 +385,43 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
             </button>
             {isOpen && (
               <div className="overflow-x-auto px-4 pb-3">
-                <table className="w-full text-[13px]">
+                <table className="text-[13px]">
                   <thead>
-                    <tr className="border-b text-left text-muted-foreground">
-                      <th className="py-1.5 pr-4 font-medium">&nbsp;</th>
-                      {tab.months.map((m) => (
-                        <th key={m} className="py-1.5 px-3 text-right font-medium">{m}</th>
+                    <tr className="text-left text-muted-foreground">
+                      <th className="w-[360px] py-1.5 pr-6 font-medium">&nbsp;</th>
+                      {tab.months.map((mo) => (
+                        <th key={mo} className="w-28 py-1.5 px-3 text-right font-medium">{mo}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {s.rows.filter((r) => r.values.some((v) => v !== "")).map((r) => (
-                      <tr key={r.row} className="border-b last:border-0 border-slate-100">
-                        <td className={cn("py-1.5 pr-4",
-                          r.label.startsWith("   ") ? "pl-5 text-muted-foreground italic" : "font-medium")}>
-                          {r.label.trim()}
-                        </td>
-                        {r.values.map((v, i) => (
-                          <td key={i} className="py-1.5 px-3 text-right tabular-nums">{v || "—"}</td>
-                        ))}
-                      </tr>
-                    ))}
+                    {s.rows.filter((r) => r.values.some((v) => v !== "")).map((r) => {
+                      const label = r.label.trim();
+                      const isSub = r.label.startsWith("   ");
+                      const isSum = SUM_LABELS.some((l) => label.startsWith(l));
+                      const isUnit = PER_UNIT_LABELS.some((l) => label.startsWith(l));
+                      const isPct = r.values.some((v) => v.endsWith("%"));
+                      return (
+                        <tr key={r.row}>
+                          <td className={cn("py-1.5 pr-6",
+                            isSub && "pl-5 italic text-slate-400",
+                            isUnit && !isSub && "italic text-slate-500",
+                            isSum && "font-semibold border-t border-slate-300 pt-2",
+                            !isSub && !isSum && !isUnit && "font-medium")}>
+                            {label}
+                          </td>
+                          {r.values.map((v, i) => (
+                            <td key={i} className={cn("py-1.5 px-3 text-right tabular-nums",
+                              isSub && "italic text-slate-400",
+                              isUnit && !isSub && "italic text-slate-500",
+                              isSum && "font-semibold border-t border-slate-300 pt-2",
+                              !isSub && !isUnit && isPct && "italic text-slate-600")}>
+                              {v || "—"}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -305,19 +439,18 @@ function RealizationView({ data }: { data: MonthlyFinancialsPayload }) {
   const months = tab.months;
   const raw = (prefix: string) => findRow(tab, prefix)?.raw ?? [];
 
-  const maturity = months.map((m, i) => ({
-    month: m,
+  const maturity = months.map((mo, i) => ({
+    month: mo,
     age: raw("Days since month end")[i] ?? 0,
-    rate: (raw("True realization rate")[i] ?? 0) * 100,
+    rate: ((raw("TRUE realization rate")[i] as number) ?? 0) * 100,
   })).sort((a, b) => (a.age as number) - (b.age as number));
 
-  const gap = months.map((m, i) => ({
-    month: m,
-    "In flight (waiting on payer)": raw("   · not yet adjudicated")[i] ?? 0,
-    "Rate variance (fix the estimate)": raw("   · paid short — rate variance")[i] ?? 0,
-    "Secondary / patient pipeline": raw("Remaining — secondary & patient")[i] ?? 0,
-    "Denied $0 (work it)": raw("   · adjudicated, paid $0")[i] ?? 0,
-    "Partial denial (appeal it)": raw("   · paid short — partial denial")[i] ?? 0,
+  const gap = months.map((mo, i) => ({
+    month: mo,
+    "In flight (waiting on payer)": raw("· in flight")[i] ?? 0,
+    "Secondary / patient pipeline": raw("· secondary & patient pipeline")[i] ?? 0,
+    "Denied $0 (work it)": raw("· denied, paid $0")[i] ?? 0,
+    "Partial denial (appeal it)": raw("· partial denial")[i] ?? 0,
   }));
 
   const fmtK = (v: number) => `$${Math.round(v / 1000)}k`;
@@ -326,12 +459,12 @@ function RealizationView({ data }: { data: MonthlyFinancialsPayload }) {
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="p-4">
-          <div className="text-[13px] font-semibold">Maturity curve — true realization % vs. age of DOS month</div>
+          <div className="text-[13px] font-semibold">True realization % vs. age of DOS month</div>
           <div className="text-[12px] text-muted-foreground mb-2">
-            Young months read low by design; each point moves up and right every monthly re-measure.
+            Against adjusted Est. Pay (rate variance backed out). Young months read low by design and mature every re-measure.
           </div>
           <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={maturity} margin={{ top: 12, right: 24, bottom: 4, left: 0 }}>
+            <LineChart data={maturity} margin={{ top: 14, right: 24, bottom: 4, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="age" type="number" domain={[0, "dataMax + 10"]} tickLine={false}
                 label={{ value: "days since month end", position: "insideBottom", offset: -2, fontSize: 11 }}
@@ -354,9 +487,9 @@ function RealizationView({ data }: { data: MonthlyFinancialsPayload }) {
         </Card>
 
         <Card className="p-4">
-          <div className="text-[13px] font-semibold">Remaining gap by DOS month — what kind of money is missing</div>
+          <div className="text-[13px] font-semibold">Remaining (adjusted − collected) by DOS month</div>
           <div className="text-[12px] text-muted-foreground mb-2">
-            Sky/violet = wait · amber = fix the estimate · rose = work or appeal the claim.
+            Sky/violet = wait · rose = work or appeal. Rate variance is already out of the denominator.
           </div>
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={gap} margin={{ top: 4, right: 8, bottom: 0, left: 0 }} barCategoryGap="28%">
@@ -368,7 +501,6 @@ function RealizationView({ data }: { data: MonthlyFinancialsPayload }) {
               {(
                 [
                   ["In flight (waiting on payer)", GAP_COLORS.inflight],
-                  ["Rate variance (fix the estimate)", GAP_COLORS.ratevar],
                   ["Secondary / patient pipeline", GAP_COLORS.pipeline],
                   ["Denied $0 (work it)", GAP_COLORS.denied],
                   ["Partial denial (appeal it)", GAP_COLORS.partial],
@@ -384,29 +516,43 @@ function RealizationView({ data }: { data: MonthlyFinancialsPayload }) {
 
       {/* Verbatim vintage table */}
       <Card className="p-4 overflow-x-auto">
-        <table className="w-full text-[13px]">
+        <table className="text-[13px]">
           <thead>
             <tr className="border-b text-left text-muted-foreground">
-              <th className="py-1.5 pr-4 font-semibold">Metric</th>
-              {months.map((m) => (
-                <th key={m} className="py-1.5 px-3 text-right font-semibold">{m}</th>
+              <th className="w-[380px] py-1.5 pr-6 font-semibold">Metric</th>
+              {months.map((mo) => (
+                <th key={mo} className="w-28 py-1.5 px-3 text-right font-semibold">{mo}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {tab.rows
               .filter((r) => r.row >= 4 && r.label && r.label.length < 120 && r.values.some((v) => v !== ""))
-              .map((r) => (
-                <tr key={r.row} className="border-b last:border-0 border-slate-100">
-                  <td className={cn("py-1.5 pr-4",
-                    r.label.startsWith("   ") ? "pl-5 text-muted-foreground italic" : "font-medium")}>
-                    {r.label.trim()}
-                  </td>
-                  {r.values.map((v, i) => (
-                    <td key={i} className="py-1.5 px-3 text-right tabular-nums">{v || "—"}</td>
-                  ))}
-                </tr>
-              ))}
+              .map((r) => {
+                const label = r.label.trim();
+                const isSub = r.label.startsWith("   ");
+                const isSum = ["Adjusted Est. Pay", "Collected — total", "TRUE realization", "Remaining ("]
+                  .some((l) => label.startsWith(l));
+                const isPct = r.values.some((v) => v.endsWith("%"));
+                return (
+                  <tr key={r.row}>
+                    <td className={cn("py-1.5 pr-6",
+                      isSub && "pl-5 italic text-slate-400",
+                      isSum && "font-semibold border-t border-slate-300",
+                      !isSub && !isSum && "font-medium")}>
+                      {label}
+                    </td>
+                    {r.values.map((v, i) => (
+                      <td key={i} className={cn("py-1.5 px-3 text-right tabular-nums",
+                        isSub && "italic text-slate-400",
+                        isSum && "font-semibold border-t border-slate-300",
+                        !isSub && isPct && "italic text-slate-600")}>
+                        {v || "—"}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
           </tbody>
         </table>
       </Card>
@@ -434,7 +580,15 @@ export default function FinancialsHub() {
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
-          {snapshot ? <SnapshotBadge asOf={asOf} /> : <LiveBadge />}
+          {sub === "forecast" ? (
+            <Badge variant="outline" className="border-emerald-300 bg-emerald-50 text-emerald-700 font-medium">
+              LIVE · computed from the boards right now
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="border-slate-300 bg-slate-50 text-slate-600 font-medium">
+              SNAPSHOT · as of {asOf ?? "—"} · updates on the 1st
+            </Badge>
+          )}
           {snapshot && (
             <Button variant="ghost" size="sm" onClick={() => refetch()} disabled={isFetching}>
               <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />

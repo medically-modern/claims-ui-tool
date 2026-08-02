@@ -148,71 +148,74 @@ ROWS = {
     "total_sens": 10, "total_supp": 11, "total_tot": 12,
     "active_u": 14, "active_sonly": 15, "active_ponly": 16, "active_dual": 17,
     "active_sens": 19, "active_supp": 20, "active_tot": 21,
-    "paused_u": 23, "paused_sens": 25, "paused_supp": 26, "paused_dual": 27, "paused_tot": 28,
-    "new_u": 30, "new_sens": 32, "new_supp": 33, "new_dual": 34, "new_tot": 35,  # created in month
+    "paused_u": 23, "paused_sonly": 24, "paused_ponly": 25, "paused_dual": 26,
+    "paused_sens": 28, "paused_supp": 29, "paused_tot": 30,
+    "new_u": 32, "new_sens": 34, "new_supp": 35, "new_dual": 36, "new_tot": 37,  # created in month
     # Churn = left the book (→Not Active/Dead) ONLY. Pure churn feeds LTV
     # (Brandon 2026-08-01; Paused-vs-Inactive hygiene enforced going fwd).
-    "attr_u": 37, "attr_sens": 39, "attr_supp": 40, "attr_dual": 41, "attr_tot": 42,
-    "net_adds": 43,   # new − churned (formula)
+    "attr_u": 39, "attr_sens": 41, "attr_supp": 42, "attr_dual": 43, "attr_tot": 44,
+    "net_adds": 45,   # new − churned (formula)
     # Pause flow (leading indicators, NOT attrition)
-    "pause_new": 44, "pause_res": 45, "pause_net": 46,
-    "arr_total": 49, "arr_sens": 50, "arr_supp": 51,
-    "arp_total": 52,  # Annual Recurring Profit (board ARP col, same population as ARR)
-    "rev_pump": 54, "rev_monitor": 55, "rev_sensor": 56, "rev_supplies": 57,
-    "rev_total": 58,
-    "pump_orders": 59, "monitor_orders": 60,   # claim counts by DOS, tie to rev rows
-    "avg_weighted": 62, "avg_sens": 63, "avg_supp": 64,
+    "pause_new": 46, "pause_res": 47, "pause_net": 48,
+    "arr_total": 51, "arr_sens": 52, "arr_supp": 53,
+    "arp_total": 54,  # Annual Recurring Profit (board ARP col, same population as ARR)
+    "rev_pump": 56, "rev_monitor": 57, "rev_sensor": 58, "rev_supplies": 59,
+    "rev_total": 60,
+    "pump_orders": 61, "monitor_orders": 62,   # claim counts by DOS, tie to rev rows
+    "avg_weighted": 64, "avg_sens": 65, "avg_supp": 66,
     # Per-product P&L: COGS / GP / margins / net all mirror the
     # pump-monitor-sensor-supplies-total revenue layout.
-    "cogs_pump": 67, "cogs_monitor": 68, "cogs_sensor": 69,
-    "cogs_supplies": 70, "cogs_ship": 71, "cogs_total": 72,
+    "cogs_pump": 69, "cogs_monitor": 70, "cogs_sensor": 71,
+    "cogs_supplies": 72, "cogs_ship": 73, "cogs_total": 74,
     # Per-unit averages actually used this month (informational rows)
-    "unit_pump": 73, "unit_monitor": 74, "unit_sensor": 75, "unit_supplies": 76,
-    "gp_pump": 79, "gp_monitor": 80, "gp_sensor": 81, "gp_supplies": 82, "gp_total": 83,
-    "gm_pump": 84, "gm_monitor": 85, "gm_sensor": 86, "gm_supplies": 87, "gm_total": 88,
-    "sub_gm": 89,   # subscription (sensors+supplies only) gross margin
-    "fixed": 91,
+    "unit_pump": 75, "unit_monitor": 76, "unit_sensor": 77, "unit_supplies": 78,
+    "gp_pump": 81, "gp_monitor": 82, "gp_sensor": 83, "gp_supplies": 84, "gp_total": 85,
+    "gm_pump": 86, "gm_monitor": 87, "gm_sensor": 88, "gm_supplies": 89, "gm_total": 90,
+    "sub_gm": 91,   # subscription (sensors+supplies only) gross margin
+    "fixed": 93,
     # Net profit is total-only (fixed costs don't allocate to products —
     # Brandon 2026-08-01); per-product economics stop at gross profit.
-    "np_total": 92, "nm_total": 93,
+    "np_total": 94, "nm_total": 95,
     # Mix section (2026-08-01): product shares are formulas off the rows
     # above; payer shares are computed values (12 fixed family rows).
-    "mixrev_pump": 96, "mixrev_monitor": 97, "mixrev_sensor": 98, "mixrev_supplies": 99,
-    "mixgp_pump": 101, "mixgp_monitor": 102, "mixgp_sensor": 103, "mixgp_supplies": 104,
-    "payer_rev_start": 107,   # 12 rows, PAYER_FAMILIES order
-    "payer_gp_start": 121,    # 12 rows, PAYER_FAMILIES order
+    "mixrev_pump": 98, "mixrev_monitor": 99, "mixrev_sensor": 100, "mixrev_supplies": 101,
+    "mixgp_pump": 103, "mixgp_monitor": 104, "mixgp_sensor": 105, "mixgp_supplies": 106,
+    "payer_rev_start": 109,   # 12 rows, PAYER_FAMILIES order
+    "payer_gp_start": 123,    # 12 rows, PAYER_FAMILIES order
     # Per-patient unit economics (weighted over Active patients with
     # revenue; COGS = sensors+supplies only, no hardware/shipping)
-    "pp_order_rev": 135, "pp_order_cogs": 136, "pp_order_gp": 137,
-    "pp_ann_rev": 139, "pp_ann_cogs": 140, "pp_ann_gp": 141,
+    "pp_order_rev": 137, "pp_order_cogs": 138, "pp_order_gp": 139,
+    "pp_ann_rev": 141, "pp_ann_cogs": 142, "pp_ann_gp": 143,
     # LTV & pump payback — churn basis = PURE churn (left book)
-    "ltv_churn": 144, "ltv_life": 145, "ltv_val": 146,
-    "pb_new_pumps": 148, "pb_spend": 149, "pb_rentals": 150,
-    "pb_rental_rev": 151, "pb_months": 152,
+    "ltv_churn": 146, "ltv_life": 147, "ltv_val": 148,
+    "pb_new_pumps": 150, "pb_spend": 151, "pb_rentals": 152,
+    "pb_rental_rev": 153, "pb_months": 154,
     # Month-over-month deltas (formulas vs previous column; blank on first)
-    "d_rev": 155, "d_gp": 156, "d_np": 157, "d_arr": 158,
-    "d_active": 159, "d_new": 160, "d_attr": 161,
+    "d_rev": 157, "d_gp": 158, "d_np": 159, "d_arr": 160,
+    "d_active": 161, "d_new": 162, "d_attr": 163,
     # Self-audit footer
-    "audit_revsum": 164, "audit_gpsum": 165, "audit_unmatched": 166,
-    "audit_unknown": 167, "audit_blankstatus": 168,
-    "audit_rollfwd_total": 169,   # Total − (prev Total + New − Churned)
-    "audit_rollfwd_active": 170,  # Active − (prev Active + New − Paused + Resumed − Churned)
-    "audit_status": 171,
+    "audit_revsum": 166, "audit_gpsum": 167, "audit_unmatched": 168,
+    "audit_unknown": 169, "audit_blankstatus": 170,
+    "audit_rollfwd_total": 171,   # Total − (prev Total + New − Churned)
+    "audit_rollfwd_active": 172,  # Active − (prev Active + New − Paused + Resumed − Churned)
+    "audit_status": 173,
 }
-LAST_ROW = 171
+LAST_ROW = 173
 
 # ── Realization tab (own tab — vintage analysis by DOS month) ──────────────
 REAL_TAB = "Realization"
 REAL_START = (2026, 5)  # earliest DOS month with complete board data
-REAL_ROWS = {"age": 4, "est": 5, "coll": 6, "sec": 7, "pt": 8,
-             "tot": 9, "rate": 10, "rem_prim": 11,
-             "rp_unadj": 12, "rp_zero": 13,          # components of rem_prim
-             "rp_ratevar": 14, "rp_denial": 15,      # paid-short, split by line CARC
-             "rem_sec": 16,
-             # True realization: denominator backs out rate variance; the
-             # legit shortfall splits by board group (working vs gave up)
-             "adj_est": 18, "true_rate": 19, "legit": 20,
-             "still": 21, "lost": 22, "pct_still": 23, "pct_lost": 24}
+# Layout (Brandon 2026-08-01): walk straight from Est. Pay to Adjusted
+# Est. Pay (rate variance backed out) and work off that — the naive
+# realization rate is not shown at all (misleading).
+REAL_ROWS = {"age": 4,
+             "est": 5, "ratevar": 6, "adj_est": 7,           # the walk
+             "coll": 8, "sec": 9, "pt": 10, "tot": 11,       # collections
+             "true_rate": 12,                                # tot / adjusted
+             "legit": 14,                                    # adjusted − collected
+             "rp_unadj": 15, "rp_zero": 16, "rp_denial": 17, # components…
+             "rem_sec_row": 18,                              # …+ downstream pipeline
+             "still": 19, "lost": 20, "pct_still": 21, "pct_lost": 22}
 
 # Claims Board groups where an unpaid remainder means we ACCEPTED the loss.
 # Everything else (Outstanding, Denied, Submitted, Medicaid Outstanding,
@@ -491,26 +494,28 @@ def _ensure_realization_tab(svc):
     labels = [
         ["Realization by DOS month"],
         ["One column per date-of-service month, RE-MEASURED on every monthly run — collections to date, so young months read low and mature as payments land."],
-        ["Metric"], ["Days since month end"], ["Est. Pay total"],
-        ["Collected — primary"], ["Collected — secondary insurance"],
-        ["Collected — patient (Stripe)"], ["Collected — total"],
-        ["Realization rate %"],
-        ["Remaining — primary side (components below)"],
-        ["   · not yet adjudicated (in flight)"],
-        ["   · adjudicated, paid $0 (denied / stuck)"],
-        ["   · paid short — rate variance (est. above contracted rate; not collectible)"],
-        ["   · paid short — partial denial (denial CARC on line; work/appeal)"],
-        ["Remaining — secondary & patient (PR established, not yet collected)"],
-        ["TRUE REALIZATION (rate variance backed out of the denominator)"],
-        ["Adjusted Est. Pay (est − rate variance)"],
-        ["True realization rate %"],
-        ["Legit uncollected (adjusted est − collected)"],
-        ["   · still collecting (open on boards + downstream pipeline)"],
+        ["Metric"],
+        ["Days since month end"],
+        ["Est. Pay total (naive)"],
+        ["   · less: rate variance (est. above contracted rates — not collectible)"],
+        ["Adjusted Est. Pay — work off this"],
+        ["Collected — primary"],
+        ["Collected — secondary insurance"],
+        ["Collected — patient (Stripe)"],
+        ["Collected — total"],
+        ["TRUE realization rate % (collected ÷ adjusted)"],
+        [""],
+        ["Remaining (adjusted − collected)"],
+        ["   · in flight (not yet adjudicated)"],
+        ["   · denied, paid $0 (work it)"],
+        ["   · partial denial (appeal it)"],
+        ["   · secondary & patient pipeline"],
+        ["   · still collecting (open on boards + pipeline)"],
         ["   · lost / closed short (Paid And Closed / Bad Debt)"],
         ["   % still collecting (of adjusted Est. Pay)"],
         ["   % lost (of adjusted Est. Pay)"],
         [""],
-        ["True realization: denominator = Est. Pay minus rate variance (payer contract rates below our estimates — definitional, not collectible). Legit uncollected splits by Claims Board group: remainder on claims in Paid And Closed / Bad Debt = lost (we accepted it); everything else (Outstanding, Denied, Submitted, Medicaid Outstanding, secondary/patient pipeline) = still collecting."],
+        ["Adjusted Est. Pay backs the rate variance (payer contract rates below our estimates — definitional, not collectible) out of the denominator; every rate here uses it. Remaining components: in-flight = no ERA yet; denied/partial = work or appeal; pipeline = PR working through secondary/patient collection. Still-collecting vs lost splits the same remaining by Claims Board group. Re-measured on every monthly run."],
     ]
     svc.spreadsheets().values().update(
         spreadsheetId=SHEET_ID, range=f"'{REAL_TAB}'!A1",
@@ -526,18 +531,20 @@ def _ensure_realization_tab(svc):
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 2, "endRowIndex": 3, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.97}}},
          "fields": "userEnteredFormat"}},
-        numf(4, 4, "NUMBER", "#,##0"), numf(5, 9, "CURRENCY", "$#,##0"),
-        numf(10, 10, "PERCENT", "0.0%"), numf(11, 16, "CURRENCY", "$#,##0"),
-        numf(18, 18, "CURRENCY", "$#,##0"), numf(19, 19, "PERCENT", "0.0%"),
-        numf(20, 22, "CURRENCY", "$#,##0"), numf(23, 24, "PERCENT", "0.0%"),
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 11, "endRowIndex": 15, "startColumnIndex": 0, "endColumnIndex": 30},
+        numf(4, 4, "NUMBER", "#,##0"), numf(5, 11, "CURRENCY", "$#,##0"),
+        numf(12, 12, "PERCENT", "0.0%"), numf(14, 20, "CURRENCY", "$#,##0"),
+        numf(21, 22, "PERCENT", "0.0%"),
+        # italic sub-rows: rate-variance walk line + remaining components
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 5, "endRowIndex": 6, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 16, "endRowIndex": 17, "startColumnIndex": 0, "endColumnIndex": 30},
-         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.97}}},
-         "fields": "userEnteredFormat"}},
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 18, "endRowIndex": 19, "startColumnIndex": 0, "endColumnIndex": 30},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 14, "endRowIndex": 22, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
+        # bold: adjusted est, collected total, TRUE rate, remaining
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 6, "endRowIndex": 7, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 8, "endRowIndex": 10, "startColumnIndex": 0, "endColumnIndex": 30},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 10, "endRowIndex": 12, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 13, "endRowIndex": 14, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
         {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
          "properties": {"pixelSize": 300}, "fields": "pixelSize"}},
@@ -561,16 +568,14 @@ def update_realization_tab(svc, token, upto_year, upto_month):
         colx = col_letter(i + 1)  # B, C, ...
         RR = REAL_ROWS
         vals = {REAL_HEADER_ROW: r["month"], RR["age"]: r["age_days"],
-                RR["est"]: r["est"], RR["coll"]: r["collected"],
-                RR["sec"]: r["secondary"], RR["pt"]: r["patient"],
+                RR["est"]: r["est"], RR["ratevar"]: r["rp_ratevar"],
+                RR["adj_est"]: f"=MAX(0,{colx}{RR['est']}-{colx}{RR['ratevar']})",
+                RR["coll"]: r["collected"], RR["sec"]: r["secondary"], RR["pt"]: r["patient"],
                 RR["tot"]: f"=SUM({colx}{RR['coll']}:{colx}{RR['pt']})",
-                RR["rate"]: f"=IF(N({colx}{RR['est']})=0,\"\",{colx}{RR['tot']}/{colx}{RR['est']})",
-                RR["rem_prim"]: r["rem_prim"], RR["rp_unadj"]: r["rp_unadj"],
-                RR["rp_zero"]: r["rp_zero"], RR["rp_ratevar"]: r["rp_ratevar"],
-                RR["rp_denial"]: r["rp_denial"], RR["rem_sec"]: r["rem_sec"],
-                RR["adj_est"]: f"=MAX(0,{colx}{RR['est']}-{colx}{RR['rp_ratevar']})",
                 RR["true_rate"]: f"=IF(N({colx}{RR['adj_est']})=0,\"\",{colx}{RR['tot']}/{colx}{RR['adj_est']})",
                 RR["legit"]: f"=MAX(0,{colx}{RR['adj_est']}-{colx}{RR['tot']})",
+                RR["rp_unadj"]: r["rp_unadj"], RR["rp_zero"]: r["rp_zero"],
+                RR["rp_denial"]: r["rp_denial"], RR["rem_sec_row"]: r["rem_sec"],
                 RR["still"]: r["still"], RR["lost"]: r["lost"],
                 RR["pct_still"]: f"=IF(N({colx}{RR['adj_est']})=0,\"\",{colx}{RR['still']}/{colx}{RR['adj_est']})",
                 RR["pct_lost"]: f"=IF(N({colx}{RR['adj_est']})=0,\"\",{colx}{RR['lost']}/{colx}{RR['adj_est']})"}
@@ -910,6 +915,8 @@ def write_column(svc, kpis, year, month, dry_run=False):
         R["total_ponly"]: f"={col}{R['total_supp']}-{col}{R['total_dual']}",
         R["active_sonly"]: f"={col}{R['active_sens']}-{col}{R['active_dual']}",
         R["active_ponly"]: f"={col}{R['active_supp']}-{col}{R['active_dual']}",
+        R["paused_sonly"]: f"={col}{R['paused_sens']}-{col}{R['paused_dual']}",
+        R["paused_ponly"]: f"={col}{R['paused_supp']}-{col}{R['paused_dual']}",
         R["pause_new"]: kpis["flows"]["pause_new"],
         R["pause_res"]: kpis["flows"]["pause_res"],
         R["pause_net"]: f"={col}{R['pause_new']}-{col}{R['pause_res']}",
@@ -1089,7 +1096,7 @@ def _ensure_kpi_tab(svc):
         ["KPI SUMMARY — team goals"],
         ["North star: 1,000 ACTIVE PATIENTS. All cells are formulas off the Monthly Financials / Realization tabs — edit those, never this one."],
         ["Metric"],
-        ["Active patients  (goal: 1,000)"],
+        ["Active unique patients"],
         ["Active subscriptions"],
         ["Attach rate (subscriptions ÷ patient)"],
         ["Net patient adds (new − churned)"],
@@ -1097,8 +1104,8 @@ def _ensure_kpi_tab(svc):
         ["ARR"],
         ["ARP (annual recurring profit)"],
         ["Avg gross revenue / patient (annual)"],
-        ["Subscription gross margin %"],
         ["Avg gross profit / patient (annual)"],
+        ["Subscription gross margin %"],
         ["True realization % (not meaningful until column is 2+ months old — matures in place)"],
     ]
     svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!A1",
@@ -1118,8 +1125,12 @@ def _ensure_kpi_tab(svc):
          "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
         numf(4, 5, "NUMBER", "#,##0"), numf(6, 6, "NUMBER", "0.00"),
         numf(7, 7, "NUMBER", "+#,##0;-#,##0;0"), numf(8, 8, "PERCENT", "0.00%"),
-        numf(9, 11, "CURRENCY", "$#,##0"), numf(12, 12, "PERCENT", "0.0%"),
-        numf(13, 13, "CURRENCY", "$#,##0"), numf(14, 14, "PERCENT", "0.0%"),
+        numf(9, 12, "CURRENCY", "$#,##0"), numf(13, 14, "PERCENT", "0.0%"),
+        # % rows italicized (Brandon 2026-08-01)
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 7, "endRowIndex": 8, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 12, "endRowIndex": 14, "startColumnIndex": 0, "endColumnIndex": 30},
+         "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
         {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
          "properties": {"pixelSize": 320}, "fields": "pixelSize"}},
     ]}).execute()
@@ -1140,9 +1151,9 @@ def write_kpi_column(svc, col, label):
         9: f"={mf}{R['arr_total']}",
         10: f"={mf}{R['arp_total']}",
         11: f"={mf}{R['pp_ann_rev']}",
-        12: f"={mf}{R['sub_gm']}",
-        13: f"={mf}{R['pp_ann_gp']}",
-        14: (f"=IFERROR(INDEX('{REAL_TAB}'!$19:$19,"
+        12: f"={mf}{R['pp_ann_gp']}",
+        13: f"={mf}{R['sub_gm']}",
+        14: (f"=IFERROR(INDEX('{REAL_TAB}'!$12:$12,"
              f"MATCH({col}{3},'{REAL_TAB}'!$3:$3,0)),"")"),
     }
     data = [{"range": f"'{KPI_TAB}'!{col}{r}", "values": [[v]]} for r, v in rows.items()]
