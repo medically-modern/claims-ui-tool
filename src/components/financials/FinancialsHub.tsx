@@ -583,9 +583,11 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
                         SUM_LABELS.some((l) => prev!.label.trim().startsWith(l));
                       prev = r;
                       if (isSubhead) {
+                        // "·"-prefixed label-only rows are footnotes, not subheads
+                        const isNote = label.startsWith("·");
                         return (
                           <Fragment key={r.row}>
-                            {gapRows > 0 && (
+                            {gapRows > 0 && !isNote && (
                               <tr aria-hidden="true">
                                 <td colSpan={tab.months.length + 1}
                                   className={prevWasSum ? "h-5" : "h-2"} />
@@ -593,8 +595,10 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
                             )}
                             <tr>
                               <td colSpan={tab.months.length + 1}
-                                className="pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                {r.label.trim()}
+                                className={isNote
+                                  ? "pb-1 pl-5 text-[11px] italic text-slate-400"
+                                  : "pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"}>
+                                {label}
                               </td>
                             </tr>
                           </Fragment>

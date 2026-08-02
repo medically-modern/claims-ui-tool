@@ -192,21 +192,23 @@ ROWS = {
     # GM rows (2026-08-02): gp ÷ rev formulas.
     "pp_order_rev": 140, "pp_order_cogs": 141, "pp_order_gp": 142, "pp_order_gm": 143,
     "pp_ann_rev": 145, "pp_ann_cogs": 146, "pp_ann_gp": 147, "pp_ann_gm": 148,
+    # (row 149 = note under annual GM: Medicaid weighting explains
+    #  annual GM > order GM)
     # LTV & pump payback — churn basis = PURE churn (left book)
-    "ltv_churn": 151, "ltv_life": 152, "ltv_val": 153,
-    "pb_new_pumps": 155, "pb_spend": 156, "pb_rentals": 157,
-    "pb_rental_rev": 158, "pb_months": 159,
+    "ltv_churn": 152, "ltv_life": 153, "ltv_val": 154,
+    "pb_new_pumps": 156, "pb_spend": 157, "pb_rentals": 158,
+    "pb_rental_rev": 159, "pb_months": 160,
     # Month-over-month deltas (formulas vs previous column; blank on first)
-    "d_rev": 162, "d_gp": 163, "d_np": 164, "d_arr": 165,
-    "d_active": 166, "d_new": 167, "d_attr": 168,
+    "d_rev": 163, "d_gp": 164, "d_np": 165, "d_arr": 166,
+    "d_active": 167, "d_new": 168, "d_attr": 169,
     # Self-audit footer
-    "audit_revsum": 171, "audit_gpsum": 172, "audit_unmatched": 173,
-    "audit_unknown": 174, "audit_blankstatus": 175,
-    "audit_rollfwd_total": 176,   # Total − (prev Total + New − Churned)
-    "audit_rollfwd_active": 177,  # Active − (prev Active + New − Paused + Resumed − Churned)
-    "audit_status": 178,
+    "audit_revsum": 172, "audit_gpsum": 173, "audit_unmatched": 174,
+    "audit_unknown": 175, "audit_blankstatus": 176,
+    "audit_rollfwd_total": 177,   # Total − (prev Total + New − Churned)
+    "audit_rollfwd_active": 178,  # Active − (prev Active + New − Paused + Resumed − Churned)
+    "audit_status": 179,
 }
-LAST_ROW = 178
+LAST_ROW = 179
 
 # ── Realization tab (own tab — vintage analysis by DOS month) ──────────────
 REAL_TAB = "Realization"
