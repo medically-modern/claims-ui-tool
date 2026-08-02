@@ -737,10 +737,12 @@ def compute(token, year, month):
     avg_supp = avg([num(s.get(C_SUPP_REV)) for s in active if num(s.get(C_SUPP_REV)) > 0])
 
     # Per-patient unit economics: Active patients with revenue. Order
-    # COGS = sensors + supplies cost only (Brandon 2026-08-01 — no
-    # hardware/shipping). Annual = per-order × fills/year (4, ×6 Medicaid).
+    # COGS = sensors + supplies cost + shipping per order (Brandon
+    # 2026-08-02 — shipping belongs in unit economics; still no hardware).
+    # Annual = per-order × fills/year (4, ×6 Medicaid).
     pp_pop = [s for s in active if num(s.get(C_TOT_REV)) > 0]
-    def pp_cogs(s): return num(s.get(C_SENS_COST)) + num(s.get(C_SUPP_COST))
+    def pp_cogs(s):
+        return num(s.get(C_SENS_COST)) + num(s.get(C_SUPP_COST)) + SHIPPING_PER_ORDER
     pp = dict(
         order_rev=avg_weighted,
         order_cogs=avg([pp_cogs(s) for s in pp_pop]),

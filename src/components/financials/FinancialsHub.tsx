@@ -487,12 +487,15 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
         current.rows.push(r);
       }
     }
-    // Insurance breakdowns: sort each payer run (≥6 consecutive value rows
-    // between subheads) highest → lowest by the latest month. Row numbers
-    // are re-assigned within the run so spacer/gap logic stays intact.
+    // Insurance breakdowns: sort each payer run highest → lowest by the
+    // latest month. Runs break on subheads AND on row-number gaps (blank
+    // sheet rows), so unrelated blocks (e.g. product revenue-mix vs
+    // GP-mix) can never interleave. Applies ONLY to the payer-share
+    // sections. Row numbers are re-assigned within a run so spacer/gap
+    // logic stays intact.
     const lastIdx = tab.months.length - 1;
     for (const s of out) {
-      if (!s.title.toUpperCase().startsWith("PRODUCT & INSURANCE MIX")) continue;
+      if (!s.title.toLowerCase().includes("share by insurance")) continue;
       const sorted: SheetRow[] = [];
       let run: SheetRow[] = [];
       const flush = () => {
@@ -507,8 +510,9 @@ function MonthlyModelView({ data }: { data: MonthlyFinancialsPayload }) {
       };
       for (const r of s.rows) {
         const isSubhead = !r.values.some((v) => v !== "");
+        const contiguous = run.length === 0 || r.row === run[run.length - 1].row + 1;
         if (isSubhead) { flush(); sorted.push(r); }
-        else run.push(r);
+        else { if (!contiguous) flush(); run.push(r); }
       }
       flush();
       s.rows = sorted;
