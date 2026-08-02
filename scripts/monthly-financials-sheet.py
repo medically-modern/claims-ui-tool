@@ -1099,7 +1099,7 @@ def _ensure_kpi_tab(svc):
         ["Avg gross revenue / patient (annual)"],
         ["Subscription gross margin %"],
         ["Avg gross profit / patient (annual)"],
-        ["True realization % (same DOS month — matures over time)"],
+        ["True realization % (not meaningful until column is 2+ months old — matures in place)"],
     ]
     svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!A1",
         valueInputOption="RAW", body={"values": labels}).execute()
