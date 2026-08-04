@@ -110,7 +110,23 @@ export interface BcbsHardStop {
     | "WRONG_POS_LABEL_ROUTED";
   message: string;
   fix: string;
+  /** True when an operator may knowingly bypass this stop from the
+   *  submit dialog (POS rules only — see OVERRIDABLE_HARD_STOP_CODES).
+   *  Payer-ID and unknown-state stops are never overridable: those are
+   *  real routing errors, not judgment calls. */
+  overridable?: boolean;
 }
+
+/** Hard stops an operator is allowed to override at submit time.
+ *  Deliberately POS-only: the rare legitimate case is a NY/NJ patient
+ *  who really was seen at POS 11 (Office), which the state-based
+ *  routing table can't know about. */
+export const OVERRIDABLE_HARD_STOP_CODES: ReadonlySet<BcbsHardStop["code"]> =
+  new Set<BcbsHardStop["code"]>([
+    "WRONG_POS_NY_OR_NJ",
+    "WRONG_POS_OTHER",
+    "WRONG_POS_LABEL_ROUTED",
+  ]);
 
 export interface BcbsWarning {
   code: "CARECENTRIX_AUTH_GAP" | "MODIFIER_MISMATCH";
@@ -126,6 +142,18 @@ export interface BcbsGuardResult {
   applies: boolean;
   hardStops: BcbsHardStop[];
   warnings: BcbsWarning[];
+}
+
+/** True when the result is blocked ONLY by overridable (POS) hard stops,
+ *  i.e. the submit dialog may offer the "keep POS as-is" escape hatch.
+ *  False when there are no hard stops at all, or when any non-overridable
+ *  stop (wrong payer ID, unknown patient state) is present — a mixed
+ *  result must be fixed properly before it can be submitted. */
+export function canOverrideHardStops(result: BcbsGuardResult): boolean {
+  return (
+    result.hardStops.length > 0 &&
+    result.hardStops.every((hs) => OVERRIDABLE_HARD_STOP_CODES.has(hs.code))
+  );
 }
 
 /** True when this looks like a BCBS / Anthem / Blue Cross claim by label. */
@@ -313,6 +341,7 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
           labelRouted.requiredPos === "Home" ? "12 (Home)" : "11 (Office)"
         } but POS is set to ${lrPos}.`,
         fix: `Change POS to ${labelRouted.requiredPos} on this row before submitting.`,
+        overridable: true,
       });
     }
     if (input.lineHcpcs && input.lineModifiers) {
@@ -402,6 +431,7 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
           pos === "Office" ? "11" : "12"
         }). NY/NJ patients bill at POS 12 (Home).`,
         fix: "Change POS to Home on this row before submitting.",
+        overridable: true,
       });
     } else {
       hardStops.push({
@@ -410,6 +440,7 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
           pos === "Office" ? "11" : "12"
         }). Out-of-state BlueCard claims bill at POS 11 (Office).`,
         fix: "Change POS to Office on this row before submitting.",
+        overridable: true,
       });
     }
   }

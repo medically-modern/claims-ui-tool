@@ -124,7 +124,7 @@ Modifiers are **route-specific**, not just code-specific. The same supply code c
 ## Open questions for the next iteration
 
 1. **Auth-by-prefix table.** What's the canonical mapping from member-ID prefix → home plan → "is auth required for our HCPCS set"? Once we have that table, the soft warning becomes a hard check.
-2. **POS edge cases.** Are there any in-NY/in-NJ scenarios where POS 11 IS correct? (e.g. patient picks up in-person at the office.) If yes, the tool should allow an explicit override with a note.
+2. ~~**POS edge cases.** Are there any in-NY/in-NJ scenarios where POS 11 IS correct? (e.g. patient picks up in-person at the office.) If yes, the tool should allow an explicit override with a note.~~ **Answered / built (2026-08-04):** yes, rarely. The Submit board's guard dialog now offers an **override on POS hard stops only** (`OVERRIDABLE_HARD_STOP_CODES` = `WRONG_POS_NY_OR_NJ`, `WRONG_POS_OTHER`, `WRONG_POS_LABEL_ROUTED`). The operator ticks "Override — submit with POS as-is" and types a reason (8+ chars); the reason is appended to the row's **Action Context** on Monday as `[YYYY-MM-DD] POS guard overridden — submitted at <POS> (CMS 11/12): <reason>` before the status flips to Submitted. If the Action Context write fails, the submit is cancelled — no override without a paper trail. Payer-ID mismatches and unresolvable addresses are **never** overridable: a mixed result (POS + payer ID) keeps the dialog locked.
 3. **Member ID format detection.** Need a confidence heuristic for "this ID looks like NJX-prefix Horizon" vs "this ID looks like out-of-state". Probably a regex per plan.
 4. **What about Medicare Advantage Blues plans?** Some BCBS plans operate MA products with different routing. Out of scope today; flagged for future.
 
@@ -137,3 +137,4 @@ Modifiers are **route-specific**, not just code-specific. The same supply code c
 | 2026-05-28 | Brandon (notes) + Claude (synthesis) | Initial draft from email exchange + routing rules |
 | 2026-06-09 | Brandon + Claude | Added "Modifiers by billing route" — 11348/CareCentrix requires NU + SC on supply lines; added SC to the UI modifier dropdown |
 | 2026-06-09 | Brandon + Claude | Completed the per-route modifier table (803 = KX / KX / KF+KX+CG; 11348 = NU+SC / NU+SC / NU) and wired the MODIFIER_MISMATCH soft warning into the pre-submit guard |
+| 2026-08-04 | Brandon + Claude | POS hard stops are now overridable from the Submit board with a required reason logged to Action Context; payer-ID / unknown-state stops stay locked |

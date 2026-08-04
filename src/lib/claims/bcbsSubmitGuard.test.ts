@@ -14,6 +14,7 @@ import {
   BCBS_TN_PAYER_ID,
   BCBS_WY_PAYER_ID,
   resolveLabelRoutedBluePlan,
+  canOverrideHardStops,
 } from "./bcbsSubmitGuard";
 
 describe("parsePatientStateFromAddress", () => {
@@ -528,5 +529,67 @@ describe("evaluateBcbsSubmit — BCBS Wyoming (direct, 53767)", () => {
     expect(resolveLabelRoutedBluePlan("BCBS Wyoming", null)?.payerId).toBe(BCBS_WY_PAYER_ID);
     expect(resolveLabelRoutedBluePlan(null, "53767")?.payerId).toBe(BCBS_WY_PAYER_ID);
     expect(resolveLabelRoutedBluePlan("BCBS Wyoming", null)?.requiredPos).toBeNull();
+  });
+});
+
+// ── Operator override of POS hard stops ──────────────────────────────────────
+// Rare-but-real: a NY/NJ patient who really should bill at POS 11. The
+// guard dialog offers an override for POS stops only — never for payer
+// ID or unresolvable address.
+describe("canOverrideHardStops", () => {
+  const NY_POS_OFFICE = {
+    payerLabel: "Empire BCBS",
+    payorId: ANTHEM_NY_PAYER_ID,
+    placeOfService: "Office" as const,
+    patientState: "NY" as const,
+    lineAuthIds: ["AUTH"],
+  };
+
+  it("allows override when the only stop is the NY/NJ POS rule", () => {
+    const r = evaluateBcbsSubmit(NY_POS_OFFICE);
+    expect(r.hardStops.map((h) => h.code)).toEqual(["WRONG_POS_NY_OR_NJ"]);
+    expect(r.hardStops[0].overridable).toBe(true);
+    expect(canOverrideHardStops(r)).toBe(true);
+  });
+
+  it("allows override for the out-of-state POS rule", () => {
+    const r = evaluateBcbsSubmit({
+      ...NY_POS_OFFICE,
+      patientState: "OTHER",
+      placeOfService: "Home",
+    });
+    expect(r.hardStops.map((h) => h.code)).toEqual(["WRONG_POS_OTHER"]);
+    expect(canOverrideHardStops(r)).toBe(true);
+  });
+
+  it("allows override for a label-routed POS mismatch (BCBS TN at Office)", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "BCBS Tennessee",
+      payorId: BCBS_TN_PAYER_ID,
+      placeOfService: "Office",
+      patientState: "OTHER",
+      lineAuthIds: ["AUTH"],
+    });
+    expect(r.hardStops.map((h) => h.code)).toEqual(["WRONG_POS_LABEL_ROUTED"]);
+    expect(canOverrideHardStops(r)).toBe(true);
+  });
+
+  it("refuses override when a payer ID stop rides along with the POS stop", () => {
+    const r = evaluateBcbsSubmit({ ...NY_POS_OFFICE, payorId: CARECENTRIX_NJ_PAYER_ID });
+    expect(r.hardStops.some((h) => h.code === "WRONG_PAYER_NY")).toBe(true);
+    expect(canOverrideHardStops(r)).toBe(false);
+  });
+
+  it("refuses override for an unresolvable patient state", () => {
+    const r = evaluateBcbsSubmit({ ...NY_POS_OFFICE, patientState: "UNKNOWN" });
+    expect(r.hardStops.map((h) => h.code)).toEqual(["STATE_UNKNOWN"]);
+    expect(r.hardStops[0].overridable).toBeUndefined();
+    expect(canOverrideHardStops(r)).toBe(false);
+  });
+
+  it("is false when there is nothing to override", () => {
+    const r = evaluateBcbsSubmit({ ...NY_POS_OFFICE, placeOfService: "Home" });
+    expect(r.hardStops).toEqual([]);
+    expect(canOverrideHardStops(r)).toBe(false);
   });
 });

@@ -30,6 +30,7 @@ import {
   type BcbsGuardResult,
   type PatientStateBucket,
 } from "@/lib/claims/bcbsSubmitGuard";
+import { setActionContext } from "@/api/setActionContext";
 import { setPlaceOfService } from "@/api/setPlaceOfService";
 import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 import {
@@ -275,13 +276,41 @@ export function PrimarySubmitBoard({ navTo }: { navTo?: PrimarySubmitNavTo | nul
   // first. Hard stops block submission outright; soft warnings open a
   // confirmation dialog. Non-BCBS claims skip the guard entirely
   // (applies === false).
-  const performSubmit = async (c: ThreadClaim) => {
+  //
+  // `overrideReason` is set only when the operator bypassed a POS hard
+  // stop from the guard dialog. We stamp it into Action Context BEFORE
+  // flipping the status, so the audit note is on the row even if the
+  // status write fails — and so the backend's webhook (which reads the
+  // row on status change) never races an empty note.
+  const performSubmit = async (c: ThreadClaim, overrideReason?: string) => {
     if (!c.monday_item_id) {
       toast({
         title: "Can't submit",
         description: "No Monday item id on this row — local-only claim.",
       });
       return;
+    }
+    // Audit trail for POS overrides. Appended (not replaced) so existing
+    // denial-workflow notes survive. A failure here blocks the submit —
+    // an override without its paper trail is worse than a retry.
+    if (overrideReason) {
+      const stamp = new Date().toISOString().slice(0, 10);
+      const pos = c.place_of_service ?? "Home";
+      const note =
+        `[${stamp}] POS guard overridden — submitted at ${pos} ` +
+        `(CMS ${pos === "Office" ? "11" : "12"}): ${overrideReason}`;
+      const merged = [c.action_context?.trim(), note].filter(Boolean).join("\n");
+      try {
+        await setActionContext(c.monday_item_id, merged);
+        updateClaim(c.id, { action_context: merged });
+      } catch (e) {
+        toast({
+          title: "Override not logged — submit cancelled",
+          description:
+            `Couldn't write the override reason to Action Context: ${(e as Error).message}`,
+        });
+        return;
+      }
     }
     // Optimistic local flip so the row leaves the Submit queue immediately.
     updateClaim(c.id, { status: "Submitted" });
@@ -291,6 +320,7 @@ export function PrimarySubmitBoard({ navTo }: { navTo?: PrimarySubmitNavTo | nul
         title: `Submitted ${c.patient.name}`,
         description:
           `${c.items.length} line item${c.items.length === 1 ? "" : "s"} queued to ${c.payer}. ` +
+          (overrideReason ? `POS override logged to Action Context. ` : "") +
           `Stedi 837 fires in the background; Claim ID + Sent Date will appear after the response.`,
       });
     } catch (e) {
@@ -535,10 +565,10 @@ export function PrimarySubmitBoard({ navTo }: { navTo?: PrimarySubmitNavTo | nul
           }}
           patientName={bcbsGuard.claim.patient.name}
           result={bcbsGuard.result}
-          onConfirm={() => {
+          onConfirm={(overrideReason) => {
             const c = bcbsGuard.claim;
             setBcbsGuard(null);
-            void performSubmit(c);
+            void performSubmit(c, overrideReason);
           }}
         />
       )}
