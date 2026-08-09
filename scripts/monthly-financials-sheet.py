@@ -1186,6 +1186,8 @@ def _ensure_kpi_tab(svc):
         ["Avg gross profit / patient (annual)"],
         ["Subscription gross margin %"],
         ["True realization % (not meaningful until column is 2+ months old — matures in place)"],
+        ["First-reorder conversion % (ordered ÷ first reorders due)"],
+        ["Portal response % (links sent → responded)"],
     ]
     svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!A1",
         valueInputOption="RAW", body={"values": labels}).execute()
@@ -1205,11 +1207,11 @@ def _ensure_kpi_tab(svc):
         numf(4, 6, "NUMBER", "#,##0"), numf(7, 7, "NUMBER", "0.00"),
         numf(8, 8, "NUMBER", "+#,##0;-#,##0;0"), numf(9, 9, "PERCENT", "0.00%"),
         numf(10, 10, "NUMBER", "#,##0"),
-        numf(11, 14, "CURRENCY", "$#,##0"), numf(15, 16, "PERCENT", "0.0%"),
+        numf(11, 14, "CURRENCY", "$#,##0"), numf(15, 18, "PERCENT", "0.0%"),
         # % rows italicized (Brandon 2026-08-01)
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 8, "endRowIndex": 9, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 14, "endRowIndex": 16, "startColumnIndex": 0, "endColumnIndex": 30},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 14, "endRowIndex": 18, "startColumnIndex": 0, "endColumnIndex": 30},
          "cell": {"userEnteredFormat": {"textFormat": {"italic": True}}}, "fields": "userEnteredFormat.textFormat.italic"}},
         {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
          "properties": {"pixelSize": 320}, "fields": "pixelSize"}},
@@ -1250,12 +1252,260 @@ def write_kpi_column(svc, mcol, label):
         15: f"={mf}{R['sub_gm']}",
         16: (f"=IFERROR(INDEX('{REAL_TAB}'!$12:$12,"
              f"MATCH({kcol}$3,'{REAL_TAB}'!$3:$3,0)),"")"),
+        # Funnel KPIs (Brandon 2026-08-09) — INDEX into the Reorder Funnel tab
+        17: (f"=IFERROR(INDEX('{FUNNEL_TAB}'!${FUNNEL_ROWS['conv']}:${FUNNEL_ROWS['conv']},"
+             f"MATCH({kcol}$3,'{FUNNEL_TAB}'!$3:$3,0)),"")"),
+        18: (f"=IFERROR(INDEX('{FUNNEL_TAB}'!${FUNNEL_ROWS['resp_pct']}:${FUNNEL_ROWS['resp_pct']},"
+             f"MATCH({kcol}$3,'{FUNNEL_TAB}'!$3:$3,0)),"")"),
     }
     data = [{"range": f"'{KPI_TAB}'!{kcol}{r}", "values": [[v]]} for r, v in rows.items()]
     svc.spreadsheets().values().batchUpdate(spreadsheetId=SHEET_ID,
         body={"valueInputOption": "USER_ENTERED", "data": data}).execute()
     svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!{kcol}3",
         valueInputOption="RAW", body={"values": [[label]]}).execute()
+
+
+# ── Reorder funnel & patient portal tab ────────────────────────────────────
+FUNNEL_TAB = "Reorder Funnel"
+C_CYCLE = "color_mkyjawhq"      # Ordering Cycle: Order Prep / Ready to Order / Next Order Awaiting
+C_TXT_SENT = "text_mm3rzqks"    # Reorder Text Sent ("Jul 12, 2026, 2:00 PM ET")
+C_RESP_TS = "text_mm3kt9bs"     # Patient Response Timestamp
+C_INS_RESP = "color_mm3k4z79"   # Patient Insurance Response: Confirmed / Changed / Cancel
+C_ORD_RESP = "color_mm3kjykc"   # Patient Order Response: Confirmed / Delay / Cancel / No Response / Pause
+FUNNEL_COLS = [C_STATUS, C_PRIMARY, C_CYCLE, C_TXT_SENT, C_RESP_TS, C_INS_RESP, C_ORD_RESP]
+
+
+def _parse_ts(s):
+    """'Jul 12, 2026, 2:00 PM ET' -> date, else None."""
+    s = (s or "").strip().replace(" ET", "")
+    for fmt in ("%b %d, %Y, %I:%M %p", "%b %d, %Y"):
+        try:
+            return dt.datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def pull_cycle_events(token, from_iso, to_iso):
+    events, page = [], 1
+    q = """query($b:[ID!],$f:ISO8601DateTime!,$t:ISO8601DateTime!,$p:Int!){
+      boards(ids:$b){activity_logs(from:$f,to:$t,column_ids:["%s"],limit:100,page:$p){
+      created_at data}}}""" % C_CYCLE
+    while True:
+        d = monday(q, {"b": [SUB_BOARD], "f": from_iso, "t": to_iso, "p": page}, token)
+        logs = d["boards"][0]["activity_logs"] or []
+        events.extend(logs)
+        if len(logs) < 100:
+            break
+        page += 1
+    return events
+
+
+def compute_funnel(token, year, month):
+    """First-time-reorder conversion + portal response, one DOS/send month.
+
+    Definitions (Brandon 2026-08-09):
+      * First reorder due = item's FIRST-EVER 'Order Prep'/'Ready to Order'
+        Ordering Cycle event fell in the month (event history since
+        2026-05-01; certified from Aug 2026, Jul best-effort).
+      * Converted = that item then has a claim with DOS in the month
+        (order actually placed); Paused = Subscription Status moved to
+        Paused in the month instead; rest = unresolved carry-over.
+      * Portal cohort = items whose 'Reorder Text Sent' timestamp falls in
+        the month. Responded = Patient Response Timestamp present (per-cycle
+        field, snapshot at run time). Confirmed = Patient Insurance
+        Response/Patient Order Response = Confirmed. Fields are overwritten
+        each cycle -> the monthly run on the 1st captures the prior month's
+        cohort before the next mid-month send wave.
+    """
+    first = dt.date(year, month, 1)
+    last = (dt.date(year + (month == 12), (month % 12) + 1, 1) - dt.timedelta(days=1))
+
+    subs = pull_subscription_snapshot_cols(token, FUNNEL_COLS)
+    by_id = {s["id"]: s for s in subs}
+
+    # 1. first-ever reorder-due events
+    events = pull_cycle_events(token, "2026-05-01T00:00:00Z",
+                               (last + dt.timedelta(days=1)).isoformat() + "T04:00:00Z")
+    first_due = {}  # pulse_id -> date of first Order Prep/Ready to Order
+    for ev in events:
+        try:
+            data = json.loads(ev["data"])
+        except (TypeError, ValueError):
+            continue
+        pid = str(data.get("pulse_id") or "")
+        lab = label_from(data.get("value") or {})
+        if not pid or lab not in ("Order Prep", "Ready to Order"):
+            continue
+        ts = dt.datetime.utcfromtimestamp(int(ev["created_at"]) // 10**7).date()
+        if pid not in first_due or ts < first_due[pid]:
+            first_due[pid] = ts
+    due_ids = [p for p, d0 in first_due.items() if first <= d0 <= last and p in by_id]
+
+    # ordered = claim with DOS in month for that item
+    claims = pull_month_claims(token, first.isoformat(), last.isoformat())
+    def _ccv(c, cid):
+        for v in c.get("column_values", []):
+            if v["id"] == cid:
+                return (v["text"] or "").strip()
+        return ""
+    claimed_sub_ids = {_ccv(c, C_SUBID) for c in claims}
+    # paused during month
+    pev = pull_pause_events(token, f"{first.isoformat()}T00:00:00Z",
+                            (last + dt.timedelta(days=1)).isoformat() + "T04:00:00Z")
+    paused_ids = set()
+    for ev in pev:
+        try:
+            data = json.loads(ev["data"])
+        except (TypeError, ValueError):
+            continue
+        if "paus" in label_from(data.get("value") or {}).lower():
+            paused_ids.add(str(data.get("pulse_id") or ""))
+
+    ordered = sum(1 for p in due_ids if p in claimed_sub_ids)
+    paused = sum(1 for p in due_ids if p not in claimed_sub_ids and p in paused_ids)
+    due = len(due_ids)
+
+    # 2. portal cohort (sent in month), overall + by payer family
+    sent = resp = conf = 0
+    fam = {}
+    for s in subs:
+        d0 = _parse_ts(s.get(C_TXT_SENT, ""))
+        if not d0 or not (first <= d0 <= last):
+            continue
+        sent += 1
+        f = payer_family(s.get(C_PRIMARY, ""))
+        fam.setdefault(f, [0, 0, 0])
+        fam[f][0] += 1
+        if s.get(C_RESP_TS, "").strip():
+            resp += 1
+            fam[f][1] += 1
+        if "confirmed" in (s.get(C_INS_RESP, "") + s.get(C_ORD_RESP, "")).lower():
+            conf += 1
+            fam[f][2] += 1
+    return dict(due=due, ordered=ordered, paused=paused, sent=sent,
+                resp=resp, conf=conf, fam=fam)
+
+
+def pull_subscription_snapshot_cols(token, cols):
+    """Like pull_subscription_snapshot but with an arbitrary column set."""
+    items, cursor = [], None
+    q_first = """query($b:[ID!],$c:[String!]){boards(ids:$b){items_page(limit:500){
+      cursor items{id name column_values(ids:$c){id text}}}}}"""
+    q_next = """query($cur:String!,$c:[String!]){next_items_page(limit:500,cursor:$cur){
+      cursor items{id name column_values(ids:$c){id text}}}}"""
+    while True:
+        if cursor is None:
+            d = monday(q_first, {"b": [SUB_BOARD], "c": cols}, token)
+            page = d["boards"][0]["items_page"]
+        else:
+            d = monday(q_next, {"cur": cursor, "c": cols}, token)
+            page = d["next_items_page"]
+        for it in page["items"]:
+            row = {"id": it["id"], "name": it["name"]}
+            row.update({cv["id"]: (cv["text"] or "") for cv in it["column_values"]})
+            items.append(row)
+        cursor = page.get("cursor")
+        if not cursor:
+            break
+    return items
+
+
+FUNNEL_ROWS = {
+    "due": 5, "ordered": 6, "paused": 7, "unresolved": 8, "conv": 9,
+    "sent": 12, "resp": 13, "conf": 14, "resp_pct": 15, "conf_pct": 16,
+    "fam_start": 19,  # 12 family rows: "resp/sent (pct)" text
+}
+
+
+def update_funnel_tab(svc, token, year, month):
+    label = dt.date(year, month, 1).strftime("%b %Y")
+    meta = svc.spreadsheets().get(spreadsheetId=SHEET_ID, fields="sheets.properties").execute()
+    sid = None
+    for s in meta["sheets"]:
+        if s["properties"]["title"] == FUNNEL_TAB:
+            sid = s["properties"]["sheetId"]
+    if sid is None:
+        r = svc.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": [{
+            "addSheet": {"properties": {"title": FUNNEL_TAB, "gridProperties": {
+                "rowCount": 40, "columnCount": 30, "frozenRowCount": 3, "frozenColumnCount": 1}}}}]}).execute()
+        sid = r["replies"][0]["addSheet"]["properties"]["sheetId"]
+        F = FUNNEL_ROWS
+        labels = {
+            1: "REORDER FUNNEL & PATIENT PORTAL",
+            2: ("First-time reorders only (item's first-ever Order Prep/Ready to Order event; "
+                "certified from Aug 2026 — Jul is best-effort). Portal cohort = links sent in month; "
+                "response fields are per-cycle, snapshotted on the 1st. All computed values (black)."),
+            3: "Metric",
+            4: "FIRST-TIME REORDERS",
+            F["due"]: "First reorders due (came up this month)",
+            F["ordered"]: "   · ordered (claim with DOS in month)",
+            F["paused"]: "   · moved to Pause instead",
+            F["unresolved"]: "   · unresolved / carried over",
+            F["conv"]: "First-reorder conversion % (ordered ÷ due)",
+            11: "PATIENT PORTAL",
+            F["sent"]: "Portal links sent",
+            F["resp"]: "   · responded (any)",
+            F["conf"]: "   · confirmed",
+            F["resp_pct"]: "Portal response %",
+            F["conf_pct"]: "Portal confirmation %",
+            18: "PORTAL RESPONSE BY PRIMARY INSURANCE — responded/sent (rate)",
+        }
+        for i, f in enumerate(PAYER_FAMILIES):
+            labels[F["fam_start"] + i] = f[0] if isinstance(f, tuple) else str(f)
+        data = [{"range": f"'{FUNNEL_TAB}'!A{r}", "values": [[v]]} for r, v in labels.items()]
+        svc.spreadsheets().values().batchUpdate(spreadsheetId=SHEET_ID,
+            body={"valueInputOption": "RAW", "data": data}).execute()
+        svc.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": [
+            {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1},
+             "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 14}}},
+             "fields": "userEnteredFormat.textFormat"}},
+            {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": 2},
+             "cell": {"userEnteredFormat": {"textFormat": {"italic": True, "fontSize": 9,
+                "foregroundColor": {"red": 0.42, "green": 0.45, "blue": 0.5}}}},
+             "fields": "userEnteredFormat.textFormat"}},
+            *[{"repeatCell": {"range": {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r0 + 1,
+               "startColumnIndex": 0, "endColumnIndex": 30},
+               "cell": {"userEnteredFormat": {"textFormat": {"bold": True},
+                        "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.97}}},
+               "fields": "userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor"}}
+              for r0 in (2, 3, 10, 17)],
+            *[{"repeatCell": {"range": {"sheetId": sid, "startRowIndex": r0 - 1, "endRowIndex": r0,
+               "startColumnIndex": 1, "endColumnIndex": 30},
+               "cell": {"userEnteredFormat": {"numberFormat": {"type": "PERCENT", "pattern": "0%"},
+                        "textFormat": {"italic": True}}},
+               "fields": "userEnteredFormat.numberFormat,userEnteredFormat.textFormat.italic"}}
+              for r0 in (FUNNEL_ROWS["conv"], FUNNEL_ROWS["resp_pct"], FUNNEL_ROWS["conf_pct"])],
+            {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
+             "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 360}, "fields": "pixelSize"}},
+        ]}).execute()
+
+    fn = compute_funnel(token, year, month)
+    hdr = svc.spreadsheets().values().get(
+        spreadsheetId=SHEET_ID, range=f"'{FUNNEL_TAB}'!3:3",
+        valueRenderOption="UNFORMATTED_VALUE").execute().get("values", [[]])[0]
+    norm = [norm_header(h) for h in hdr]
+    idx = norm.index(label) if label in norm else max(len(hdr), 1)
+    col = col_letter(idx)
+    F = FUNNEL_ROWS
+    cells = {
+        F["due"]: fn["due"], F["ordered"]: fn["ordered"], F["paused"]: fn["paused"],
+        F["unresolved"]: f"={col}{F['due']}-{col}{F['ordered']}-{col}{F['paused']}",
+        F["conv"]: f'=IF(N({col}{F["due"]})=0,"",{col}{F["ordered"]}/{col}{F["due"]})',
+        F["sent"]: fn["sent"], F["resp"]: fn["resp"], F["conf"]: fn["conf"],
+        F["resp_pct"]: f'=IF(N({col}{F["sent"]})=0,"",{col}{F["resp"]}/{col}{F["sent"]})',
+        F["conf_pct"]: f'=IF(N({col}{F["sent"]})=0,"",{col}{F["conf"]}/{col}{F["sent"]})',
+    }
+    fam_names = [f[0] if isinstance(f, tuple) else str(f) for f in PAYER_FAMILIES]
+    for i, name in enumerate(fam_names):
+        s_, r_, _c = fn["fam"].get(name, [0, 0, 0])
+        cells[F["fam_start"] + i] = f"{r_}/{s_} ({r_/s_*100:.0f}%)" if s_ else "—"
+    data = [{"range": f"'{FUNNEL_TAB}'!{col}{r}", "values": [[v]]} for r, v in cells.items()]
+    svc.spreadsheets().values().batchUpdate(spreadsheetId=SHEET_ID,
+        body={"valueInputOption": "USER_ENTERED", "data": data}).execute()
+    svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{FUNNEL_TAB}'!{col}3",
+        valueInputOption="RAW", body={"values": [[label]]}).execute()
+    return fn
 
 
 def main():
@@ -1286,6 +1536,9 @@ def main():
     if not args.dry_run:
         n = update_realization_tab(svc, token, year, month)
         print(f"Realization tab refreshed: {n} DOS month column(s) re-measured.")
+        fn = update_funnel_tab(svc, token, year, month)
+        print(f"Reorder Funnel tab: due {fn['due']} / ordered {fn['ordered']} / paused {fn['paused']}; "
+              f"portal {fn['resp']}/{fn['sent']} responded.")
         write_kpi_column(svc, col, dt.date(year, month, 1).strftime("%b %Y"))
         print("KPIs tab column written.")
 
