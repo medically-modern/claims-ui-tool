@@ -1186,7 +1186,7 @@ def _ensure_kpi_tab(svc):
         ["Avg gross profit / patient (annual)"],
         ["Subscription gross margin %"],
         ["True realization % (not meaningful until column is 2+ months old — matures in place)"],
-        ["First-reorder conversion % (ordered ÷ first reorders due)"],
+        ["Reorder conversion % (ordered ÷ reorders due)"],
         ["Portal response % (links sent → responded)"],
     ]
     svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!A1",
@@ -1384,20 +1384,24 @@ def compute_funnel(token, year, month):
         if "paus" in label_from(data.get("value") or {}).lower():
             paused_in_m.add(str(data.get("pulse_id") or ""))
 
+    # ALL reorders due in M (any cycle, not just the first — Brandon
+    # 2026-08-09 rev 3): each prior claim schedules the next order at
+    # DOS + frequency; count every such due date landing in M.
     due = ordered = paused = 0
     for sid, dates in dos_by_sub.items():
         s = by_id.get(sid)
         if s is None:
             continue
-        first_dos = dates[0]
-        due_date = first_dos + dt.timedelta(days=freq_days(s))
-        if not (first <= due_date <= last) or first_dos >= first:
-            continue          # first reorder not scheduled in M
-        due += 1
-        if len(dates) >= 2 and dates[1] <= last:
-            ordered += 1      # reorder placed (early, on-time, or late in M)
-        elif sid in paused_in_m or s.get(C_STATUS, "") == "Paused":
-            paused += 1
+        fd = freq_days(s)
+        for k, d_k in enumerate(dates):
+            due_date = d_k + dt.timedelta(days=fd)
+            if not (first <= due_date <= last) or d_k >= first:
+                continue      # this cycle's reorder not scheduled in M
+            due += 1
+            if k + 1 < len(dates) and dates[k + 1] <= last:
+                ordered += 1  # next order placed (early, on-time, or late in M)
+            elif sid in paused_in_m or s.get(C_STATUS, "") == "Paused":
+                paused += 1
 
     # 2. portal cohort (sent in month), overall + by payer family
     sent = resp = conf = 0
@@ -1470,12 +1474,12 @@ def update_funnel_tab(svc, token, year, month):
                 "certified from Aug 2026 — Jul is best-effort). Portal cohort = links sent in month; "
                 "response fields are per-cycle, snapshotted on the 1st. All computed values (black)."),
             3: "Metric",
-            4: "FIRST-TIME REORDERS",
-            F["due"]: "First reorders due (came up this month)",
-            F["ordered"]: "   · ordered (claim with DOS in month)",
+            4: "REORDERS DUE (all cycles)",
+            F["due"]: "Reorders due (order date came up this month)",
+            F["ordered"]: "   · ordered (next claim placed by month end)",
             F["paused"]: "   · moved to Pause instead",
             F["unresolved"]: "   · unresolved / carried over",
-            F["conv"]: "First-reorder conversion % (ordered ÷ due)",
+            F["conv"]: "Reorder conversion % (ordered ÷ due)",
             11: "PATIENT PORTAL",
             F["sent"]: "Portal links sent",
             F["resp"]: "   · responded (any)",
