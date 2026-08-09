@@ -1272,7 +1272,9 @@ C_TXT_SENT = "text_mm3rzqks"    # Reorder Text Sent ("Jul 12, 2026, 2:00 PM ET")
 C_RESP_TS = "text_mm3kt9bs"     # Patient Response Timestamp
 C_INS_RESP = "color_mm3k4z79"   # Patient Insurance Response: Confirmed / Changed / Cancel
 C_ORD_RESP = "color_mm3kjykc"   # Patient Order Response: Confirmed / Delay / Cancel / No Response / Pause
-FUNNEL_COLS = [C_STATUS, C_PRIMARY, C_CYCLE, C_TXT_SENT, C_RESP_TS, C_INS_RESP, C_ORD_RESP]
+C_FREQ = "color_mm48kv1c"       # Order Frequency: 90-Days / 60-Days / 30-Days
+FUNNEL_COLS = [C_STATUS, C_PRIMARY, C_CYCLE, C_TXT_SENT, C_RESP_TS, C_INS_RESP, C_ORD_RESP, C_FREQ]
+CLAIMS_HISTORY_START = "2026-05-01"  # earliest complete Claims Board DOS data
 
 
 def _parse_ts(s):
@@ -1301,22 +1303,55 @@ def pull_cycle_events(token, from_iso, to_iso):
     return events
 
 
-def compute_funnel(token, year, month):
-    """First-time-reorder conversion + portal response, one DOS/send month.
+def pull_claims_dos(token, first_day, last_day):
+    """(sub_item_id, dos_date) for every latest-thread claim in the window."""
+    out, cursor = [], None
+    q_first = """query($b:ID!,$rules:CompareValue!){boards(ids:[$b]){items_page(limit:200,
+      query_params:{rules:[{column_id:"%s",compare_value:$rules,operator:between}]}){
+      cursor items{id group{title} column_values(ids:["%s","%s"]){id text}}}}}""" % (
+        C_DOS, C_SUBID, C_DOS)
+    q_next = """query($cur:String!){next_items_page(limit:200,cursor:$cur){
+      cursor items{id group{title} column_values(ids:["%s","%s"]){id text}}}}""" % (C_SUBID, C_DOS)
+    while True:
+        if cursor is None:
+            d = monday(q_first, {"b": CLAIMS_BOARD, "rules": [first_day, last_day]}, token)
+            page = d["boards"][0]["items_page"]
+        else:
+            d = monday(q_next, {"cur": cursor}, token)
+            page = d["next_items_page"]
+        for it in page["items"]:
+            if "non-latest" in (it.get("group") or {}).get("title", "").lower():
+                continue
+            cvs = {v["id"]: (v["text"] or "").strip() for v in it["column_values"]}
+            sid, dos = cvs.get(C_SUBID, ""), cvs.get(C_DOS, "")
+            try:
+                out.append((sid, dt.date.fromisoformat(dos[:10])))
+            except ValueError:
+                continue
+        cursor = page.get("cursor")
+        if not cursor:
+            break
+    return out
 
-    Definitions (Brandon 2026-08-09):
-      * First reorder due = item's FIRST-EVER 'Order Prep'/'Ready to Order'
-        Ordering Cycle event fell in the month (event history since
-        2026-05-01; certified from Aug 2026, Jul best-effort).
-      * Converted = that item then has a claim with DOS in the month
-        (order actually placed); Paused = Subscription Status moved to
-        Paused in the month instead; rest = unresolved carry-over.
-      * Portal cohort = items whose 'Reorder Text Sent' timestamp falls in
-        the month. Responded = Patient Response Timestamp present (per-cycle
-        field, snapshot at run time). Confirmed = Patient Insurance
-        Response/Patient Order Response = Confirmed. Fields are overwritten
-        each cycle -> the monthly run on the 1st captures the prior month's
-        cohort before the next mid-month send wave.
+
+def compute_funnel(token, year, month):
+    """First-time-reorder conversion + portal response for one month.
+
+    Definitions (Brandon 2026-08-09, rev 2 — order-date basis):
+      * First reorder due in M = item's first-ever claim DOS + Order
+        Frequency (90/60/30d; default 90) lands inside M, with the first
+        order itself before M. Claims history read from CLAIMS_HISTORY_START
+        (2026-05-01) -> the first fully-certifiable month is Aug 2026
+        (Jul misses 90-day patients whose first order was April).
+      * Ordered = a second claim (the reorder) exists with DOS <= month end
+        — pressing Order counts whether it shipped early, on the day, or
+        late within the month.
+      * Paused = no reorder claim and the item sits Paused at run time (or
+        paused during M); rest = unresolved / late carry-over.
+      * Portal cohort = 'Reorder Text Sent' timestamp in M. Responded =
+        Patient Response Timestamp present; Confirmed = Insurance/Order
+        Response says Confirmed. Per-cycle fields, snapshotted on the 1st
+        before the next mid-month send wave.
     """
     first = dt.date(year, month, 1)
     last = (dt.date(year + (month == 12), (month % 12) + 1, 1) - dt.timedelta(days=1))
@@ -1324,47 +1359,45 @@ def compute_funnel(token, year, month):
     subs = pull_subscription_snapshot_cols(token, FUNNEL_COLS)
     by_id = {s["id"]: s for s in subs}
 
-    # 1. first-ever reorder-due events
-    events = pull_cycle_events(token, "2026-05-01T00:00:00Z",
-                               (last + dt.timedelta(days=1)).isoformat() + "T04:00:00Z")
-    first_due = {}  # pulse_id -> date of first Order Prep/Ready to Order
-    for ev in events:
-        try:
-            data = json.loads(ev["data"])
-        except (TypeError, ValueError):
-            continue
-        pid = str(data.get("pulse_id") or "")
-        lab = label_from(data.get("value") or {})
-        if not pid or lab not in ("Order Prep", "Ready to Order"):
-            continue
-        ts = dt.datetime.utcfromtimestamp(int(ev["created_at"]) // 10**7).date()
-        if pid not in first_due or ts < first_due[pid]:
-            first_due[pid] = ts
-    due_ids = [p for p, d0 in first_due.items() if first <= d0 <= last and p in by_id]
+    # claim DOS history per subscription item
+    hist = pull_claims_dos(token, CLAIMS_HISTORY_START, last.isoformat())
+    dos_by_sub = {}
+    for sid, d0 in hist:
+        if sid:
+            dos_by_sub.setdefault(sid, []).append(d0)
+    for sid in dos_by_sub:
+        dos_by_sub[sid].sort()
 
-    # ordered = claim with DOS in month for that item
-    claims = pull_month_claims(token, first.isoformat(), last.isoformat())
-    def _ccv(c, cid):
-        for v in c.get("column_values", []):
-            if v["id"] == cid:
-                return (v["text"] or "").strip()
-        return ""
-    claimed_sub_ids = {_ccv(c, C_SUBID) for c in claims}
-    # paused during month
+    def freq_days(s):
+        f = (s.get(C_FREQ, "") or "").strip()
+        return {"30-Days": 30, "60-Days": 60, "90-Days": 90}.get(f, 90)
+
+    # pause events during M (fallback: current status Paused)
     pev = pull_pause_events(token, f"{first.isoformat()}T00:00:00Z",
                             (last + dt.timedelta(days=1)).isoformat() + "T04:00:00Z")
-    paused_ids = set()
+    paused_in_m = set()
     for ev in pev:
         try:
             data = json.loads(ev["data"])
         except (TypeError, ValueError):
             continue
         if "paus" in label_from(data.get("value") or {}).lower():
-            paused_ids.add(str(data.get("pulse_id") or ""))
+            paused_in_m.add(str(data.get("pulse_id") or ""))
 
-    ordered = sum(1 for p in due_ids if p in claimed_sub_ids)
-    paused = sum(1 for p in due_ids if p not in claimed_sub_ids and p in paused_ids)
-    due = len(due_ids)
+    due = ordered = paused = 0
+    for sid, dates in dos_by_sub.items():
+        s = by_id.get(sid)
+        if s is None:
+            continue
+        first_dos = dates[0]
+        due_date = first_dos + dt.timedelta(days=freq_days(s))
+        if not (first <= due_date <= last) or first_dos >= first:
+            continue          # first reorder not scheduled in M
+        due += 1
+        if len(dates) >= 2 and dates[1] <= last:
+            ordered += 1      # reorder placed (early, on-time, or late in M)
+        elif sid in paused_in_m or s.get(C_STATUS, "") == "Paused":
+            paused += 1
 
     # 2. portal cohort (sent in month), overall + by payer family
     sent = resp = conf = 0
@@ -1488,14 +1521,22 @@ def update_funnel_tab(svc, token, year, month):
     idx = norm.index(label) if label in norm else max(len(hdr), 1)
     col = col_letter(idx)
     F = FUNNEL_ROWS
-    cells = {
-        F["due"]: fn["due"], F["ordered"]: fn["ordered"], F["paused"]: fn["paused"],
-        F["unresolved"]: f"={col}{F['due']}-{col}{F['ordered']}-{col}{F['paused']}",
-        F["conv"]: f'=IF(N({col}{F["due"]})=0,"",{col}{F["ordered"]}/{col}{F["due"]})',
+    if (year, month) < (2026, 8):
+        # claims history starts May 2026 -> Jul misses 90-day patients;
+        # don't publish an inaccurate number (Brandon 2026-08-09)
+        cells = {F["due"]: "n/a", F["ordered"]: "n/a", F["paused"]: "n/a",
+                 F["unresolved"]: "n/a", F["conv"]: ""}
+    else:
+        cells = {
+            F["due"]: fn["due"], F["ordered"]: fn["ordered"], F["paused"]: fn["paused"],
+            F["unresolved"]: f"={col}{F['due']}-{col}{F['ordered']}-{col}{F['paused']}",
+            F["conv"]: f'=IF(N({col}{F["due"]})=0,"",{col}{F["ordered"]}/{col}{F["due"]})',
+        }
+    cells.update({
         F["sent"]: fn["sent"], F["resp"]: fn["resp"], F["conf"]: fn["conf"],
         F["resp_pct"]: f'=IF(N({col}{F["sent"]})=0,"",{col}{F["resp"]}/{col}{F["sent"]})',
         F["conf_pct"]: f'=IF(N({col}{F["sent"]})=0,"",{col}{F["conf"]}/{col}{F["sent"]})',
-    }
+    })
     fam_names = [f[0] if isinstance(f, tuple) else str(f) for f in PAYER_FAMILIES]
     for i, name in enumerate(fam_names):
         s_, r_, _c = fn["fam"].get(name, [0, 0, 0])
