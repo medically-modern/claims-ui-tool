@@ -26,7 +26,8 @@ Definitions (agreed with Brandon 2026-08-01):
   * Monthly revenue: Claims Board items with DOS in the month, EXCLUDING
     groups whose title contains "Non-latest" (superseded thread
     ancestors). Line value = subitem Est Pay, falling back to Charge.
-    Product split by HCPC: E0784 pump / E2103 monitor / A4239 sensors /
+    Product split by HCPC: E0784 pump / E2103 monitor / A4239 + A4238
+    sensors (A4238 bucketed exactly like A4239 in this script only) /
     A4224 A4225 A4230 A4231 A4232 supplies.
   * COGS: for each counted claim, the matched subscription patient's
     per-fill sensors cost (if the claim has sensor lines) + supplies cost
@@ -77,7 +78,10 @@ C_PPAID = "numeric_mm115q76"  # Claims Board: Primary Paid (A) — realization c
 C_PR_AMT = "numeric_mkxmc2rh"   # PR Amount (C) — patient responsibility per primary ERA
 C_RAW_PR = "numeric_mm1gdpjq"   # Raw Patient Responsibility (ERA-parsed)
 C_ERA_DATE = "text_mm2047g9"    # Raw ERA Date — nonblank = primary adjudicated
-KNOWN_CODES = {"E0784", "E2103", "A4239"} | {"A4224", "A4225", "A4230", "A4231", "A4232"}
+# A4238 is treated exactly like A4239 (CGM sensor bucket) in THIS reporting
+# script only — the stedi-monday-integration backend keeps its own handling.
+SENSOR_CODES = {"A4239", "A4238"}
+KNOWN_CODES = {"E0784", "E2103"} | SENSOR_CODES | {"A4224", "A4225", "A4230", "A4231", "A4232"}
 
 # Payer families for the mix section — fixed row order on the sheet.
 PAYER_FAMILIES = ["Medicare A&B", "Anthem BCBS", "Other Blues", "Fidelis",
@@ -114,6 +118,15 @@ S_MODS = "dropdown_mm1z7je9"  # line modifiers — KI/KJ mark rental months 2-13
 # Cardinal SKU Tracker (live hardware costs; see cardinal_sku_service.py)
 SKU_BOARD = 18420366344
 SKU_DESC, SKU_PRICE, SKU_STATUS = "text_mm4wazkc", "numeric_mm4wd6b", "color_mm4wr14r"
+SKU_SKU, SKU_UOM = "text_mm4wgzdw", "text_mm4wtf4y"   # SKU text (diagnostics only), unit of measure
+# Pump rows are resolved by NAME, never by SKU string — Josh's scraper has
+# already re-keyed the Tandem SKUs once (TN1017800G -> TN1017899I etc.).
+# Description contains "Mobi" / "t:slim"; UOM == "EA" separates the pump from
+# its cartridge row (same name, UOM "BX"); status must be "Available".
+PUMP_NAME_KEYS = ("mobi", "t:slim")
+# Sanity band per resolved pump row (July avg $3,788 + ~$200 list increase).
+# A price outside it means the lookup grabbed a cartridge / discontinued row.
+PUMP_PRICE_BAND = (3950.0, 4050.0)
 
 MEDICAID_PRIMARIES = {"Fidelis Medicaid", "Anthem BCBS Medicaid (JLJ)",
                       "United Medicaid", "Medicaid"}
@@ -329,19 +342,33 @@ def pull_hardware_costs(token, subs):
     historical subscription base's Sensors Type mix (Dexcom G6/G7 vs
     FreeStyle Libre)."""
     q = """query{boards(ids:[%d]){items_page(limit:100){items{
-      name column_values(ids:["%s","%s","%s"]){id text}}}}}""" % (
-        SKU_BOARD, SKU_DESC, SKU_PRICE, SKU_STATUS)
+      name column_values(ids:["%s","%s","%s","%s","%s"]){id text}}}}}""" % (
+        SKU_BOARD, SKU_DESC, SKU_PRICE, SKU_STATUS, SKU_SKU, SKU_UOM)
     items = monday(q, {}, token)["boards"][0]["items_page"]["items"]
     pump_prices, g6, g7, libre = [], 0.0, 0.0, []
     for it in items:
         cv = {c["id"]: (c["text"] or "") for c in it["column_values"]}
         name, desc = it["name"].lower(), cv.get(SKU_DESC, "").lower()
         price = num(cv.get(SKU_PRICE))
-        if price <= 0 or cv.get(SKU_STATUS, "").strip().lower() == "inactive":
-            continue
-        if "insulin pump" in desc and ("mobi" in name or "t:slim" in name):
+        status = cv.get(SKU_STATUS, "").strip().lower()
+        uom = cv.get(SKU_UOM, "").strip().upper()
+        # Pump rows: name-based (desc mentions Mobi / t:slim), sold per EA,
+        # currently Available. Cartridges share the names but are BX.
+        if any(k in desc for k in PUMP_NAME_KEYS) and uom == "EA":
+            if status != "available":
+                continue
+            lo, hi = PUMP_PRICE_BAND
+            if not (lo <= price <= hi):
+                raise RuntimeError(
+                    f"Pump SKU lookup resolved an out-of-band row — refusing to write. "
+                    f"name={it['name']!r} sku={cv.get(SKU_SKU, '')!r} uom={uom!r} "
+                    f"price=${price:,.2f} (expected ${lo:,.0f}-${hi:,.0f}/unit). "
+                    f"Most likely a cartridge or discontinued SKU; check board {SKU_BOARD}.")
             pump_prices.append(price)
-        elif "receiver" in desc or ("reader" in desc and "libre" in desc):
+            continue
+        if price <= 0 or status == "inactive":
+            continue
+        if "receiver" in desc or ("reader" in desc and "libre" in desc):
             if "g6" in name.lower():
                 g6 = price
             elif "g7" in name.lower():
@@ -789,7 +816,7 @@ def compute(token, year, month):
             elif code == "E2103":
                 rev["monitor"] += val; claim_rev += val
                 claim_cogs += avg_monitor
-            elif code == "A4239":
+            elif code in SENSOR_CODES:   # A4239, and A4238 treated identically
                 rev["sensors"] += val; claim_rev += val; has_sens = True
             elif code in SUPPLY_CODES:
                 rev["supplies"] += val; claim_rev += val; has_supp = True
@@ -817,6 +844,12 @@ def compute(token, year, month):
         payer_agg[fam]["rev"] += claim_rev
         payer_agg[fam]["gp"] += claim_rev - claim_cogs
 
+    # Fail loud: never book $0 pump COGS against pumps we actually shipped.
+    if new_pumps > 0 and avg_pump <= 0:
+        raise RuntimeError(
+            f"{new_pumps} pump(s) shipped in {year}-{month:02d} but no pump price "
+            f"resolved from the Cardinal SKU Tracker (board {SKU_BOARD}: "
+            f"{hw_detail['pump_skus']} rows matched). Refusing to write $0 pump COGS.")
     cogs["pump"] = round(avg_pump * new_pumps, 2)
     cogs["monitor"] = round(avg_monitor * monitor_orders, 2)
 
@@ -1116,10 +1149,13 @@ def write_column(svc, kpis, year, month, dry_run=False):
     else:
         cells[R["audit_rollfwd_total"]] = ""
         cells[R["audit_rollfwd_active"]] = ""
+    # Pump-cost guard: new pumps shipped while pump COGS/unit is $0 → CHECK
+    # (the SKU lookup silently missed; Aug 2026 shipped this way once).
     cells[R["audit_status"]] = (f"=IF(AND(ABS(N({col}{R['audit_revsum']}))<0.005,"
                                 f"ABS(N({col}{R['audit_gpsum']}))<0.005,"
                                 f"N({col}{R['audit_unmatched']})=0,"
                                 f"N({col}{R['audit_unknown']})=0,"
+                                f"OR(N({col}{R['pb_new_pumps']})=0,N({col}{R['unit_pump']})>0),"
                                 f"ABS(N({col}{R['audit_rollfwd_total']}))<=5,"
                                 f"ABS(N({col}{R['audit_rollfwd_active']}))<=5),\"OK\",\"CHECK\")")
     cells[HEADER_ROW] = label
@@ -1553,6 +1589,27 @@ def update_funnel_tab(svc, token, year, month):
     return fn
 
 
+def print_sanity(kpis, year, month):
+    """Pre-write sanity summary — the numbers an operator eyeballs before
+    the sheet is touched (pump unit cost band, pump COGS, total COGS, pump
+    GM, unknown HCPCS)."""
+    rev, cg, uc = kpis["revenue"], kpis["cogs"], kpis["unit_cogs"]
+    hw, au = kpis["hardware"], kpis["audit"]
+    total_cogs = sum(cg.values())
+    pump_gm = (rev["pump"] - cg["pump"]) / rev["pump"] if rev["pump"] else 0.0
+    lo, hi = PUMP_PRICE_BAND
+    print(f"── Sanity {year}-{month:02d} ──────────────────────────────")
+    print(f"  Pump SKU rows resolved : {hw['pump_skus']}")
+    print(f"  Pump COGS / unit       : ${uc['pump']:,.2f}  (band ${lo:,.0f}-${hi:,.0f})")
+    print(f"  New pumps shipped      : {hw['new_pumps']}")
+    print(f"  Pump COGS              : ${cg['pump']:,.2f}")
+    print(f"  Pump revenue           : ${rev['pump']:,.2f}   Pump GM: {pump_gm:.1%}")
+    print(f"  Total COGS             : ${total_cogs:,.2f}")
+    print(f"  Lines w/ unknown HCPCS : {au['unknown_lines']}")
+    print(f"  Unmatched claims       : {au['unmatched']}")
+    print("──────────────────────────────────────────────────")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--month", help="YYYY-MM to compute (default: previous month, ET)")
@@ -1573,6 +1630,7 @@ def main():
     print(f"Computing KPIs for {year}-{month:02d} ...")
     kpis = compute(token, year, month)
     print(json.dumps(kpis, indent=2))
+    print_sanity(kpis, year, month)
 
     svc = get_sheets_service()
     col, created = write_column(svc, kpis, year, month, dry_run=args.dry_run)
