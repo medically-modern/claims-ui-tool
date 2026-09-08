@@ -8,7 +8,7 @@
  * Row layout per Brandon (2026-06-02 simplification):
  *   Patient (name + phone) | Order date | Subscription pill (color per type)
  *   | Primary Payer | 4 simple checkpoint icons (✓ / blank / ✗) |
- *   Review Profile | Send to Order Board
+ *   Comms (RingCentral texts + calls) | Review Profile | Send to Order Board
  *
  * On phase tabs we keep the stuck-reasoning columns (Blocked By, Next
  * Check-In, Why Stuck) since that's the whole point of those views.
@@ -43,6 +43,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 import { PatientProfile } from "./PatientProfile";
+import { CommsButton } from "@/components/comms/CommsButton";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
 import { NewOrders } from "./NewOrders";
@@ -546,6 +547,9 @@ function ReviewAndSubmit({ p, onReview, onSubmit, onBlock, sending, sent }: {
           <PauseCircle className="h-3.5 w-3.5" />
         </Button>
       )}
+      {/* Texts + calls with this patient (RingCentral via Josh's gateway).
+          Opens a sheet; nothing is fetched until it's clicked. */}
+      <CommsButton patient={p} />
       <Button
         variant="outline"
         size="sm"
