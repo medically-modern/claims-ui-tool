@@ -44,9 +44,18 @@ export const SEND_INVOICE_GROUP = "group_mm3ba7x1";
 // Labels verified against the board's column settings on 2026-09-10.
 // Written by label WITHOUT create_labels_if_missing so a typo here
 // fails loudly instead of silently minting a new label on Monday.
+//
+// Order matters for the per-column fallback below, which writes these
+// one at a time and can stop partway. Secondary Status goes FIRST:
+// if it lands and Submission Type then fails, the row is (Forwarded /
+// Insurance) + Submit + ERA columns, which deriveStatus still routes
+// to ERA Review — i.e. nothing moved and the operator can just retry.
+// The other order is dangerous: Patient + <old status> with the old
+// status still "Review" derives to Patient Paid and the row would
+// surface in Invoice Review with no pay link.
 const BILL_TO_PATIENT_VALUES: Record<string, unknown> = {
-  [SUBMISSION_TYPE_COL]:  { label: "Patient" },
   [SECONDARY_STATUS_COL]: { label: "Submit" },
+  [SUBMISSION_TYPE_COL]:  { label: "Patient" },
   [PAYOR_CONFIRMED_COL]:  { label: "Yes" },
 };
 
@@ -99,8 +108,12 @@ export async function billSecondaryToPatient(mondayItemId: string): Promise<void
 
   // 1. Column writes. change_multiple_column_values is atomic — one bad
   //    column id fails the whole batch — so fall back to per-column
-  //    writes if the batch is rejected. If the fallback fails too, the
-  //    row is unchanged on Monday and the caller gets the error.
+  //    writes if the batch is rejected. The fallback is NOT atomic: it
+  //    walks BILL_TO_PATIENT_VALUES in order and can stop partway, so
+  //    the order is chosen (see above) so that every prefix of it
+  //    leaves the row somewhere deriveStatus still routes sensibly.
+  //    A fallback failure is reported with which column stopped it so
+  //    the operator knows the row may be partially updated on Monday.
   try {
     await mondayQuery(UPDATE_COLS_MUT, {
       itemId: mondayItemId,
@@ -112,13 +125,27 @@ export async function billSecondaryToPatient(mondayItemId: string): Promise<void
       "[billSecondaryToPatient] batch write failed, retrying per column:",
       batchErr,
     );
+    const landed: string[] = [];
     for (const [columnId, value] of Object.entries(BILL_TO_PATIENT_VALUES)) {
-      await mondayQuery(UPDATE_ONE_COL_MUT, {
-        itemId: mondayItemId,
-        boardId,
-        columnId,
-        value: JSON.stringify(value),
-      });
+      try {
+        await mondayQuery(UPDATE_ONE_COL_MUT, {
+          itemId: mondayItemId,
+          boardId,
+          columnId,
+          value: JSON.stringify(value),
+        });
+        landed.push(columnId);
+      } catch (colErr) {
+        const msg = colErr instanceof Error ? colErr.message : String(colErr);
+        throw new Error(
+          landed.length === 0
+            ? `Monday rejected the column write (${columnId}): ${msg}`
+            : `Monday write stopped partway (${landed.length} of ${
+                Object.keys(BILL_TO_PATIENT_VALUES).length
+              } columns landed, failed on ${columnId}): ${msg}. ` +
+              "Check the row on Monday, then retry Bill to Patient.",
+        );
+      }
     }
   }
 

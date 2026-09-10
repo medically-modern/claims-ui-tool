@@ -1334,6 +1334,10 @@ export function SecondaryBoard({
           description: (e as Error).message,
           duration: 10_000,
         });
+        // The per-column fallback can stop partway, so don't assume the
+        // row is untouched: refetch so whatever actually landed on
+        // Monday is what the operator sees, not the stale local row.
+        schedulePollingRefetches();
         return;
       }
     }

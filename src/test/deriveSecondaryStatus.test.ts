@@ -46,6 +46,16 @@ describe("deriveStatus — Bill to Patient routing", () => {
       .toBe("Patient Paid");
   });
 
+  it("keeps a half-applied Bill to Patient write (Secondary Status landed, Submission Type not yet) in ERA Review", () => {
+    // billSecondaryToPatient's per-column fallback writes Secondary
+    // Status = Submit first. If it stops there, the row must still
+    // derive to ERA Review so the operator can simply retry.
+    expect(deriveStatus("Forwarded", "Submit", 0, "2026-06-30", true))
+      .toBe("Secondary ERA Received");
+    expect(deriveStatus("Insurance", "Submit", 50, "", true))
+      .toBe("Secondary ERA Received");
+  });
+
   it("still lets terminal operator statuses win for insurance rows with ERA data", () => {
     expect(deriveStatus("Forwarded", "Paid", 190.78, "2026-06-30", true))
       .toBe("Secondary Paid");
