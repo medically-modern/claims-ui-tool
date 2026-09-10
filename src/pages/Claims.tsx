@@ -495,6 +495,7 @@ const Claims = () => {
       | "insurance"
       | "patient"
       | "awaiting"
+      | "patientQuestions"
       | "outstandingClaims"
       | "outstandingInvoices"
       | "eraReview"
@@ -1233,7 +1234,20 @@ const Claims = () => {
             secondaryClaims={secondaryClaims ?? []}
           />
         ) : board === "secondary" ? (
-          <SecondaryBoard mode={mode} navTo={inboxNavTo} />
+          <SecondaryBoard
+            mode={mode}
+            navTo={inboxNavTo}
+            // Board-initiated navigation (Bill to Patient: ERA Review →
+            // Submit > Patient). Same two-step as an inbox chip click:
+            // flip the mode tab here, park the bucket in inboxNavTo so
+            // the board's deep-link effect applies it once the Submit
+            // buckets are mounted. New object ref per call so repeat
+            // navigations to the same bucket still re-apply.
+            onNavigate={(target) => {
+              setMode(target.mode);
+              setInboxNavTo({ secondaryBucket: target.bucket });
+            }}
+          />
         ) : mode === "submit" ? (
           <PrimarySubmitBoard navTo={inboxNavTo} />
         ) : (
