@@ -317,10 +317,14 @@ function productFromHcpc(hcpc: string): string {
  *      manually-posted row (e.g. paid via old clearinghouse) from
  *      bouncing back into ERA Review on every refetch.
  *   2. Secondary ERA arrived (paid amount > 0 or ERA date set) -> ERA Review
+ *      — UNLESS the operator has since re-routed the row to the patient
+ *      (Submission Type = Patient via Bill to Patient on the ERA Review
+ *      row). The patient invoice flow owns the row from then on; the
+ *      ERA columns stay populated as a record of what the secondary did.
  *   3. Monday Secondary Status maps to another in-flight state -> use it
  *   4. Otherwise route by Submission Type when status is still "Submit"
  */
-function deriveStatus(
+export function deriveStatus(
   submissionType: string,
   secondaryStatus: string,
   secondaryPaidAmount: number,
@@ -335,8 +339,16 @@ function deriveStatus(
   if (secondaryStatus === "Patient Paid") return "Patient Paid";
   if (secondaryStatus === "Bad Debt")    return "Bad Debt";
 
+  // Bill to Patient: the operator saw the secondary ERA ($0 / partial)
+  // and sent the balance to the patient. Submission Type = Patient is
+  // the operator's explicit routing decision, so it beats the "an ERA
+  // exists" short-circuit — otherwise the row would bounce back into
+  // ERA Review on the very next refetch and never reach Submit >
+  // Patient. Rows that were Patient from Confirm Payor never have ERA
+  // columns, so this changes nothing for them.
+  const patientRouted = submissionType === "Patient";
   const hasEra = secondaryPaidAmount > 0 || !!rawEraDate;
-  if (hasEra) return "Secondary ERA Received";
+  if (hasEra && !patientRouted) return "Secondary ERA Received";
 
   // Pre-confirmation: operator hasn't reviewed in the Confirm Payor tab.
   // Forwarded auto-confirms at spawn, so this branch only catches
@@ -539,6 +551,24 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
 
   const secondaryPayerRawName = txt(item, COL.SECONDARY_PAYER_RAW_NAME);
 
+  // Bill to Patient provenance. A Patient-type row that carries secondary
+  // ERA columns can only have gotten there via the ERA Review row's
+  // "Bill to Patient" action (Confirm Payor → Patient rows never receive
+  // an ERA). Surface what the secondary paid so the invoice body can
+  // show it next to the amount we're about to bill. Kept separate from
+  // secondaryPaid / secondaryPayDate on purpose: those stay undefined
+  // here so cash flow keeps projecting the patient's PR (c.remaining)
+  // instead of treating the $0 secondary remit as "settled".
+  const eraArrived = secondaryPaidAmount > 0 || !!rawEraDate;
+  const billedFromEra: SecClaim["billedFromEra"] =
+    submissionType === "Patient" && eraArrived
+      ? {
+          secondaryPaid: secondaryPaidAmount,
+          eraDate: isoDateOrEmpty(rawEraDate) || undefined,
+          payerName: secondaryPayerRawName || secondaryPayerLabel || undefined,
+        }
+      : undefined;
+
   return {
     id: txt(item, COL.CLAIM_ID) || item.id,
     mondayItemId: item.id,
@@ -630,6 +660,7 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
             deductible: deductibleTotal,
           }
         : undefined,
+    billedFromEra,
     lines,
   };
 }

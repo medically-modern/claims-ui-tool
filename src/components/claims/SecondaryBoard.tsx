@@ -38,6 +38,10 @@ import {
 } from "@/api/markSecondaryPaid";
 import { confirmSecondaryPayor } from "@/api/confirmSecondaryPayor";
 import {
+  billSecondaryToPatient,
+  BillToPatientGroupMoveError,
+} from "@/api/billSecondaryToPatient";
+import {
   waiveSecondarySync,
   isWaiveSecondarySyncConfigured,
 } from "@/api/waiveSecondarySync";
@@ -255,6 +259,19 @@ export interface SecClaim {
   prReason?: PrReason;
   prBreakdown?: { coinsurance: number; copay: number; deductible: number };
   patientNote?: string;
+  /**
+   * Set when this Patient-type row got here via Bill to Patient on the
+   * ERA Review table (Submission Type = Patient AND a secondary ERA is
+   * on the row). Carries what the secondary actually did so the invoice
+   * body can show "secondary paid $X on <date>" context next to the
+   * amount we're about to bill. Undefined for rows that were routed to
+   * Patient straight from Confirm Payor (no secondary ERA ever came).
+   */
+  billedFromEra?: {
+    secondaryPaid: number;
+    eraDate?: string;
+    payerName?: string;
+  };
   lines: SecLine[];
 }
 
@@ -757,7 +774,28 @@ export interface SecondaryNavTo {
   secondaryBucket?: AnyBucket;
 }
 
-export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMode; navTo?: SecondaryNavTo | null }) {
+/**
+ * Where the board wants the page to take the operator next. `mode` is
+ * owned by the parent (the Submit / Review tabs on Claims.tsx), so the
+ * board can't switch it on its own — it asks via onNavigate and the
+ * parent answers by flipping mode + handing back a navTo for the bucket.
+ * Used by Bill to Patient: ERA Review (Review mode) → Patient (Submit
+ * mode) so the operator lands on the invoice they just created.
+ */
+export interface SecondaryNavigateTarget {
+  mode: SecondaryMode;
+  bucket: AnyBucket;
+}
+
+export function SecondaryBoard({
+  mode = "submit",
+  navTo,
+  onNavigate,
+}: {
+  mode?: SecondaryMode;
+  navTo?: SecondaryNavTo | null;
+  onNavigate?: (target: SecondaryNavigateTarget) => void;
+}) {
   // Live data from Monday's Secondary Claims Board (id 18413019028).
   // Falls back to mock data when no Monday token is configured (local dev
   // without a .env, or PR previews) so the UI still renders something.
@@ -1262,6 +1300,95 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
   }
 
   /**
+   * Bill to Patient — from the ERA Review row's Status dropdown. The
+   * secondary's ERA is in (usually $0 or partial) and the operator
+   * decided the remaining balance goes to the patient. Re-routes the
+   * row into the Patient invoice flow (Submission Type = Patient,
+   * Secondary Status = Submit, moved to Send Invoice so Josh's pay-link
+   * automation fires) and then takes the operator straight to that row
+   * under Submit > Patient, expanded, so the next click is Send Invoice.
+   *
+   * Local state flips optimistically so the row leaves ERA Review in
+   * the same render. The staggered refetches pick up the Pay Link URL
+   * once the automation writes it (~2s) — until then Preview Link
+   * renders disabled, same as a freshly-confirmed patient row.
+   */
+  async function billToPatient(c: SecClaim) {
+    if (!c.mondayItemId) {
+      toast({ title: "No Monday item id", description: c.patientName });
+      return;
+    }
+    const secPaid =
+      c.secondaryPaid ?? c.lines.reduce((s, l) => s + (l.secondaryPaid ?? 0), 0);
+    let groupMoveWarning: string | null = null;
+    try {
+      await billSecondaryToPatient(c.mondayItemId);
+    } catch (e) {
+      if (e instanceof BillToPatientGroupMoveError) {
+        // Columns landed — the row IS a Patient row now. Carry on, but
+        // tell the operator the pay link needs a manual group move.
+        groupMoveWarning = e.message;
+      } else {
+        toast({
+          title: `Couldn't bill ${c.patientName} to patient`,
+          description: (e as Error).message,
+          duration: 10_000,
+        });
+        // The per-column fallback can stop partway, so don't assume the
+        // row is untouched: refetch so whatever actually landed on
+        // Monday is what the operator sees, not the stale local row.
+        schedulePollingRefetches();
+        return;
+      }
+    }
+
+    updateClaim(c.id, {
+      status: "Sent to Patient",
+      rawSecondaryStatus: "Submit",
+      payorConfirmed: true,
+      sendInvoiceTriggered: false,
+      smsStatus: undefined,
+      // No longer a crossover in flight — the FORWARDED pill and
+      // "expect ERA in 10-14 days" hint don't apply to a patient invoice.
+      forwardedFlag: false,
+      expectedCrossoverEra: undefined,
+      billedFromEra: {
+        secondaryPaid: secPaid,
+        eraDate: c.secondaryEraDate,
+        payerName: displaySecondary(c),
+      },
+    });
+
+    const partialNote =
+      secPaid > 0
+        ? ` Heads up: the secondary paid ${$(secPaid)} — the pay link is built from Monday's Primary PR Amount, so adjust that column before sending if the patient should only owe the remainder.`
+        : "";
+    toast({
+      title: `${c.patientName} → Bill to Patient`,
+      description: groupMoveWarning
+        ? groupMoveWarning
+        : `Patient owes ${$(c.remaining)}. Review the invoice, then Send Invoice to text the pay link.${partialNote}`,
+      duration: groupMoveWarning || partialNote ? 12_000 : undefined,
+    });
+
+    // Land the operator on the row they just re-routed: open it, then
+    // ask the page to switch to Submit > Patient. If no parent handler
+    // is wired (board rendered standalone) the row simply waits in the
+    // Patient bucket and the toast says where it went.
+    setExpanded((p) => ({ ...p, [c.id]: true }));
+    if (onNavigate) {
+      onNavigate({ mode: "submit", bucket: "patient" });
+    } else if (mode === "submit") {
+      setBucket("patient");
+    }
+    // Pay Link URL lands ~2s after the group move; the staggered
+    // refetches pick it up so Preview Link enables without a manual
+    // refresh. Row stays put on refetch because deriveStatus lets
+    // Submission Type = Patient win over the ERA short-circuit.
+    schedulePollingRefetches();
+  }
+
+  /**
    * Confirm Payor — operator picks the final destination (Insurance,
    * Patient, or Waived) for a freshly-spawned secondary. Writes
    * Submission Type + Payor Confirmed = Yes on Monday in one batch.
@@ -1464,6 +1591,7 @@ export function SecondaryBoard({ mode = "submit", navTo }: { mode?: SecondaryMod
               setExpanded((p) => ({ ...p, [id]: !p[id] }))
             }
             onMarkPosted={(c) => markPosted(c)}
+            onBillToPatient={(c) => billToPatient(c)}
             showActions={bucket === "eraReview"}
           />
         ) : (
@@ -1761,11 +1889,14 @@ function StatusPill({ status, bucket }: { status: SecondaryStatus; bucket: AnyBu
 /**
  * User-controllable per-row state for the ERA Review table. Mirrors
  * primary's per-line LineUserStatus pattern but applies at the claim row.
- *   "Paid"        - operator confirmed this secondary ERA is fully posted
- *   "Outstanding" - operator left it pending (waiting on something / patient
- *                   move / etc). Default until they pick.
+ *   "Paid"            - operator confirmed this secondary ERA is fully posted
+ *   "Outstanding"     - operator left it pending (waiting on something /
+ *                       patient move / etc). Default until they pick.
+ *   "Bill to Patient" - secondary didn't cover the balance ($0 / partial
+ *                       ERA); send the remainder to the patient. Re-routes
+ *                       the row into Submit > Patient (invoice flow).
  */
-type RowUserStatus = "Paid" | "Outstanding";
+type RowUserStatus = "Paid" | "Outstanding" | "Bill to Patient";
 
 /**
  * Shared table layout for the Secondary Board. Two consumers today:
@@ -1779,12 +1910,16 @@ function SecondaryClaimsTable({
   expanded,
   onToggle,
   onMarkPosted,
+  onBillToPatient,
   showActions,
 }: {
   rows: SecClaim[];
   expanded: Record<string, boolean>;
   onToggle: (id: string) => void;
   onMarkPosted: (c: SecClaim) => void;
+  /** Bill to Patient — board-level handler owns the Monday write, the
+   *  optimistic row move, toasts, and the jump to Submit > Patient. */
+  onBillToPatient: (c: SecClaim) => Promise<void>;
   showActions: boolean;
 }) {
   const [rowStatus, setRowStatus] = useState<Record<string, RowUserStatus>>({});
@@ -1808,7 +1943,9 @@ function SecondaryClaimsTable({
    * the backend coordinator (/claims/secondary/mark-paid) so the
    * Secondary Board update, primary lookup, and Subscription Board
    * propagation happen atomically. The Outstanding path is a simple
-   * direct Monday write — no cross-board effects.
+   * direct Monday write — no cross-board effects. Bill to Patient
+   * hands off to the board-level handler, which re-routes the row into
+   * the Patient invoice flow and navigates there.
    */
   async function onSubmit(c: SecClaim) {
     const status = effectiveStatus(c);
@@ -1821,7 +1958,12 @@ function SecondaryClaimsTable({
     }
     setSubmitting((p) => ({ ...p, [c.id]: true }));
     try {
-      if (status === "Paid") {
+      if (status === "Bill to Patient") {
+        // Board-level handler does the Monday write, the optimistic
+        // move out of ERA Review, its own toasts, and the jump to
+        // Submit > Patient. Errors are handled (and toasted) inside.
+        await onBillToPatient(c);
+      } else if (status === "Paid") {
         if (!isMarkSecondaryPaidConfigured()) {
           toast({
             title: "Secondary Mark Paid not wired",
@@ -2068,20 +2210,26 @@ function EraReviewTableRow({
         {showActions && (
           <>
             <TableCell>
-              {/* Status dropdown — the operator picks Paid or Outstanding,
-                  then clicks Submit to write that label to Monday's
-                  Secondary Status column. */}
+              {/* Status dropdown — the operator picks Paid, Outstanding,
+                  or Bill to Patient, then clicks Submit.
+                    Paid / Outstanding -> write that label to Monday's
+                      Secondary Status column.
+                    Bill to Patient    -> re-route the row into the
+                      Patient invoice flow (Submit > Patient) and jump
+                      there so the next click is Send Invoice. */}
               <Select
                 value={status}
                 onValueChange={(v) => onStatusChange(v as RowUserStatus)}
               >
                 <SelectTrigger
                   className={cn(
-                    "h-8 w-[120px] font-medium",
+                    "h-8 w-[140px] font-medium",
                     status === "Paid" &&
                       "bg-success-soft text-success-soft-foreground border-success-soft",
                     status === "Outstanding" &&
                       "bg-muted text-foreground",
+                    status === "Bill to Patient" &&
+                      "bg-warning-soft text-warning-soft-foreground border-warning-soft",
                   )}
                   onClick={(e) => e.stopPropagation()}
                 >
@@ -2090,6 +2238,7 @@ function EraReviewTableRow({
                 <SelectContent>
                   <SelectItem value="Paid">Paid</SelectItem>
                   <SelectItem value="Outstanding">Outstanding</SelectItem>
+                  <SelectItem value="Bill to Patient">Bill to Patient</SelectItem>
                 </SelectContent>
               </Select>
             </TableCell>
@@ -2101,10 +2250,17 @@ function EraReviewTableRow({
                   e.stopPropagation();
                   onSubmit();
                 }}
+                title={
+                  status === "Bill to Patient"
+                    ? "Move this claim to Submit > Patient and open the invoice"
+                    : undefined
+                }
                 className={cn(
                   status === "Paid"
                     ? "bg-emerald-700 text-white hover:bg-emerald-800"
-                    : "",
+                    : status === "Bill to Patient"
+                      ? "bg-amber-600 text-white hover:bg-amber-700"
+                      : "",
                 )}
               >
                 {submitting ? (
@@ -2740,6 +2896,37 @@ function SendToPatientBody({
           </div>
         </div>
       </div>
+
+      {/* Bill to Patient context — this row came out of ERA Review, so
+          the operator reviewing the invoice should see what the
+          secondary actually did before texting the patient. Partial
+          payments get an explicit warning: the pay link is generated
+          from Monday's Primary PR Amount (the full PR), not from
+          PR minus what the secondary paid. */}
+      {c.billedFromEra && (
+        <div
+          className={cn(
+            "rounded-lg border px-3 py-2 text-xs",
+            c.billedFromEra.secondaryPaid > 0
+              ? "border-amber-200 bg-amber-50 text-amber-800"
+              : "bg-info-soft text-info-soft-foreground",
+          )}
+        >
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Info className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              Billed to patient from ERA Review —{" "}
+              {c.billedFromEra.payerName ? `${c.billedFromEra.payerName} ` : "secondary "}
+              paid{" "}
+              <span className="font-semibold tabular-nums">{$(c.billedFromEra.secondaryPaid)}</span>
+              {c.billedFromEra.eraDate ? ` on the ${fmt(c.billedFromEra.eraDate)} ERA` : ""}
+              {c.billedFromEra.secondaryPaid > 0
+                ? `. Remainder after secondary: ${$(Math.max(c.remaining - c.billedFromEra.secondaryPaid, 0))} — the pay link uses Primary PR Amount (${$(c.remaining)}); update that column on Monday before sending if the patient should only owe the remainder.`
+                : `. Patient owes the full ${$(c.remaining)}.`}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Invoice Review payment verification panel — only renders in
           the invoiceReview bucket when Josh's coins-form-payment /
