@@ -9,7 +9,7 @@
  * the sheet opens, and each number is fetched once per session.
  */
 import { useMemo } from "react";
-import { LogOut, MessageSquare, Phone } from "lucide-react";
+import { LogOut, MessageSquare, NotebookPen, Phone } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -50,6 +50,41 @@ export function markersFor(p: SubscriptionPatient): TimelineMarker[] {
     out.push({ day: p.checkInDate, label: `Check-in due ${fmtDay(p.checkInDate)} (${relDays(p.checkInDate)})`, tone: "checkin" });
   }
   return out;
+}
+
+/**
+ * The notes an operator reads alongside the thread (runbook step 2, and
+ * Brandon 2026-09-14: "very important"). Three sources, in the order they
+ * carry weight:
+ *   - the patient coordinator's running notes from calls and texts
+ *   - whatever the patient typed into the reorder portal
+ *   - the free-text help message from the reorder form
+ * A coordinator's note is often the only record of an infusion-set switch,
+ * an overnight-shipping request, or a different name for the box — none of
+ * which appear anywhere in the text thread itself.
+ */
+function NotesBlock({ patient }: { patient: SubscriptionPatient }) {
+  const entries = [
+    { label: "Coordinator notes", body: (patient.coordinatorNotes || "").trim() },
+    { label: "Patient portal notes", body: (patient.portalNotes || "").trim() },
+    { label: "Help message from the reorder form", body: (patient.patientHelpMessage || "").trim() },
+  ].filter((e) => e.body);
+  if (!entries.length) return null;
+  return (
+    <div className="border-b bg-amber-50/60 px-4 py-3">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-900">
+        <NotebookPen className="h-3.5 w-3.5" /> Notes
+      </div>
+      <div className="space-y-2">
+        {entries.map((e) => (
+          <div key={e.label}>
+            <div className="text-[10px] font-medium uppercase tracking-wide text-amber-800/80">{e.label}</div>
+            <p className="whitespace-pre-wrap break-words text-[13px] leading-snug text-amber-950">{e.body}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function Chip({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "good" | "warn" | "bad" }) {
@@ -116,6 +151,8 @@ export function CommsSheet({
             )}
           </div>
         </SheetHeader>
+
+        <NotesBlock patient={patient} />
 
         {!commsConfigured() ? (
           <p className="p-4 text-sm text-muted-foreground">

@@ -21,7 +21,7 @@ import {
   AlertTriangle, ArrowRight, Bell, Building2, CalendarClock, Check, ClipboardCheck,
   Clock, DollarSign, ExternalLink, Heart, Loader2,
   MessageSquare, PauseCircle, Pencil, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
-  Server, Shield, UserCog, Unlock, UserCircle, UserX, X,
+  Reply, Server, Shield, UserCog, Unlock, UserCircle, UserX, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -202,6 +202,7 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           `${check.label}${check.detail ? " — " + check.detail : ""}`,
           check.changes?.length ? `Changes: ${check.changes.join(" • ")}` : null,
           check.patientMessage ? `Patient message: ${check.patientMessage}` : null,
+          check.evaluate ? `Evaluate — patient ${check.evaluate}; read the thread before ordering` : null,
         ].filter(Boolean).join("\n")
       }
       className={cn("relative inline-flex items-center justify-center", className)}
@@ -242,6 +243,16 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
         <MessageSquare
           className="absolute -top-1 -left-1 h-3 w-3 text-sky-600 bg-white rounded-full p-[1px] ring-1 ring-sky-200"
           aria-label="patient message"
+        />
+      )}
+      {/* They answered by text or call but never completed the portal —
+          somebody has to read it. Amber because it is a decision waiting on
+          a human, not a failure. Sits opposite the patient-message dot so
+          the two can show together. */}
+      {check.evaluate && (
+        <Reply
+          className="absolute -top-1.5 -right-1.5 h-3.5 w-3.5 rotate-180 text-amber-700 bg-white rounded-full p-[1px] ring-1 ring-amber-300"
+          aria-label={`evaluate — ${check.evaluate}`}
         />
       )}
     </button>
@@ -1252,7 +1263,7 @@ function OrderCycleWorkflow() {
   const [primary, setPrimary] = useState<PrimaryTab>("due");
   type PrepPhase = CheckpointKind | "all" | "readysub";
   const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
-  type DuePhase = "ready" | "prepwork";
+  type DuePhase = "ready" | "prepwork" | "needsread";
   const [duePhase, setDuePhase] = useState<DuePhase>("prepwork");
   // `phase` is the derived view selection used by the rest of the component.
   const phase: PhaseTab =
@@ -1317,7 +1328,7 @@ function OrderCycleWorkflow() {
       overview: 0,
       confirmation: 0, benefits: 0, auth: 0, lastPaid: 0, mr: 0,
       paused: 0,
-      due: 0, dueReady: 0, duePrep: 0,
+      due: 0, dueReady: 0, duePrep: 0, dueNeedsRead: 0,
       scheduled: 0, schedReady: 0,
       possiblyResolved: 0,
       checkInsDue: 0,
@@ -1345,6 +1356,7 @@ function OrderCycleWorkflow() {
       if (getLane(lp, todayStr) === "due") {
         c.due++;
         if (ready) c.dueReady++; else c.duePrep++;
+        if (p.confirmation.evaluate) c.dueNeedsRead++;
         continue;
       }
       c.scheduled++;
@@ -1507,10 +1519,14 @@ function OrderCycleWorkflow() {
       // Due lane: order date arrived/past, no block. duePhase splits by
       // readiness — Ready to Order (send now) vs Order Prep (decide:
       // fix, promote, or block). Sorted oldest order first below.
-      base = filteredAll.filter((p) =>
+      const dueRows = filteredAll.filter((p) =>
         !(p as LanePatient & { isNotActive?: boolean }).isNotActive
-        && getLane(p as LanePatient, todayStr) === "due"
-        && (duePhase === "ready") === isReady(p as LanePatient));
+        && getLane(p as LanePatient, todayStr) === "due");
+      // "Needs a read" cuts across readiness: it is the set where the
+      // patient said something and nobody has decided what it means yet.
+      base = duePhase === "needsread"
+        ? dueRows.filter((p) => !!p.confirmation.evaluate)
+        : dueRows.filter((p) => (duePhase === "ready") === isReady(p as LanePatient));
     } else if (phase === "overview") {
       if (primary === "prep" && prepPhase === "all") {
         // Scheduled > All: every future-dated, unblocked order
@@ -1801,6 +1817,17 @@ function OrderCycleWorkflow() {
               Ready to Order
               <span className="rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
                 {counts.dueReady}
+              </span>
+            </TabsTrigger>
+            {/* The patients who answered by text or call instead of the
+                portal. Everyone else who didn't answer is already flipped
+                to No Response by the triage job — these are the ones that
+                still need a human to read the thread. */}
+            <TabsTrigger value="needsread" className="gap-1.5" title="Patient texted or called but never answered the portal — read the thread and decide">
+              <Reply className="h-3.5 w-3.5 rotate-180 text-amber-700" />
+              Needs a read
+              <span className="rounded-full bg-amber-100 text-amber-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
+                {counts.dueNeedsRead}
               </span>
             </TabsTrigger>
           </TabsList>
