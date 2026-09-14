@@ -553,10 +553,10 @@ function ReviewAndSubmit({ p, onReview, onSubmit, onBlock, sending, sent }: {
     setTimeout(() => setArmed(false), 4000);
   };
   return (
-    // pl-6 pushes the buttons away from the Paid circle in the
+    // pl-8 pushes the buttons away from the Medical Records circle in the
     // OverviewTable grid layout; justify-end keeps them right-anchored
     // so the spacing scales with column width.
-    <div className="flex items-center justify-end gap-1.5 pl-6">
+    <div className="flex items-center justify-end gap-1.5 pl-8">
       {onBlock && (
         <Button
           variant="outline"
@@ -1783,10 +1783,10 @@ function OrderCycleWorkflow() {
                 {counts.scheduled}
               </span>
             </TabsTrigger>
-            {renderPhaseTab("confirmation", "Confirmation",     counts.confirmation)}
+            {renderPhaseTab("confirmation", "Confirm",          counts.confirmation)}
             {renderPhaseTab("benefits",     "Eligibility",      counts.benefits)}
             {renderPhaseTab("auth",         "Authorization",    counts.auth)}
-            {renderPhaseTab("lastPaid",     "Last Order Paid",  counts.lastPaid)}
+            {renderPhaseTab("lastPaid",     "Last Claim Paid",  counts.lastPaid)}
             {renderPhaseTab("mr",           "Medical Records",  counts.mr)}
             <TabsTrigger value="readysub" className="gap-1.5" title="Already clear — ships the moment the order date arrives">
               <Check className="h-3.5 w-3.5 text-emerald-600" />
@@ -1954,9 +1954,31 @@ function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
   );
 }
 
-const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_300px] gap-4";
+// The five checkpoint columns are deliberately IDENTICAL (one shared track
+// size) so the circles sit on an even rhythm rather than drifting with their
+// label lengths — the headings differ by a factor of two in length, the
+// spacing must not. 84px is the floor; they are 1fr above it, so on a wide
+// screen the five share the surplus equally and stay evenly distributed.
+//
+// Checked in a browser at 1440 and 1728 (2026-09-14): CONFIRM / ELIGIBILITY /
+// AUTHORIZATION sit on one line, LAST CLAIM PAID and MEDICAL RECORDS break
+// into two and bottom-align with the rest (the header row is items-end).
+// AUTHORIZATION is ~100px of ink in an 84px track at the floor, so it bleeds
+// a few px into the 16px gutter rather than colliding — which is why the
+// floor is not tighter.
+//
+// Actions is 330px, not 300: the four buttons (block / comms / review / send)
+// measure ~300px, so the old track left them flush against the last circle
+// with nothing to spare. The surplus is what separates Medical Records from
+// the pause button, and it scales because the buttons stay right-anchored.
+//
+// ⚠️ Written out in full, never interpolated. Tailwind generates arbitrary
+// values by scanning the source for COMPLETE class strings; a template
+// literal built from parts produces a class that is never emitted, and the
+// grid silently collapses to a single column.
+const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_330px] gap-4";
 // Ready-to-Order variant adds a Type (First Order / Reorder) column.
-const OVERVIEW_GRID_TYPE = "grid grid-cols-[240px_120px_160px_110px_190px_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_300px] gap-4";
+const OVERVIEW_GRID_TYPE = "grid grid-cols-[240px_120px_160px_110px_190px_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_330px] gap-4";
 
 type OverviewSortKey =
   | "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer"
@@ -1982,7 +2004,11 @@ function SortableLabel({
         "inline-flex items-center gap-1 hover:text-foreground transition-colors",
         active && "text-foreground",
         align === "right" && "justify-end",
-        align === "center" && "justify-center",
+        // Centred headings are the checkpoint columns, where the label can be
+        // two words longer than the track. Wrap and tighten rather than
+        // overflow into the neighbour; the header row is items-end, so a
+        // two-line label still sits on the same baseline as a one-line one.
+        align === "center" && "w-full justify-center text-center whitespace-normal break-words leading-tight tracking-normal",
       )}
     >
       {label}{arrow}
@@ -2009,7 +2035,7 @@ function OverviewTable({
   const grid = showOrderType ? OVERVIEW_GRID_TYPE : OVERVIEW_GRID;
   return (
     <div className="text-[13px]">
-      {/* sticky: keep Conf/Elig/Auth/Paid/MR labels visible while scrolling.
+      {/* sticky: keep the five check headings visible while scrolling.
           Opaque bg (not bg-muted/60) so rows don't ghost through when stuck. */}
       <div className={cn(grid, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
         <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
@@ -2017,11 +2043,14 @@ function OverviewTable({
         <div><SortableLabel label="Subscription"   k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         {showOrderType && <div>Type</div>}
         <div><SortableLabel label="Primary Payer"  k="primaryPayer"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
-        <div className="text-center"><SortableLabel label="Conf" k="confirmation" sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
-        <div className="text-center"><SortableLabel label="Elig" k="benefits"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
-        <div className="text-center"><SortableLabel label="Auth" k="auth"         sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
-        <div className="text-center"><SortableLabel label="Paid" k="lastPaid"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
-        <div className="text-center"><SortableLabel label="MR"   k="mr"           sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        {/* The five checks, named in full. The abbreviations (Conf / Elig /
+            Auth / Paid / MR) saved a few pixels and cost every new reader a
+            guess — "MR" in particular reads as nothing at all. */}
+        <div className="text-center"><SortableLabel label="Confirm"         k="confirmation" sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Eligibility"     k="benefits"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Authorization"   k="auth"         sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Last Claim Paid" k="lastPaid"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Medical Records" k="mr"           sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-right pr-2">Actions</div>
       </div>
       {rows.map((p) => (
@@ -2233,7 +2262,7 @@ function PhaseTable({
           <TableHead className="w-[100px]"><SortableLabel label="Order"         k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></TableHead>
           <TableHead className="w-[140px]"><SortableLabel label="Subscription"  k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></TableHead>
           <TableHead className="w-[170px]"><SortableLabel label="Primary Payer" k="primaryPayer"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></TableHead>
-          <TableHead className="w-[60px] text-center">{PHASE_LABELS[phase]}</TableHead>
+          <TableHead className="w-[120px] text-center">{PHASE_LABELS[phase]}</TableHead>
           <TableHead className="w-[120px]">Blocked By</TableHead>
           <TableHead className="w-[170px]">Next Check-In</TableHead>
           <TableHead>Why Stuck</TableHead>

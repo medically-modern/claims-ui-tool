@@ -541,11 +541,15 @@ export const PAUSE_REASON_OPTIONS = [
 
 export const PATIENT_STATUS_OPTIONS = ["All", "Active", "Paused", "Dead"] as const;
 
+/** The five checks, named the way Brandon names them (2026-09-14). One
+ *  vocabulary across the column headings, the phase tabs, the drawer and
+ *  the empty states — the tool used to call the fourth one "Last Order
+ *  Paid" in one place and "Paid" in another. */
 export const PHASE_LABELS: Record<CheckpointKind | "ready", string> = {
-  confirmation: "Confirmation",
+  confirmation: "Confirm",
   benefits:     "Eligibility",
   auth:         "Authorization",
-  lastPaid:     "Last Order Paid",
+  lastPaid:     "Last Claim Paid",
   mr:           "Medical Records",
   ready:        "Submit Order",
 };
