@@ -15,7 +15,7 @@
  * session-schedule config anywhere in this file on purpose.
  */
 
-import type { SubscriptionPatient } from "@/components/subscription/mockData";
+import { mrOf, type SubscriptionPatient } from "@/components/subscription/mockData";
 
 export type Lane = "scheduled" | "due" | "blocked";
 
@@ -230,7 +230,10 @@ export function checkInDue(p: LanePatient, todayStr: string = todayIso()): boole
  */
 export function allChecksGreen(p: LanePatient): boolean {
   return p.confirmation.tone === "ok" && p.benefits.tone === "ok"
-    && p.auth.tone === "ok" && p.lastPaid.tone === "ok";
+    && p.auth.tone === "ok" && p.lastPaid.tone === "ok"
+    // 5th check: MR. Light green ("not valid, OK to order") is tone ok and
+    // passes; only the District Endochrine hard stop (tone bad) fails.
+    && mrOf(p).tone === "ok";
 }
 
 export function isReady(p: LanePatient): boolean {
@@ -269,8 +272,9 @@ export function shipCandidate(p: LanePatient): ShipCandidate {
   if (p.confirmation.label !== "Awaiting") return no;
   // Changes reported but unreviewed → must be reviewed by a human first.
   if (p.confirmation.changes && p.confirmation.changes.length > 0) return no;
-  // Other three checkpoints must be green.
+  // Other checkpoints must be green (MR: light green counts, red doesn't).
   if (p.benefits.tone !== "ok" || p.auth.tone !== "ok" || p.lastPaid.tone !== "ok") return no;
+  if (mrOf(p).tone !== "ok") return no;
   const oop = parseMoneyNum(p.oopEstimate) ?? parseMoneyNum(p.dedRemaining);
   const gp = p.financials?.totalGP ?? null;
   if (oop == null || gp == null) return { ok: false, oop, gp };

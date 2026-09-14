@@ -2,12 +2,14 @@
  * SubscriptionBoard.tsx — Subscription Board (top-level tab).
  *
  * Phase sub-tabs: Overview / Confirmation / Eligibility / Authorization /
- * Last Order Paid / Submit Order. Patients are assigned to the leftmost
- * not-OK checkpoint so the operator can batch through stuck work by phase.
+ * Last Order Paid / Medical Records / Submit Order. Patients are assigned to
+ * the leftmost not-OK checkpoint so the operator can batch through stuck
+ * work by phase.
  *
  * Row layout per Brandon (2026-06-02 simplification):
  *   Patient (name + phone) | Order date | Subscription pill (color per type)
- *   | Primary Payer | 4 simple checkpoint icons (✓ / blank / ✗) |
+ *   | Primary Payer | 5 simple checkpoint icons (✓ / blank / ✗; MR added
+ *   2026-09-14 — light green = records not valid but OK to order) |
  *   Comms (RingCentral texts + calls) | Review Profile | Send to Order Board
  *
  * On phase tabs we keep the stuck-reasoning columns (Blocked By, Next
@@ -62,7 +64,7 @@ import {
 } from "@/lib/subscription/lanes";
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
-  currentPhase, ORDER_PREP_PATIENTS, PATIENT_STATUS_OPTIONS, PAUSE_REASON_OPTIONS,
+  currentPhase, mrOf, ORDER_PREP_PATIENTS, PATIENT_STATUS_OPTIONS, PAUSE_REASON_OPTIONS,
   PAYER_OPTIONS, PHASE_LABELS, SubscriptionPatient, SubscriptionType,
 } from "./mockData";
 
@@ -82,11 +84,15 @@ function getCheckpoint(p: SubscriptionPatient, kind: CheckpointKind): Checkpoint
   return kind === "confirmation" ? p.confirmation
        : kind === "benefits"     ? p.benefits
        : kind === "auth"         ? p.auth
+       : kind === "mr"           ? mrOf(p)
        : p.lastPaid;
 }
+/** The circle kinds in row order — the 5th (MR) was added 2026-09-14. */
+const CHECKPOINT_KINDS = ["confirmation", "benefits", "auth", "lastPaid", "mr"] as const;
 function allChecksPass(p: SubscriptionPatient): boolean {
   return p.confirmation.tone === "ok" && p.benefits.tone === "ok"
-    && p.auth.tone === "ok" && p.lastPaid.tone === "ok";
+    && p.auth.tone === "ok" && p.lastPaid.tone === "ok"
+    && mrOf(p).tone === "ok";
 }
 
 /**
@@ -144,6 +150,9 @@ const NOT_YET_LABELS = new Set([
 type CircleState = "outline" | "gray" | "green" | "yellow" | "red";
 
 function circleStateFor(c: Checkpoint): CircleState {
+  // A check with no data behind it is a blank, whatever its tone says
+  // about readiness — see Checkpoint.unknown.
+  if (c.unknown)         return "outline";
   if (c.tone === "ok")   return "green";
   if (c.tone === "bad")  return "red";
   if (c.tone === "warn") return "yellow";
@@ -167,8 +176,10 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
   const state = circleStateFor(check);
   // Delayed confirmation reads as a "hollow" green check — still a
   // pass, but visually distinct from a solid "Confirmed" so ops can
-  // tell at a glance the patient pressed Delay instead of Yes.
-  const delayedGreen = state === "green" && !!check.delayed;
+  // tell at a glance the patient pressed Delay instead of Yes. The MR
+  // check reuses the same look (`light`) for "records not valid, but
+  // OK to order".
+  const delayedGreen = state === "green" && (!!check.delayed || !!check.light);
   const sizeStyle = { width: size, height: size };
   const inner =
     state === "green" ? <Check className={cn("h-4 w-4", delayedGreen ? "text-emerald-600" : "text-white")} strokeWidth={3} /> :
@@ -622,6 +633,7 @@ function PatientDrawer({
     benefits:     "Benefits & Eligibility",
     auth:         "Authorization",
     lastPaid:     "Last Order — Claim Status",
+    mr:           "Medical Records",
     patient:      "Review profile",
   } as const)[kind];
   return (
@@ -639,7 +651,7 @@ function PatientDrawer({
             <div>
               <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Readiness checks</div>
               <div className="space-y-2">
-                {(["confirmation","benefits","auth","lastPaid"] as const).map((k, idx) => {
+                {CHECKPOINT_KINDS.map((k, idx) => {
                   const c = getCheckpoint(patient, k);
                   return (
                     <Card key={k} className="p-3 flex items-center justify-between">
@@ -1278,7 +1290,7 @@ function OrderCycleWorkflow() {
   // clickable to re-sort.
   type SortKey =
     | "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer"
-    | "confirmation" | "benefits" | "auth" | "lastPaid";
+    | "confirmation" | "benefits" | "auth" | "lastPaid" | "mr";
   const [sortKey, setSortKey] = useState<SortKey>("nextOrderDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const toggleSort = (k: SortKey) => {
@@ -1314,7 +1326,7 @@ function OrderCycleWorkflow() {
     // whose THAT specific checkpoint is non-OK.
     const c = {
       overview: 0,
-      confirmation: 0, benefits: 0, auth: 0, lastPaid: 0,
+      confirmation: 0, benefits: 0, auth: 0, lastPaid: 0, mr: 0,
       paused: 0,
       due: 0, dueReady: 0, duePrep: 0, dueNeedsRead: 0,
       scheduled: 0, schedReady: 0,
@@ -1356,6 +1368,7 @@ function OrderCycleWorkflow() {
       if (p.benefits.tone     !== "ok") c.benefits++;
       if (p.auth.tone         !== "ok") c.auth++;
       if (p.lastPaid.tone     !== "ok") c.lastPaid++;
+      if (mrOf(p).tone        !== "ok") c.mr++;
     }
     return c;
   }, [all, todayStr]);
@@ -1573,11 +1586,11 @@ function OrderCycleWorkflow() {
       if (NOT_YET.has(c.label)) return CIRCLE_RANK.outline;
       return CIRCLE_RANK.gray;
     }
-    const CHECKPOINT_KEYS = new Set(["confirmation", "benefits", "auth", "lastPaid"]);
+    const CHECKPOINT_KEYS = new Set(["confirmation", "benefits", "auth", "lastPaid", "mr"]);
     const sorted = [...base].sort((a, b) => {
       if (CHECKPOINT_KEYS.has(sortKey)) {
-        const ac = (a as unknown as Record<string, { tone: string; label: string }>)[sortKey];
-        const bc = (b as unknown as Record<string, { tone: string; label: string }>)[sortKey];
+        const ac = sortKey === "mr" ? mrOf(a) : (a as unknown as Record<string, { tone: string; label: string }>)[sortKey];
+        const bc = sortKey === "mr" ? mrOf(b) : (b as unknown as Record<string, { tone: string; label: string }>)[sortKey];
         const diff = rankCheckpoint(ac) - rankCheckpoint(bc);
         return sortDir === "asc" ? diff : -diff;
       }
@@ -1774,6 +1787,7 @@ function OrderCycleWorkflow() {
             {renderPhaseTab("benefits",     "Eligibility",      counts.benefits)}
             {renderPhaseTab("auth",         "Authorization",    counts.auth)}
             {renderPhaseTab("lastPaid",     "Last Order Paid",  counts.lastPaid)}
+            {renderPhaseTab("mr",           "Medical Records",  counts.mr)}
             <TabsTrigger value="readysub" className="gap-1.5" title="Already clear — ships the moment the order date arrives">
               <Check className="h-3.5 w-3.5 text-emerald-600" />
               Ready to Order
@@ -1940,13 +1954,13 @@ function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
   );
 }
 
-const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_300px] gap-4";
+const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_300px] gap-4";
 // Ready-to-Order variant adds a Type (First Order / Reorder) column.
-const OVERVIEW_GRID_TYPE = "grid grid-cols-[240px_120px_160px_110px_190px_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_minmax(80px,1fr)_300px] gap-4";
+const OVERVIEW_GRID_TYPE = "grid grid-cols-[240px_120px_160px_110px_190px_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_300px] gap-4";
 
 type OverviewSortKey =
   | "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer"
-  | "confirmation" | "benefits" | "auth" | "lastPaid";
+  | "confirmation" | "benefits" | "auth" | "lastPaid" | "mr";
 
 function SortableLabel({
   label, k, sortKey, sortDir, onClick, align,
@@ -1995,7 +2009,7 @@ function OverviewTable({
   const grid = showOrderType ? OVERVIEW_GRID_TYPE : OVERVIEW_GRID;
   return (
     <div className="text-[13px]">
-      {/* sticky: keep Conf/Elig/Auth/Paid labels visible while scrolling.
+      {/* sticky: keep Conf/Elig/Auth/Paid/MR labels visible while scrolling.
           Opaque bg (not bg-muted/60) so rows don't ghost through when stuck. */}
       <div className={cn(grid, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
         <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
@@ -2007,6 +2021,7 @@ function OverviewTable({
         <div className="text-center"><SortableLabel label="Elig" k="benefits"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-center"><SortableLabel label="Auth" k="auth"         sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-center"><SortableLabel label="Paid" k="lastPaid"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="MR"   k="mr"           sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-right pr-2">Actions</div>
       </div>
       {rows.map((p) => (
@@ -2041,6 +2056,11 @@ function OverviewTable({
           <div className="flex items-center justify-center">
             <CircleEditPopover check={p.lastPaid} kind="lastPaid" patient={p} onBlockRequest={onBlock}>
               <CheckpointCircle check={p.lastPaid} />
+            </CircleEditPopover>
+          </div>
+          <div className="flex items-center justify-center">
+            <CircleEditPopover check={mrOf(p)} kind="mr" patient={p} onBlockRequest={onBlock}>
+              <CheckpointCircle check={mrOf(p)} />
             </CircleEditPopover>
           </div>
           <ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} onBlock={onBlock ? () => onBlock(p) : undefined} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} />

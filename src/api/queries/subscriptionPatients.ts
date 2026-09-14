@@ -25,6 +25,9 @@
  *                    Sensors.
  *   Last Paid     -> color_mm33spks 'Primary Claim Paid?' +
  *                    color_mm3aa9bx 'Secondary Claim Paid?'
+ *   MR (5th)      -> date_mkp09gra 'MN Expiry' + color_mm6thrwv 'Referral
+ *                    Source' (District Endochrine = hard stop). See
+ *                    lib/subscription/mrCheck.ts + REORDER_PROCESS.md.
  */
 
 import { mondayQuery } from "../monday";
@@ -32,6 +35,7 @@ import type {
   Checkpoint, CheckpointTone, SubscriptionPatient, SubscriptionType,
   PatientStatus, PatientFinancials,
 } from "@/components/subscription/mockData";
+import { deriveMr } from "@/lib/subscription/mrCheck";
 import { evaluateSignal } from "@/lib/subscription/confirmationSignals";
 
 export const SUBSCRIPTION_BOARD_ID = 18407459988;
@@ -104,6 +108,9 @@ export const SUB_COL = {
   fax_parachute:    "color_mm25t5q",
   // Status / flags
   status:           "color_mm2t7tdy",
+  // Referral Source (status). Read for the MR check: "District Endochrine"
+  // referrals can't be reordered without valid medical records.
+  referral_source:  "color_mm6thrwv",
   pause_reason:     "dropdown_mm2v3gfy",
   dead_reason:      "dropdown_mm27mdkh",
   // ─── Order Cycle v2 block tracking (columns created 2026-07-21) ───────────
@@ -595,6 +602,9 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
   const benefits     = deriveBenefits(item);
   const auth         = deriveAuth(item, subType);
   const lastPaid     = deriveLastPaid(item);
+  const referralSource = get(item, SUB_COL.referral_source);
+  const mnExpiry       = get(item, SUB_COL.mn_expiry);
+  const mr           = deriveMr({ mnExpiry, referralSource });
 
   return {
     // Base SubscriptionPatient
@@ -615,6 +625,8 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
     benefits,
     auth,
     lastPaid,
+    mr,
+    referralSource,
 
     // Extended fields
     dob:                 get(item, SUB_COL.dob),
@@ -645,7 +657,7 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
     doctorFax:           get(item, SUB_COL.doctor_fax),
     clinicalsMethod:     get(item, SUB_COL.fax_parachute),
     diagnosis:           get(item, SUB_COL.diagnosis),
-    mnExpiry:            get(item, SUB_COL.mn_expiry),
+    mnExpiry,
     mnDocsName:          get(item, SUB_COL.mn_docs),
     sensorsAuthStatus:   get(item, SUB_COL.sensors_auth_status),
     sensorsAuthId:       get(item, SUB_COL.sensors_auth_id),
