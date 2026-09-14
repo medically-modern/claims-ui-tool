@@ -7,7 +7,7 @@
 
 export type CheckpointTone = "ok" | "warn" | "bad" | "pending";
 export type CheckpointGate = "hard" | "soft";
-export type CheckpointKind = "confirmation" | "benefits" | "auth" | "lastPaid";
+export type CheckpointKind = "confirmation" | "benefits" | "auth" | "lastPaid" | "mr";
 export type BlockedParty = "us" | "patient" | "payer" | "system";
 export type PatientStatus = "Active" | "Paused" | "Dead";
 
@@ -25,6 +25,18 @@ export type Checkpoint = {
   /** True when the patient delayed via the reorder form. Confirmation tone
    *  stays green but the circle renders a Clock overlay so ops know. */
   delayed?: boolean;
+  /** Passes, but only just: rendered as a hollow (light green) circle. Used
+   *  by the MR check for "records not valid, but OK to order" — the tone is
+   *  still ok so readiness math treats it as a pass, the look tells ops to
+   *  chase the records. */
+  light?: boolean;
+  /** Rendered as an EMPTY outline circle whatever the tone: the data behind
+   *  the check was never recorded, so it's neither a pass nor a fail — it's
+   *  a blank. Used by the MR check for a missing MN Expiry ("shown as blank
+   *  — means we don't know and it was missed", Brandon 2026-09-14). The tone
+   *  still decides readiness: ok for most patients, pending (holds the
+   *  order) for a District Endochrine referral. */
+  unknown?: boolean;
   /** Free-text help message from the patient via the reorder form (Patient
    *  Help Message column on Monday). Renders a MessageSquare overlay on the
    *  Confirmation circle so ops can hover to read it. */
@@ -55,6 +67,13 @@ export type SubscriptionPatient = {
   benefits: Checkpoint;
   auth: Checkpoint;
   lastPaid: Checkpoint;
+  /** 5th check — medical records valid? Optional because mock rows predate
+   *  it; read it through `mrOf()` which supplies the neutral fallback. */
+  mr?: Checkpoint;
+  /** Referral Source status column (color_mm6thrwv), e.g. "District Endochrine". */
+  referralSource?: string;
+  /** MN Expiry date column (date_mkp09gra), yyyy-mm-dd. */
+  mnExpiry?: string;
   blockedBy?: BlockedParty;
   stuckSince?: string;
   nextCheckIn?: string;
@@ -91,13 +110,31 @@ export const CHECKPOINT_GATE: Record<CheckpointKind, CheckpointGate> = {
   benefits:     "hard",
   auth:         "hard",
   lastPaid:     "soft",
+  mr:           "hard",
 };
+
+/**
+ * The MR checkpoint, with a neutral fallback for rows that don't carry one
+ * (mock data, or a cached row from before the check existed). The fallback
+ * PASSES — a missing check must not start blocking orders on its own; the
+ * live query always sets `mr` explicitly (see lib/subscription/mrCheck.ts).
+ */
+export const MR_UNKNOWN: Checkpoint = {
+  tone: "ok",
+  light: true,
+  label: "Unknown",
+  detail: "No medical-records data on this row",
+};
+export function mrOf(p: Pick<SubscriptionPatient, "mr">): Checkpoint {
+  return p.mr ?? MR_UNKNOWN;
+}
 
 export function currentPhase(p: SubscriptionPatient): CheckpointKind | "ready" {
   if (p.confirmation.tone !== "ok") return "confirmation";
   if (p.benefits.tone !== "ok")     return "benefits";
   if (p.auth.tone !== "ok")         return "auth";
   if (p.lastPaid.tone !== "ok")     return "lastPaid";
+  if (mrOf(p).tone !== "ok")        return "mr";
   return "ready";
 }
 
@@ -498,5 +535,6 @@ export const PHASE_LABELS: Record<CheckpointKind | "ready", string> = {
   benefits:     "Eligibility",
   auth:         "Authorization",
   lastPaid:     "Last Order Paid",
+  mr:           "Medical Records",
   ready:        "Submit Order",
 };
