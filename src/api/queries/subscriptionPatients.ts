@@ -10,7 +10,8 @@
  *
  * Checkpoint derivation (Order Cycle):
  *   Confirmation  -> color_mm3kjykc 'Patient Order Response'
- *                   (Confirmed / Delayed) + color_mm3k4z79 'Patient
+ *                   (Confirmed / Delay / No Response / Cancel / Pause)
+ *                   + color_mm3k4z79 'Patient
  *                    Insurance Response' for the change-detected flag
  *   Benefits      -> color_mm2nzm33 'Active?'
  *                    Active                    -> ok
@@ -31,6 +32,7 @@ import type {
   Checkpoint, CheckpointTone, SubscriptionPatient, SubscriptionType,
   PatientStatus, PatientFinancials,
 } from "@/components/subscription/mockData";
+import { evaluateSignal } from "@/lib/subscription/confirmationSignals";
 
 export const SUBSCRIPTION_BOARD_ID = 18407459988;
 
@@ -55,6 +57,14 @@ export const SUB_COL = {
   inf_set_2:         "color_mkxmx5wk",
   inf_qty_2:         "numeric_mkwac234",
   patient_notes:     "long_text_mm3rj7k7",
+  // The two notes the operator reads at confirmation time (runbook step 2):
+  // what the patient typed into the reorder portal, and what the patient
+  // coordinator wrote down after a call or text. Brandon 2026-09-14:
+  // surfacing these in the tool is the other half of the RingCentral read —
+  // a coordinator's note can be the only record that a patient asked for
+  // overnight shipping or a different name on the box.
+  subscription_notes: "text_mm6vp1z3",
+  portal_notes:       "long_text_mm3evvzj",
   // Insurance
   primary_insurance:   "color_mm254qxj",
   member_id_1:         "text_mkvp6zfg",
@@ -200,6 +210,10 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   infusionSet1: string; infusionSet1Qty: string;
   infusionSet2: string; infusionSet2Qty: string;
   subscriptionNotes: string;
+  /** Patient coordinator's notes (text_mm6vp1z3) + the patient's own portal
+   *  notes (long_text_mm3evvzj) - read at confirmation time, runbook step 2. */
+  coordinatorNotes: string;
+  portalNotes: string;
   memberId1: string; secondaryInsurance: string; memberId2: string;
   insuranceCardName: string;
   patientInsuranceResponse: string;
@@ -340,12 +354,19 @@ function deriveConfirmation(item: MondayItem): Checkpoint {
   const msg = get(item, SUB_COL.patient_help_message);
   const summary = get(item, SUB_COL.patient_change_summary);
   const reorderTextSent = get(item, SUB_COL.reorder_text_sent);
+  // Did they answer us some other way? (runbook step 2 / the triage job)
+  const signal = evaluateSignal({
+    orderResponse: por,
+    reorderTextSent,
+    lastPatientContact: get(item, SUB_COL.last_patient_contact),
+  });
   // Source of truth for what the patient changed = the parsed change
   // summary written by Josh's reorder backend (covers address, order
   // date, CGM/pump type, infusion sets, insurance). The standalone
   // Patient Insurance Response column is a fallback for older patients
   // whose change summary is empty.
   const changes: string[] = parseLatestChangeLines(summary);
+  let detail: string | undefined;
   if (changes.length === 0 && pir === "Changed") {
     changes.push(`Insurance: ${pir}`);
   }
@@ -361,9 +382,28 @@ function deriveConfirmation(item: MondayItem): Checkpoint {
   const delayed = /^delay/i.test(por);
   if (por === "Confirmed") { tone = "ok"; label = "Confirmed"; }
   else if (delayed)        { tone = "ok"; label = "Confirmed (delayed)"; }
+  // ── The three labels this used to ignore (added 2026-09-14) ─────────────
+  // The column carries five labels; only two were handled, so 65 rows
+  // reading "No Response" rendered as an indistinguishable gray "Awaiting"
+  // — the tool could not tell "we asked and they went quiet" from "we
+  // asked an hour ago". "No Response" is now its own state, and an
+  // explicit no is red rather than silently neutral.
+  else if (/^no response/i.test(por)) { tone = "pending"; label = "No reply"; }
+  else if (/^(cancel|pause)$/i.test(por)) {
+    tone = "bad";
+    label = "Patient said no";
+    // Which one matters: Cancel is permanent (-> Inactive), Pause is
+    // temporary (-> Paused + a reason). The operator decides; the circle
+    // just stops it being read as "nothing happened".
+    detail = por === "Cancel"
+      ? "Patient cancelled - move to Inactive with a dead reason"
+      : "Patient asked to pause - set Paused with a pause reason";
+  }
   return {
     tone,
     label,
+    detail,
+    evaluate: signal.evaluate ? signal.summary : undefined,
     pill: delayed ? "Delayed" : undefined,
     changes: changes.length ? changes : undefined,
     delayed: delayed || undefined,
@@ -589,6 +629,8 @@ function mapItem(item: MondayItem): LiveSubscriptionPatient {
     infusionSet2:        get(item, SUB_COL.inf_set_2),
     infusionSet2Qty:     get(item, SUB_COL.inf_qty_2),
     subscriptionNotes:   get(item, SUB_COL.patient_notes),
+    coordinatorNotes:    get(item, SUB_COL.subscription_notes),
+    portalNotes:         get(item, SUB_COL.portal_notes),
     memberId1:           get(item, SUB_COL.member_id_1),
     secondaryInsurance:  get(item, SUB_COL.secondary_insurance),
     memberId2:           get(item, SUB_COL.member_id_2),

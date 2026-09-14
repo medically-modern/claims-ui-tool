@@ -29,6 +29,12 @@ export type Checkpoint = {
    *  Help Message column on Monday). Renders a MessageSquare overlay on the
    *  Confirmation circle so ops can hover to read it. */
   patientMessage?: string;
+  /** The patient answered us by text or call but never completed the portal,
+   *  so a human has to read the thread before we decide — "texted 2d ago".
+   *  Set on Confirmation only. Deliberately survives the backend's auto-flip
+   *  to No Response: the flip is the default, this is the exception to it.
+   *  See lib/subscription/confirmationSignals.ts. */
+  evaluate?: string;
   /** Auth is expired specifically because of a Medicaid DVS lapse. DVS can
    *  only be re-issued day-of-service, so this is "leave alone until ship
    *  day", not a real action item. Renders a small "M" overlay on the Auth
@@ -60,6 +66,11 @@ export type SubscriptionPatient = {
   nextCheckIn?: string;
   stuckReason?: string;
   financials?: PatientFinancials;
+  /** Notes read at confirmation time (runbook step 2). Optional because mock
+   *  rows don't carry them; the live query always sets both. */
+  coordinatorNotes?: string;
+  portalNotes?: string;
+  patientHelpMessage?: string;
   orderType?: string;  // "First Order" / "Reorder" (Order Type column)
   // Order Cycle v2 block tracking (live columns; optional so mock rows
   // and older cached data still typecheck). See lanes.ts BlockFields.
