@@ -163,3 +163,28 @@ describe("date helpers", () => {
     expect(addDaysIso(14, base)).toBe("2026-08-04");
   });
 });
+
+// ─── 5th check: MR (2026-09-14) ──────────────────────────────────────────────
+describe("MR check and readiness", () => {
+  const light = { tone: "ok" as const, light: true, label: "Not valid · OK to order" };
+  const red   = { tone: "bad" as const, label: "Not valid" };
+  it("a row with no MR data is still ready (neutral fallback passes)", () => {
+    expect(isReady(patient({ nextOrderDate: "2026-08-01" }))).toBe(true);
+  });
+  it("light green MR (not valid, ordinary referral) still counts as all-green", () => {
+    expect(isReady(patient({ nextOrderDate: "2026-08-01", mr: light }))).toBe(true);
+  });
+  it("red MR (District Endochrine hard stop) blocks readiness", () => {
+    expect(isReady(patient({ nextOrderDate: "2026-08-01", mr: red }))).toBe(false);
+  });
+  it("red MR also removes the ship-without-confirmation suggestion", () => {
+    const base = patient({
+      nextOrderDate: "2026-08-01",
+      confirmation: { tone: "pending", label: "Awaiting" },
+      oopEstimate: "$0", financials: FIN,
+    });
+    expect(shipCandidate(base).ok).toBe(true);
+    expect(shipCandidate({ ...base, mr: light }).ok).toBe(true);
+    expect(shipCandidate({ ...base, mr: red }).ok).toBe(false);
+  });
+});
