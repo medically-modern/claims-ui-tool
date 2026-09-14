@@ -5,13 +5,22 @@
  * REFERRAL-SOURCE rule, not a payer rule:
  *
  *   MR valid (MN Expiry today or later)                     → green   · fine for anyone
- *   MR not valid, referral source is anyone else            → light green · OK to order, chase the records
- *   MR not valid, referral source = District Endochrine     → red     · cannot order — records first
+ *   MR not valid (expired), referral source is anyone else  → light green · OK to order, chase the records
+ *   MR not valid (expired), referral source = District Endochrine → red · cannot order — records first
+ *   MN Expiry BLANK                                         → an empty outline circle, "Not on file"
  *
- * "Not valid" covers both an expired MN Expiry and a blank one: a patient
- * with no expiry on file has no records we can point to, so for the one
- * source with the hard stop that is a stop, and for everyone else it's the
- * same advisory it would be if the date had lapsed.
+ * Blank is its own state, not "not valid": it means the date was never
+ * recorded — we don't know, and it was missed (Brandon, 2026-09-14). For
+ * every ordinary referral source that's a pass (the check is advisory for
+ * them anyway) with a visible gap to fill in. For a District Endochrine
+ * referral an unknown can't count as valid, so it holds the order the same
+ * way a missing eligibility check would — the circle stays blank, the tone
+ * is pending, and the patient lands in the Medical Records tab until the
+ * expiry is recorded. No "expiring soon" state, by design.
+ *
+ * Live board, 2026-09-14: 262 active patients valid, 449 expired, 6 blank;
+ * all 3 District Endochrine patients valid. Referral Source is blank on
+ * 432 of 787 rows — the hard stop only sees patients whose source is set.
  *
  * Pure: no Monday, no React. The board's `Referral Source` label is spelled
  * "District Endochrine" (label id 9); the rule matches both spellings so a
@@ -66,7 +75,24 @@ export function deriveMr(opts: {
       pill: fmtDay(expiry).replace(/, \d{4}$/, ""),
     };
   }
-  const why = expiry ? `MR expired ${fmtDay(expiry)}` : "No MR expiry on file";
+  if (!expiry) {
+    // Blank — never recorded. Shown as a blank circle either way; only the
+    // hard-stop source lets it hold the order.
+    return hardStop
+      ? {
+          tone: "pending",
+          unknown: true,
+          label: "Not on file",
+          detail: `No MN Expiry recorded · ${source} referral — can't confirm the records, so the order waits until it's filled in`,
+        }
+      : {
+          tone: "ok",
+          unknown: true,
+          label: "Not on file",
+          detail: `No MN Expiry recorded — we don't know; it was missed${source ? ` (${source} referral)` : ""}. OK to order; fill it in`,
+        };
+  }
+  const why = `MR expired ${fmtDay(expiry)}`;
   if (hardStop) {
     return {
       tone: "bad",

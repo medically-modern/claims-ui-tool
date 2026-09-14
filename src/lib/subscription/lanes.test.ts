@@ -188,3 +188,14 @@ describe("MR check and readiness", () => {
     expect(shipCandidate({ ...base, mr: red }).ok).toBe(false);
   });
 });
+
+describe("MR blank (not on file)", () => {
+  const blankOk      = { tone: "ok" as const, unknown: true, label: "Not on file" };
+  const blankHolding = { tone: "pending" as const, unknown: true, label: "Not on file" };
+  it("blank expiry on an ordinary referral still counts as ready", () => {
+    expect(isReady(patient({ nextOrderDate: "2026-08-01", mr: blankOk }))).toBe(true);
+  });
+  it("blank expiry on a District Endochrine referral holds readiness", () => {
+    expect(isReady(patient({ nextOrderDate: "2026-08-01", mr: blankHolding }))).toBe(false);
+  });
+});

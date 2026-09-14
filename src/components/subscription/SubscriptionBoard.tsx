@@ -150,6 +150,9 @@ const NOT_YET_LABELS = new Set([
 type CircleState = "outline" | "gray" | "green" | "yellow" | "red";
 
 function circleStateFor(c: Checkpoint): CircleState {
+  // A check with no data behind it is a blank, whatever its tone says
+  // about readiness — see Checkpoint.unknown.
+  if (c.unknown)         return "outline";
   if (c.tone === "ok")   return "green";
   if (c.tone === "bad")  return "red";
   if (c.tone === "warn") return "yellow";

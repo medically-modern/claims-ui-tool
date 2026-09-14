@@ -30,6 +30,13 @@ export type Checkpoint = {
    *  still ok so readiness math treats it as a pass, the look tells ops to
    *  chase the records. */
   light?: boolean;
+  /** Rendered as an EMPTY outline circle whatever the tone: the data behind
+   *  the check was never recorded, so it's neither a pass nor a fail — it's
+   *  a blank. Used by the MR check for a missing MN Expiry ("shown as blank
+   *  — means we don't know and it was missed", Brandon 2026-09-14). The tone
+   *  still decides readiness: ok for most patients, pending (holds the
+   *  order) for a District Endochrine referral. */
+  unknown?: boolean;
   /** Free-text help message from the patient via the reorder form (Patient
    *  Help Message column on Monday). Renders a MessageSquare overlay on the
    *  Confirmation circle so ops can hover to read it. */
