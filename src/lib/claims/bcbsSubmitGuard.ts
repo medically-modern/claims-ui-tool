@@ -8,16 +8,22 @@
 //
 // Routing table (master switch is patient's home address state):
 //   NY            → Payer ID 803    + POS 12 (Home)
-//   NJ            → Payer ID 11348  + POS 12 (Home)
+//   NJ            → Payer ID 11345  + POS 12 (Home)
 //   any other     → Payer ID 803    + POS 11 (Office)
 //
-// Soft warning: claims being sent to 11348 (CareCentrix / Horizon NJ)
-// where at least one subitem is missing an Auth ID. Doesn't block —
-// confirms via a "submit anyway?" dialog.
+// Horizon NJ moved from payer ID 11348 to 11345. 11348 stays accepted
+// as a LEGACY value: claims already on the wire under it must still be
+// resubmittable, so an NJ claim sitting on 11348 raises a soft warning
+// and never a hard stop. 11345 is the target for anything new.
+//
+// Soft warning: claims being sent to Horizon NJ (11345, or legacy
+// 11348) where at least one subitem is missing an Auth ID. Doesn't
+// block — confirms via a "submit anyway?" dialog.
 //
 // The validator only fires for claims that look like BCBS / Anthem at
 // all. We treat that as: Primary Payor label mentions BCBS / Anthem /
-// Blue Cross, OR the PR Payor ID is already set to 803 or 11348.
+// Blue Cross, OR the PR Payor ID is already set to 803, 11345 or the
+// legacy 11348.
 
 import type { ThreadClaim } from "./threads";
 
@@ -28,11 +34,19 @@ export const ANTHEM_NY_PAYER_ID = "803";
 
 /** Payer ID for Horizon BCBS NJ via CareCentrix — used only when the
  *  patient lives in NJ, regardless of what their card says. */
-export const CARECENTRIX_NJ_PAYER_ID = "11348";
+export const HORIZON_NJ_PAYER_ID = "11345";
+
+/** The previous Horizon NJ payer ID, retired in favour of 11345. Claims
+ *  submitted before the cutover are still open on it, so we keep it
+ *  in-scope for the guard (see isBcbsByPayorId) and downgrade the NJ
+ *  payer-ID mismatch to a soft warning when a claim is sitting on it —
+ *  a resubmission of one of those must never be hard-stopped. */
+export const LEGACY_HORIZON_NJ_PAYER_ID = "11348";
 
 /** BCBS Tennessee bills DIRECT to the BCBS TN payer ID SB890 (previously
- *  CareCentrix-fronted via trading partner 11345). Still routed by label
- *  rather than by patient state, like BCBS WY. POS is Home (12). */
+ *  CareCentrix-fronted via a trading partner ID we no longer submit to
+ *  for TN). Still routed by label rather than by patient state, like
+ *  BCBS WY. POS is Home (12). */
 export const BCBS_TN_PAYER_ID = "SB890";
 
 /** BCBS Wyoming is a DIRECT-bill exception: claims go straight to BCBS WY
@@ -59,7 +73,7 @@ const LABEL_ROUTED_BLUE_PLANS: LabelRoutedBluePlan[] = [
 
 /** Resolve a label-routed Blue plan from the payer label or PR Payor ID.
  *  Returns null for the state-routed Blues (Anthem NY 803 / Horizon NJ
- *  11348), which keep the patient-state routing rules. */
+ *  11345, legacy 11348), which keep the patient-state routing rules. */
 export function resolveLabelRoutedBluePlan(
   payerLabel: string | null | undefined,
   payorId: string | null | undefined,
@@ -129,7 +143,7 @@ export const OVERRIDABLE_HARD_STOP_CODES: ReadonlySet<BcbsHardStop["code"]> =
   ]);
 
 export interface BcbsWarning {
-  code: "CARECENTRIX_AUTH_GAP" | "MODIFIER_MISMATCH";
+  code: "CARECENTRIX_AUTH_GAP" | "MODIFIER_MISMATCH" | "LEGACY_NJ_PAYER_ID";
   message: string;
   /** Guidance line rendered under the message in the confirm dialog. */
   detail?: string;
@@ -138,7 +152,8 @@ export interface BcbsWarning {
 }
 
 export interface BcbsGuardResult {
-  /** True when the claim is in scope (BCBS/Anthem by label or routed via 803/11348). */
+  /** True when the claim is in scope (BCBS/Anthem by label or routed via
+   *  803 / 11345 / legacy 11348). */
   applies: boolean;
   hardStops: BcbsHardStop[];
   warnings: BcbsWarning[];
@@ -175,7 +190,10 @@ export function isBcbsByPayorId(payorId: string | null | undefined): boolean {
   const trimmed = payorId.trim();
   return (
     trimmed === ANTHEM_NY_PAYER_ID ||
-    trimmed === CARECENTRIX_NJ_PAYER_ID ||
+    trimmed === HORIZON_NJ_PAYER_ID ||
+    // Legacy: keeps pre-cutover NJ claims inside the guard instead of
+    // silently skipping it on a resubmission.
+    trimmed === LEGACY_HORIZON_NJ_PAYER_ID ||
     trimmed === BCBS_TN_PAYER_ID
   );
 }
@@ -226,7 +244,7 @@ const US_STATE_CODES = new Set([
 /** Resolve the "required" payer ID for a patient state bucket. */
 export function requiredPayerIdFor(state: PatientStateBucket): string | null {
   if (state === "NY") return ANTHEM_NY_PAYER_ID;
-  if (state === "NJ") return CARECENTRIX_NJ_PAYER_ID;
+  if (state === "NJ") return HORIZON_NJ_PAYER_ID;
   if (state === "OTHER") return ANTHEM_NY_PAYER_ID;
   return null;
 }
@@ -242,9 +260,18 @@ export function requiredPosFor(state: PatientStateBucket): "Home" | "Office" | n
  *  billing payer ID and then by HCPCS. Modifiers are ROUTE-specific:
  *  the same supply code carries different modifiers depending on whether
  *  the claim goes to Anthem NY (803) or Horizon NJ via CareCentrix
- *  (11348). Same-family HCPCS aliases (Aetna A4231, Medicare A4224 /
- *  A4225) inherit their base code's expectation. E0784 / E2103 are not
- *  policed yet — no entry here means "don't check". */
+ *  (11345, legacy 11348). Same-family HCPCS aliases (Aetna A4231,
+ *  Medicare A4224 / A4225) inherit their base code's expectation. E0784
+ *  / E2103 are not policed yet — no entry here means "don't check". */
+const HORIZON_NJ_LINE_MODIFIERS: Record<string, string[]> = {
+  A4230: ["NU", "SC"],
+  A4231: ["NU", "SC"],
+  A4224: ["NU", "SC"],
+  A4232: ["NU", "SC"],
+  A4225: ["NU", "SC"],
+  A4239: ["NU"],
+};
+
 export const EXPECTED_LINE_MODIFIERS_BY_PAYER: Record<
   string,
   Record<string, string[]>
@@ -257,14 +284,10 @@ export const EXPECTED_LINE_MODIFIERS_BY_PAYER: Record<
     A4225: ["KX"],
     A4239: ["KF", "KX", "CG"],
   },
-  [CARECENTRIX_NJ_PAYER_ID]: {
-    A4230: ["NU", "SC"],
-    A4231: ["NU", "SC"],
-    A4224: ["NU", "SC"],
-    A4232: ["NU", "SC"],
-    A4225: ["NU", "SC"],
-    A4239: ["NU"],
-  },
+  [HORIZON_NJ_PAYER_ID]: HORIZON_NJ_LINE_MODIFIERS,
+  // Legacy NJ route — same modifier expectations as 11345, so a claim
+  // still sitting on 11348 is checked rather than silently skipped.
+  [LEGACY_HORIZON_NJ_PAYER_ID]: HORIZON_NJ_LINE_MODIFIERS,
   // BCBS Tennessee (direct, in-network 2026): NU on every line.
   [BCBS_TN_PAYER_ID]: {
     A4224: ["NU"],
@@ -294,11 +317,20 @@ export function missingLineModifiers(
   return expected.filter((m) => !have.has(m));
 }
 
+/** True for either Horizon NJ payer ID — the current 11345 or the
+ *  legacy 11348 that pre-cutover claims are still open on. */
+export function isHorizonNjPayerId(payorId: string | null | undefined): boolean {
+  const trimmed = (payorId || "").trim();
+  return (
+    trimmed === HORIZON_NJ_PAYER_ID || trimmed === LEGACY_HORIZON_NJ_PAYER_ID
+  );
+}
+
 /** Human-readable summary of the expected modifier set for a payer,
  *  used in the warning's detail line. */
 function expectedModifierSummary(payerId: string): string {
-  if (payerId === CARECENTRIX_NJ_PAYER_ID) {
-    return "CareCentrix / Horizon NJ (11348) expects A4230/A4232 → NU+SC, A4239 → NU.";
+  if (isHorizonNjPayerId(payerId)) {
+    return "Horizon NJ (11345) expects A4230/A4232 → NU+SC, A4239 → NU.";
   }
   return "Anthem NY / Empire (803) expects A4230/A4232 → KX, A4239 → KF+KX+CG.";
 }
@@ -319,7 +351,7 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
   // ---- Label-routed Blue plans (e.g. BCBS TN direct / SB890) ----
   // Identified by label / payer ID rather than patient state. They bill to
   // a fixed payer ID + POS, bypassing the state-based
-  // 803/11348 routing below. We validate that the payer ID + POS match the
+  // 803/11345 routing below. We validate that the payer ID + POS match the
   // plan and (softly) that lines carry the plan's modifiers (NU).
   const labelRouted = resolveLabelRoutedBluePlan(input.payerLabel, input.payorId);
   if (labelRouted) {
@@ -399,13 +431,25 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
         }. NY patients bill to Empire BCBS NY (${ANTHEM_NY_PAYER_ID}).`,
         fix: `Change PR Payor ID to ${ANTHEM_NY_PAYER_ID}.`,
       });
+    } else if (
+      input.patientState === "NJ" &&
+      trimmedPayor === LEGACY_HORIZON_NJ_PAYER_ID
+    ) {
+      // Pre-cutover NJ claim. The destination is still Horizon NJ, just
+      // under the retired ID — flag it so the operator can move it to
+      // 11345, but never block the resubmission of an open claim.
+      warnings.push({
+        code: "LEGACY_NJ_PAYER_ID",
+        message: `PR Payor ID is the legacy Horizon NJ ID (${LEGACY_HORIZON_NJ_PAYER_ID}). NJ patients now bill to ${HORIZON_NJ_PAYER_ID}.`,
+        detail: `Move the row to ${HORIZON_NJ_PAYER_ID} unless this is a resubmission of a claim already open on ${LEGACY_HORIZON_NJ_PAYER_ID}, in which case submit as-is.`,
+      });
     } else if (input.patientState === "NJ") {
       hardStops.push({
         code: "WRONG_PAYER_NJ",
         message: `Patient lives in NJ but PR Payor ID is ${
           trimmedPayor || "blank"
-        }. NJ patients bill to Horizon BCBS NJ via CareCentrix (${CARECENTRIX_NJ_PAYER_ID}).`,
-        fix: `Change PR Payor ID to ${CARECENTRIX_NJ_PAYER_ID}.`,
+        }. NJ patients bill to Horizon BCBS NJ via CareCentrix (${HORIZON_NJ_PAYER_ID}).`,
+        fix: `Change PR Payor ID to ${HORIZON_NJ_PAYER_ID}.`,
       });
     } else {
       hardStops.push({
@@ -446,12 +490,13 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
   }
 
   // ---- Soft warning: CareCentrix / Horizon NJ + missing line auth ----
-  // Fires when we're about to send to 11348 and at least one subitem
-  // doesn't have an Auth ID. Uses the *required* payer for NJ or the
-  // currently-selected payer ID, whichever is hitting 11348.
+  // Fires when we're about to send to Horizon NJ (11345, or a legacy
+  // claim still on 11348) and at least one subitem doesn't have an Auth
+  // ID. Uses the *required* payer for NJ or the currently-selected payer
+  // ID, whichever is hitting the NJ route.
   const isHittingCarecentrix =
-    trimmedPayor === CARECENTRIX_NJ_PAYER_ID ||
-    (requiredPayer === CARECENTRIX_NJ_PAYER_ID && hardStops.length === 0);
+    isHorizonNjPayerId(trimmedPayor) ||
+    (requiredPayer === HORIZON_NJ_PAYER_ID && hardStops.length === 0);
   if (isHittingCarecentrix) {
     const missingProducts: string[] = [];
     input.lineAuthIds.forEach((auth, idx) => {
@@ -465,7 +510,11 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
       warnings.push({
         code: "CARECENTRIX_AUTH_GAP",
         message:
-          "Routing to CareCentrix / Horizon NJ (11348) but no Auth ID is documented on " +
+          `Routing to CareCentrix / Horizon NJ (${
+            trimmedPayor === LEGACY_HORIZON_NJ_PAYER_ID
+              ? LEGACY_HORIZON_NJ_PAYER_ID
+              : HORIZON_NJ_PAYER_ID
+          }) but no Auth ID is documented on ` +
           (missingProducts.length === input.lineAuthIds.length
             ? "any line."
             : missingProducts.join(", ") + "."),
@@ -479,7 +528,7 @@ export function evaluateBcbsSubmit(input: BcbsSubmitGuardInput): BcbsGuardResult
   // ---- Soft warning: supply lines missing the route's canonical modifiers ----
   // Modifiers are route-specific (see EXPECTED_LINE_MODIFIERS_BY_PAYER):
   //   803   → A4230/A4232 = KX, A4239 = KF+KX+CG
-  //   11348 → A4230/A4232 = NU+SC, A4239 = NU
+  //   11345 → A4230/A4232 = NU+SC, A4239 = NU (same for legacy 11348)
   // We check against the REQUIRED payer for the patient's state (the
   // correct destination), so a line built with KX while routing to
   // CareCentrix — or NU/SC while routing to Anthem NY — is flagged.

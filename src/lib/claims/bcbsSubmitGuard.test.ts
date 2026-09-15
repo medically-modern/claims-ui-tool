@@ -10,7 +10,8 @@ import {
   isBcbsByPayerLabel,
   isBcbsByPayorId,
   ANTHEM_NY_PAYER_ID,
-  CARECENTRIX_NJ_PAYER_ID,
+  HORIZON_NJ_PAYER_ID,
+  LEGACY_HORIZON_NJ_PAYER_ID,
   BCBS_TN_PAYER_ID,
   BCBS_WY_PAYER_ID,
   resolveLabelRoutedBluePlan,
@@ -69,8 +70,15 @@ describe("isBcbsByPayerLabel", () => {
 });
 
 describe("isBcbsByPayorId", () => {
-  it("recognizes 803 and 11348", () => {
+  it("recognizes 803 and 11345", () => {
     expect(isBcbsByPayorId("803")).toBe(true);
+    expect(isBcbsByPayorId("11345")).toBe(true);
+    expect(isBcbsByPayorId(" 11345 ")).toBe(true);
+  });
+
+  it("keeps the legacy NJ ID 11348 in scope", () => {
+    // 14 claims are still open on 11348; a resubmission must stay
+    // inside the guard rather than skipping it entirely.
     expect(isBcbsByPayorId("11348")).toBe(true);
     expect(isBcbsByPayorId(" 11348 ")).toBe(true);
   });
@@ -111,10 +119,10 @@ describe("evaluateBcbsSubmit — happy paths", () => {
     expect(r.warnings).toEqual([]);
   });
 
-  it("NJ patient + 11348 + POS Home + line auths present — no errors", () => {
+  it("NJ patient + 11345 + POS Home + line auths present — no errors", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "Anthem BCBS Co.",
-      payorId: "11348",
+      payorId: "11345",
       placeOfService: "Home",
       patientState: "NJ",
       lineAuthIds: ["AUTH-A", "AUTH-B"],
@@ -139,10 +147,10 @@ describe("evaluateBcbsSubmit — happy paths", () => {
 });
 
 describe("evaluateBcbsSubmit — hard stops", () => {
-  it("blocks NY patient routed to 11348 (Kai Burridge-style stale address)", () => {
+  it("blocks NY patient routed to 11345 (Kai Burridge-style stale address)", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "Anthem BCBS Co.",
-      payorId: "11348",
+      payorId: "11345",
       placeOfService: "Home",
       patientState: "NY",
       lineAuthIds: ["AUTH"],
@@ -164,10 +172,10 @@ describe("evaluateBcbsSubmit — hard stops", () => {
     expect(codes).toContain("WRONG_PAYER_NJ");
   });
 
-  it("blocks MA patient routed via 11348", () => {
+  it("blocks MA patient routed via 11345", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "Anthem BCBS Co.",
-      payorId: "11348",
+      payorId: "11345",
       placeOfService: "Office",
       patientState: "OTHER",
       lineAuthIds: ["AUTH"],
@@ -241,10 +249,10 @@ describe("evaluateBcbsSubmit — hard stops", () => {
 });
 
 describe("evaluateBcbsSubmit — soft warnings", () => {
-  it("warns when routing to 11348 with at least one missing line auth", () => {
+  it("warns when routing to 11345 with at least one missing line auth", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "Anthem BCBS Co.",
-      payorId: CARECENTRIX_NJ_PAYER_ID,
+      payorId: HORIZON_NJ_PAYER_ID,
       placeOfService: "Home",
       patientState: "NJ",
       lineAuthIds: ["AUTH-A", "", "AUTH-C"],
@@ -259,7 +267,7 @@ describe("evaluateBcbsSubmit — soft warnings", () => {
   it("warns when all line auths are blank", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "Anthem BCBS Co.",
-      payorId: CARECENTRIX_NJ_PAYER_ID,
+      payorId: HORIZON_NJ_PAYER_ID,
       placeOfService: "Home",
       patientState: "NJ",
       lineAuthIds: [null, undefined, ""],
@@ -272,7 +280,7 @@ describe("evaluateBcbsSubmit — soft warnings", () => {
   it("does not warn when all line auths are present", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "Anthem BCBS Co.",
-      payorId: CARECENTRIX_NJ_PAYER_ID,
+      payorId: HORIZON_NJ_PAYER_ID,
       placeOfService: "Home",
       patientState: "NJ",
       lineAuthIds: ["AUTH-A", "AUTH-B"],
@@ -281,7 +289,7 @@ describe("evaluateBcbsSubmit — soft warnings", () => {
     expect(r.warnings).toEqual([]);
   });
 
-  it("does not warn for NY claim (not routed to 11348)", () => {
+  it("does not warn for NY claim (not routed to Horizon NJ)", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "Anthem BCBS Co.",
       payorId: ANTHEM_NY_PAYER_ID,
@@ -294,11 +302,81 @@ describe("evaluateBcbsSubmit — soft warnings", () => {
   });
 });
 
+// ── Legacy Horizon NJ payer ID (11348 → 11345 cutover) ──────────────────────
+// Claims submitted before the cutover are still open on 11348. A
+// resubmission has to stay inside the guard AND has to get through it:
+// a soft warning is fine, a hard stop would strand the claim.
+describe("evaluateBcbsSubmit — legacy NJ payer ID 11348", () => {
+  const NJ_ON_LEGACY = {
+    payerLabel: "Horizon BCBS NJ",
+    payorId: LEGACY_HORIZON_NJ_PAYER_ID,
+    placeOfService: "Home" as const,
+    patientState: "NJ" as const,
+    lineAuthIds: ["AUTH-A", "AUTH-B"],
+  };
+
+  it("does NOT hard-stop an NJ claim still sitting on 11348", () => {
+    const r = evaluateBcbsSubmit(NJ_ON_LEGACY);
+    expect(r.applies).toBe(true);
+    expect(r.hardStops).toEqual([]);
+    expect(canOverrideHardStops(r)).toBe(false);
+  });
+
+  it("raises a soft LEGACY_NJ_PAYER_ID warning naming 11345 as the new ID", () => {
+    const r = evaluateBcbsSubmit(NJ_ON_LEGACY);
+    const w = r.warnings.find((x) => x.code === "LEGACY_NJ_PAYER_ID");
+    expect(w).toBeDefined();
+    expect(w!.message).toContain(LEGACY_HORIZON_NJ_PAYER_ID);
+    expect(w!.message).toContain(HORIZON_NJ_PAYER_ID);
+  });
+
+  it("still checks POS on a legacy claim (POS Office is a hard stop)", () => {
+    const r = evaluateBcbsSubmit({ ...NJ_ON_LEGACY, placeOfService: "Office" });
+    expect(r.hardStops.map((h) => h.code)).toEqual(["WRONG_POS_NY_OR_NJ"]);
+    // POS-only, so the operator can still override it — the legacy payer
+    // ID doesn't lock the dialog the way a real payer mismatch would.
+    expect(canOverrideHardStops(r)).toBe(true);
+  });
+
+  it("still raises the CareCentrix auth gap on a legacy claim", () => {
+    const r = evaluateBcbsSubmit({
+      ...NJ_ON_LEGACY,
+      lineAuthIds: ["AUTH-A", ""],
+      lineProducts: ["A4239", "A4232"],
+    });
+    expect(r.hardStops).toEqual([]);
+    const gap = r.warnings.find((w) => w.code === "CARECENTRIX_AUTH_GAP");
+    expect(gap).toBeDefined();
+    expect(gap!.productsMissingAuth).toEqual(["A4232"]);
+    expect(gap!.message).toContain(LEGACY_HORIZON_NJ_PAYER_ID);
+  });
+
+  it("still applies NJ modifier rules to a legacy claim", () => {
+    const r = evaluateBcbsSubmit({
+      ...NJ_ON_LEGACY,
+      lineHcpcs: ["A4232", "A4230"],
+      lineModifiers: [["KX"], ["KX"]],
+    });
+    expect(r.hardStops).toEqual([]);
+    expect(r.warnings.some((w) => w.code === "MODIFIER_MISMATCH")).toBe(true);
+  });
+
+  it("blank payor ID for an NJ patient is still a hard stop (not legacy)", () => {
+    const r = evaluateBcbsSubmit({ ...NJ_ON_LEGACY, payorId: null });
+    expect(r.hardStops.map((h) => h.code)).toContain("WRONG_PAYER_NJ");
+  });
+
+  it("11348 on a NY patient is still a hard stop — wrong state, not legacy", () => {
+    const r = evaluateBcbsSubmit({ ...NJ_ON_LEGACY, patientState: "NY" });
+    expect(r.hardStops.map((h) => h.code)).toContain("WRONG_PAYER_NY");
+  });
+});
+
 describe("evaluateBcbsSubmit — modifier mismatch", () => {
   it("warns when a CareCentrix (NJ) line has KX instead of NU+SC (Esther Reich)", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "Horizon BCBS",
-      payorId: CARECENTRIX_NJ_PAYER_ID,
+      payorId: HORIZON_NJ_PAYER_ID,
       placeOfService: "Home",
       patientState: "NJ",
       lineAuthIds: ["AUTH-A", "AUTH-B"],
@@ -312,7 +390,7 @@ describe("evaluateBcbsSubmit — modifier mismatch", () => {
   it("no modifier warning when NJ lines carry NU+SC / NU", () => {
     const r = evaluateBcbsSubmit({
       payerLabel: "Horizon BCBS",
-      payorId: CARECENTRIX_NJ_PAYER_ID,
+      payorId: HORIZON_NJ_PAYER_ID,
       placeOfService: "Home",
       patientState: "NJ",
       lineAuthIds: ["AUTH-A", "AUTH-B", "AUTH-C"],
@@ -575,7 +653,7 @@ describe("canOverrideHardStops", () => {
   });
 
   it("refuses override when a payer ID stop rides along with the POS stop", () => {
-    const r = evaluateBcbsSubmit({ ...NY_POS_OFFICE, payorId: CARECENTRIX_NJ_PAYER_ID });
+    const r = evaluateBcbsSubmit({ ...NY_POS_OFFICE, payorId: HORIZON_NJ_PAYER_ID });
     expect(r.hardStops.some((h) => h.code === "WRONG_PAYER_NY")).toBe(true);
     expect(canOverrideHardStops(r)).toBe(false);
   });
