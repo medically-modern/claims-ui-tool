@@ -538,11 +538,55 @@ const Claims = () => {
   // the Primary Board's bucket views.
   const { data: mondayClaims, isFetching: claimsLoading, refetch: refetchClaims } =
     useAllClaims();
+
+  // Per-row "marking paid" state. Declared HERE — above every list
+  // derivation — because claimsView below reads it. See the block further
+  // down for how it's started, swept and persisted.
+  //
+  // Initial state seeds from sessionStorage so the chip shows up when
+  // the operator navigates here from ClaimDetail after a detail-view
+  // Mark Paid. Without seeding, the page would mount with an empty
+  // processing dict and the row would look untouched.
+  const [markPaidProcessing, setMarkPaidProcessing] = useState<Record<string, boolean>>(
+    () => {
+      const persisted = getAllMarkPaidProcessing();
+      const out: Record<string, boolean> = {};
+      for (const id of Object.keys(persisted)) out[id] = true;
+      return out;
+    },
+  );
+
+  // Rows the operator just confirmed Mark Paid on are in flight: the two
+  // backend calls are still running and Monday hasn't propagated the new
+  // status yet. Present them as "Paid" so they leave ERA Review the
+  // instant the dialog closes — and stay gone, because a refetch that
+  // lands mid-flight still carries the stale "Review" status and would
+  // otherwise drag the row back into the bucket under the operator.
+  //
+  // Only "Review" is rewritten. If the row has already moved on (Denied,
+  // Bad Debt, an operator flip), that real status wins — masking it would
+  // hide a state the operator needs to see.
+  //
+  // This is a presentation-layer mask, not a cache write: the React Query
+  // cache still holds the true status, so the sweep effect below (which
+  // reads mondayClaims directly) can tell when Monday has actually caught
+  // up, and stopMarkPaidProcessing can drop the mask if a call fails.
+  const claimsView = useMemo(() => {
+    if (!mondayClaims || Object.keys(markPaidProcessing).length === 0) {
+      return mondayClaims;
+    }
+    return mondayClaims.map((c) =>
+      markPaidProcessing[c.id] && c.primaryStatus === "Review"
+        ? { ...c, primaryStatus: "Paid" as const }
+        : c,
+    );
+  }, [mondayClaims, markPaidProcessing]);
+
   const preSubmissionStatuses: Claim["primaryStatus"][] = [
     "Submit Claim", "Future Claim", "Not Started Yet",
   ];
   const MOCK_CLAIMS = hasMondayToken()
-    ? (mondayClaims ?? []).filter(
+    ? (claimsView ?? []).filter(
         (c) => !preSubmissionStatuses.includes(c.primaryStatus),
       )
     : MOCK_CLAIMS_FALLBACK;
@@ -552,7 +596,7 @@ const Claims = () => {
   // shouldn't show them), but the Future Medicare Pumps tile depends on
   // them being present. Pass the unfiltered list to the cash flow view.
   const ALL_CLAIMS_FOR_CASHFLOW = hasMondayToken()
-    ? (mondayClaims ?? [])
+    ? (claimsView ?? [])
     : MOCK_CLAIMS_FALLBACK;
 
   // Secondary claims — feed into the Cash Flow tile so Soon/Expected
@@ -597,9 +641,9 @@ const Claims = () => {
   // ─── Row-level Mark Paid wiring ──────────────────────────────────────────
   // The check-mark icon on each row in the table now actually calls the
   // backend (POST /claims/mark-paid) instead of just toasting. We track
-  // which claim is being confirmed and whether the request is in flight.
+  // which claim the confirm dialog is pointed at; there's no in-flight
+  // flag any more, because confirm no longer waits on the backend.
   const [markPaidTarget, setMarkPaidTarget] = useState<Claim | null>(null);
-  const [markPaidBusy, setMarkPaidBusy] = useState(false);
   // Operator-selected Secondary Payer override for the Mark-fully-paid
   // dialog. Seeded from the claim's current Secondary Payer when the
   // dialog opens; if the operator changes it, we stamp the new value
@@ -612,28 +656,17 @@ const Claims = () => {
   // "has note" immediately; the next fetchAllClaims refetch supersedes.
   const [noteOverrides, setNoteOverrides] = useState<Record<string, string>>({});
 
-  // Per-row "marking paid" state. After confirm fires, the backend
-  // returns in ~1-2s but the Monday status propagation + our React Query
-  // refetch take another few seconds before the row actually drops out
-  // of the ERA Review bucket. Operator needs continuous visual feedback
-  // ("we're still working on this") until the row actually disappears.
+  // Per-row "marking paid" state. Row-level Mark Paid flags the claim the
+  // moment the operator confirms and holds it until Monday's status
+  // propagation + our React Query refetch catch up — claimsView (declared
+  // up by useAllClaims, where the state itself now lives) reads this dict
+  // to keep the row out of ERA Review for the whole window, and anywhere
+  // the row is still on screen it renders a "Marking paid…" chip.
   //
   // Loading state is keyed off claim id and persists until the claim is
   // no longer in the active list — useEffect below sweeps the dict each
   // render to drop ids that have already left the load. So the spinner
   // is gone exactly when the row is, never earlier.
-  // Initial state seeds from sessionStorage so the chip shows up when
-  // the operator navigates here from ClaimDetail after a detail-view
-  // Mark Paid. Without seeding, the page would mount with an empty
-  // processing dict and the row would look untouched.
-  const [markPaidProcessing, setMarkPaidProcessing] = useState<Record<string, boolean>>(
-    () => {
-      const persisted = getAllMarkPaidProcessing();
-      const out: Record<string, boolean> = {};
-      for (const id of Object.keys(persisted)) out[id] = true;
-      return out;
-    },
-  );
 
   function startMarkPaidProcessing(claimId: string) {
     setMarkPaidProcessing((p) => ({ ...p, [claimId]: true }));
@@ -653,6 +686,20 @@ const Claims = () => {
       });
       removeMarkPaidProcessing(claimId);
     }, 45000);
+  }
+
+  // Undo startMarkPaidProcessing. Used when a background Mark Paid call
+  // fails: drops the id from the dict (and its sessionStorage mirror) so
+  // claimsView stops masking the row's status and it drops straight back
+  // into ERA Review for another attempt.
+  function stopMarkPaidProcessing(claimId: string) {
+    setMarkPaidProcessing((p) => {
+      if (!p[claimId]) return p;
+      const next = { ...p };
+      delete next[claimId];
+      return next;
+    });
+    removeMarkPaidProcessing(claimId);
   }
 
   // Optimistic cache flip. By the time /claims/mark-paid responds, the
@@ -814,7 +861,7 @@ const Claims = () => {
 
   async function confirmMarkPaidFromRow() {
     const target = markPaidTarget;
-    if (!target || markPaidBusy) return;
+    if (!target) return;
 
     if (!isMarkPaidConfigured()) {
       toast({
@@ -825,27 +872,37 @@ const Claims = () => {
       return;
     }
 
-    setMarkPaidBusy(true);
+    // Save what the operator picked before the dialog tears down —
+    // secPayerOverride is dialog state and is reseeded on the next open.
+    // If they changed it, we stamp it onto the primary BEFORE marking
+    // paid so the backend spawn classifies + routes the secondary
+    // correctly; Monday reads are immediately consistent, so the
+    // mark-paid call that follows sees the updated column.
+    const override = secPayerOverride?.trim() || null;
+    const writeSecondaryPayer =
+      !!override && override !== (target.secondaryPayer ?? null);
+
+    // The operator's confirm is the only decision this dialog is waiting
+    // on, so act on it now rather than holding them for a ~2s round-trip:
+    // close, flag the row, and let the two API calls run in the
+    // background. claimsView masks the row's stale "Review" status the
+    // moment the flag lands, so it leaves ERA Review immediately and no
+    // in-flight refetch can pull it back. The catch below undoes all of
+    // that if either call fails.
+    setMarkPaidTarget(null);
+    startMarkPaidProcessing(target.id);
+
     try {
-      // If the operator picked a different Secondary Payer in the dialog,
-      // stamp it onto the primary BEFORE marking paid so the backend
-      // spawn classifies + routes the secondary correctly. Synchronous
-      // by design — Monday reads are immediately consistent, so the
-      // mark-paid call that follows sees the updated column.
-      const override = secPayerOverride?.trim() || null;
-      if (override && override !== (target.secondaryPayer ?? null)) {
+      if (writeSecondaryPayer) {
         await apiSetSecondaryPayer(target.mondayItemId, override);
       }
 
       const result = await apiMarkPrimaryPaid(target.mondayItemId);
-      setMarkPaidTarget(null);
 
-      // Belt-and-suspenders: the processing chip covers the (rare) case
-      // where the cache flip below can't land (e.g. cache empty); the
-      // sweep effect clears it as soon as the status reads non-Review.
-      startMarkPaidProcessing(target.id);
-      // Server already confirmed the flip — drop the row from ERA Review
-      // right now instead of waiting for a full-board refetch.
+      // Server confirmed the flip — write "Paid" into the cache so the
+      // row's real status catches up with what the operator has been
+      // looking at since they hit Confirm, and the sweep effect can
+      // retire the processing flag.
       optimisticallyMarkPaid(target.id);
 
       // Backend returns in ~1-2s after the Primary Status flip; the
@@ -863,10 +920,17 @@ const Claims = () => {
       });
       void refetchClaims();
     } catch (e) {
+      // Nothing landed on Monday (or we can't tell that it did), so put
+      // the row back in ERA Review. The dialog is long gone by now, so
+      // this toast is the operator's only signal — name the patient and
+      // make it destructive so it can't be mistaken for the success one.
+      stopMarkPaidProcessing(target.id);
       const msg = e instanceof MarkPaidError ? e.message : (e as Error).message;
-      toast({ title: "Mark Paid failed", description: msg });
-    } finally {
-      setMarkPaidBusy(false);
+      toast({
+        variant: "destructive",
+        title: "Mark Paid failed",
+        description: `${target.patientName}: ${msg}`,
+      });
     }
   }
 
@@ -2187,7 +2251,6 @@ const Claims = () => {
                     <Select
                       value={secPayerOverride ?? undefined}
                       onValueChange={(v) => setSecPayerOverride(v)}
-                      disabled={markPaidBusy}
                     >
                       <SelectTrigger className="w-full">
                         <SelectValue placeholder="Select secondary payer…" />
@@ -2221,12 +2284,11 @@ const Claims = () => {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={markPaidBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              disabled={markPaidBusy}
               onClick={(e) => { e.preventDefault(); void confirmMarkPaidFromRow(); }}
             >
-              {markPaidBusy ? "Marking…" : "Confirm"}
+              Confirm
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
