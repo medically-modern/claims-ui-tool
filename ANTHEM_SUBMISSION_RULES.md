@@ -11,7 +11,7 @@ Three columns drive every BCBS claim: **Patient's home address state**, **Payer 
 | Patient lives in | Payer ID to bill | Place of Service |
 |------------------|------------------|------------------|
 | **New York**     | **803** (Anthem BCBS NY / Empire) | **12 — Home** |
-| **New Jersey**   | **11348** (Horizon BCBS NJ via CareCentrix) | **12 — Home** |
+| **New Jersey**   | **11345** (Horizon BCBS NJ via CareCentrix) | **12 — Home** |
 | Any other state  | **803** (Anthem BCBS NY / Empire) | **11 — Office** |
 
 The address rule is the master switch. Member ID and home plan don't enter the routing decision — they only drive the AUTH workflow described below.
@@ -25,7 +25,7 @@ BCBS plans operate as a federation. A member's card is issued by their **home pl
 For our patient population, "services rendered" = where the patient lives, because that's where we ship the supplies. So:
 
 - **Patient lives in NY** → host plan is Empire BCBS NY (Anthem NY) → **submit to payer ID 803**, regardless of what the patient's card says.
-- **Patient lives in NJ** → host plan is Horizon BCBS NJ → **submit to payer ID 11348** (we route through CareCentrix who handles NJ Horizon claims).
+- **Patient lives in NJ** → host plan is Horizon BCBS NJ → **submit to payer ID 11345** (we route through CareCentrix who handles NJ Horizon claims).
 - **Patient lives elsewhere** → we still bill payer 803 (Anthem NY is our contracted Blues plan that handles the BlueCard inter-plan routing on our behalf), but POS flips to **11 (Office)** because we're outside Anthem NY's home market and they expect provider-office billing for those.
 
 ### Two separate questions: AUTH vs BILL
@@ -33,7 +33,7 @@ For our patient population, "services rendered" = where the patient lives, becau
 | Question | Driven by | Example |
 |----------|-----------|---------|
 | **Do I need an auth?** And from whom? | **Member's home plan** (their card's BCBS plan, the "originating" plan) | Member has a BCBS PA card → auth path goes through BCBS PA, even if the patient lives in NJ |
-| **Where do I send the 837?** | **Patient's home address** (the local host plan) | Patient lives in NJ → bill goes to Horizon NJ (11348 via CareCentrix), even though their card says BCBS PA |
+| **Where do I send the 837?** | **Patient's home address** (the local host plan) | Patient lives in NJ → bill goes to Horizon NJ (11345 via CareCentrix), even though their card says BCBS PA |
 
 This separation matters because the auth requirement is set by the contract between the member and the plan that issued the card, but billing always lands with the local plan that has a network presence where the service happened.
 
@@ -66,7 +66,7 @@ The Claims UI Tool should run these checks before allowing a Submit click on a B
 | Check | Error message | Fix |
 |-------|---------------|-----|
 | Patient address state can be parsed (NY / NJ / other) | "Can't determine patient state from address — please confirm the address on file" | Edit Patient Address field |
-| Payer ID matches the patient's state | "Patient lives in NY but Payer ID is set to 11348. NY patients bill to Empire BCBS NY (803)." | Change Payer ID to 803 |
+| Payer ID matches the patient's state | "Patient lives in NY but Payer ID is set to 11345. NY patients bill to Empire BCBS NY (803)." | Change Payer ID to 803 |
 | POS matches the patient's state | "Patient lives in NY/NJ but POS is set to 11 (Office). NY/NJ patients bill at POS 12 (Home)." | Change POS to Home (12) |
 | POS = 11 only when patient is NOT in NY or NJ | "Patient lives in NY/NJ — POS should be 12 (Home), not 11 (Office)." | Change POS to Home |
 
@@ -94,7 +94,8 @@ These caught the Kai Burridge case (stale Waltham MA address on a NY patient) an
 | Payer ID | Plan name | Used for |
 |----------|-----------|----------|
 | **803**  | Anthem Blue Cross Blue Shield of New York / Empire BCBS | All BCBS claims where patient lives in NY, AND all BCBS claims where patient lives outside NY/NJ (Anthem handles BlueCard routing for those) |
-| **11348** | Horizon Blue Cross and Blue Shield of New Jersey | Patient lives in NJ, regardless of their card's home plan. Submitted via CareCentrix. |
+| **11345** | Horizon Blue Cross and Blue Shield of New Jersey | Patient lives in NJ, regardless of their card's home plan. Submitted via CareCentrix. |
+| **11348** | Horizon Blue Cross and Blue Shield of New Jersey (**legacy** — retired in favour of 11345) | Nothing new. Kept in scope so claims still open on it can be resubmitted; the guard raises a soft warning, never a hard stop. |
 
 If we expand to more Blues plans (Tennessee, Florida, Wyoming etc. — already in `STEDI_TRADING_PARTNER_NAME_BY_PAYER_ID`), this matrix grows. For now: NY/NJ are the only branched cases; everything else funnels through 803 + POS 11.
 
@@ -102,19 +103,19 @@ If we expand to more Blues plans (Tennessee, Florida, Wyoming etc. — already i
 
 ## Modifiers by billing route
 
-Modifiers are **route-specific**, not just code-specific. The same supply code carries *different* modifiers depending on which payer the claim goes to, so this must be set per billing route — never copied across from another claim. The billing route is itself determined by the address master switch (NY/other → 803, NJ → 11348).
+Modifiers are **route-specific**, not just code-specific. The same supply code carries *different* modifiers depending on which payer the claim goes to, so this must be set per billing route — never copied across from another claim. The billing route is itself determined by the address master switch (NY/other → 803, NJ → 11345).
 
-| HCPCS (product) | **803** — Anthem NY / Empire (NY + out-of-state) | **11348** — Horizon NJ via CareCentrix |
+| HCPCS (product) | **803** — Anthem NY / Empire (NY + out-of-state) | **11345** — Horizon NJ via CareCentrix |
 |-----------------|--------------------------------------------------|----------------------------------------|
 | **A4230** (Infusion Sets) | `KX` | `NU` + `SC` |
 | **A4232** (Cartridges) | `KX` | `NU` + `SC` |
 | **A4239** (CGM Sensors) | `KF` + `KX` + `CG` | `NU` |
 
-`NU + SC` on the 11348 side is the set used once an auth is obtained from CareCentrix and the claim is submitted to them. `E0784` / `E2103` modifier conventions are not yet codified and are not policed by the guard.
+`NU + SC` on the 11345 side is the set used once an auth is obtained from CareCentrix and the claim is submitted to them. `E0784` / `E2103` modifier conventions are not yet codified and are not policed by the guard.
 
 **Operator-facing rule:** the supply-line modifiers must match the row's billing route. Two bugs this catches:
 
-- **Esther Reich** — NJ resident correctly routed to **11348**, but the lines came over with `KX` instead of `NU + SC`.
+- **Esther Reich** — NJ resident correctly routed to Horizon NJ, but the lines came over with `KX` instead of `NU + SC`.
 - A line built with `NU + SC` while routing to **803** is equally wrong — Empire expects `KX` (and `KF + KX + CG` on A4239).
 
 > **Now enforced (2026-06-09):** the pre-submit guard (`bcbsSubmitGuard.ts`, `EXPECTED_LINE_MODIFIERS_BY_PAYER`) raises a **soft warning** (`MODIFIER_MISMATCH`, "submit anyway?") when a supply line is missing the canonical modifiers for its billing route. It checks against the *required* payer for the patient's state, and only flags **missing** required modifiers (extras like ERA-derived codes don't trip it). `SC` was also missing from the modifier dropdown (`MODIFIER_OPTIONS` in `PrimarySubmitBoard.tsx`) and has been added so operators can actually select it.
@@ -138,3 +139,4 @@ Modifiers are **route-specific**, not just code-specific. The same supply code c
 | 2026-06-09 | Brandon + Claude | Added "Modifiers by billing route" — 11348/CareCentrix requires NU + SC on supply lines; added SC to the UI modifier dropdown |
 | 2026-06-09 | Brandon + Claude | Completed the per-route modifier table (803 = KX / KX / KF+KX+CG; 11348 = NU+SC / NU+SC / NU) and wired the MODIFIER_MISMATCH soft warning into the pre-submit guard |
 | 2026-08-04 | Brandon + Claude | POS hard stops are now overridable from the Submit board with a required reason logged to Action Context; payer-ID / unknown-state stops stay locked |
+| 2026-09-15 | Brandon + Claude | Horizon NJ claims moved from payer ID **11348** to **11345**. 11348 stays in scope as a legacy value so the ~14 claims still open on it can be resubmitted — an NJ claim sitting on 11348 raises a soft warning (`LEGACY_NJ_PAYER_ID`), never a hard stop |

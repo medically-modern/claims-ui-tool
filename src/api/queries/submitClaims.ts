@@ -58,7 +58,7 @@ const COL = {
   CLAIM_RESENT_DATE: "date_mm29scz",
   // Patient address — location column. Drives the BCBS / Anthem
   // pre-submit validator: patient's home state is the master routing
-  // switch (NY → 803/POS12, NJ → 11348/POS12, other → 803/POS11).
+  // switch (NY → 803/POS12, NJ → 11345/POS12, other → 803/POS11).
   // See lib/claims/bcbsSubmitGuard.ts.
   ADDRESS: "location_mkxxpesw",
 } as const;

@@ -27,7 +27,7 @@ const MIXED: BcbsGuardResult = {
     ...POS_ONLY.hardStops,
     {
       code: "WRONG_PAYER_NY",
-      message: "Patient lives in NY but PR Payor ID is 11348.",
+      message: "Patient lives in NY but PR Payor ID is 11345.",
       fix: "Change PR Payor ID to 803.",
     },
   ],
@@ -99,7 +99,7 @@ describe("BcbsSubmitGuardDialog — POS override", () => {
       warnings: [
         {
           code: "CARECENTRIX_AUTH_GAP",
-          message: "Routing to CareCentrix / Horizon NJ (11348) but no Auth ID.",
+          message: "Routing to CareCentrix / Horizon NJ (11345) but no Auth ID.",
         },
       ],
     });
