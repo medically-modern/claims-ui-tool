@@ -1204,12 +1204,17 @@ const Claims = () => {
         subtitle="Review ERAs, check unpaid claims, and resolve claim issues."
       />
 
-      <main className="mx-auto max-w-[1920px] px-6 py-6 space-y-6">
-        {/* Top-level: Claims Board (the original product) vs Subscription Board */}
+      <main className="mx-auto max-w-[1920px] space-y-4 px-3 py-4 sm:space-y-6 sm:px-6 sm:py-6">
+        {/* Top-level: Claims Board (the original product) vs Subscription Board.
+            Phone: shorter labels so all three tabs fit on one row. */}
         <Tabs value={topLevel} onValueChange={(v) => setTopLevel(v as "claims" | "subscription" | "financials")}>
-          <TabsList className="bg-card border h-10">
-            <TabsTrigger value="claims" className="text-sm font-semibold">Claims Board</TabsTrigger>
-            <TabsTrigger value="subscription" className="text-sm font-semibold">Subscription Board</TabsTrigger>
+          <TabsList className="bg-card border h-10 max-w-full">
+            <TabsTrigger value="claims" className="text-sm font-semibold">
+              <span className="sm:hidden">Claims</span><span className="hidden sm:inline">Claims Board</span>
+            </TabsTrigger>
+            <TabsTrigger value="subscription" className="text-sm font-semibold">
+              <span className="sm:hidden">Subscriptions</span><span className="hidden sm:inline">Subscription Board</span>
+            </TabsTrigger>
             <TabsTrigger value="financials" className="text-sm font-semibold">Financials</TabsTrigger>
           </TabsList>
         </Tabs>

@@ -14,30 +14,32 @@ export function AppHeader({
   showBack?: boolean;
 }) {
   return (
+    // Phone: title stays on one line, subtitle hides, buttons collapse to
+    // icons (labels return from the sm breakpoint up).
     <header className="border-b bg-card">
-      <div className="mx-auto flex max-w-[1920px] items-start justify-between gap-6 px-6 py-5">
-        <div className="flex items-start gap-3">
-          <div className="mt-1 grid h-9 w-9 place-items-center rounded-lg bg-primary text-primary-foreground">
+      <div className="mx-auto flex max-w-[1920px] items-center justify-between gap-3 px-4 py-3 sm:items-start sm:gap-6 sm:px-6 sm:py-5">
+        <div className="flex min-w-0 items-center gap-3 sm:items-start">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground sm:mt-1">
             <Stethoscope className="h-5 w-5" />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-3">
               {showBack && (
-                <Link to="/claims" className="text-sm text-muted-foreground hover:text-foreground">
+                <Link to="/claims" className="shrink-0 text-sm text-muted-foreground hover:text-foreground">
                   ← Queue
                 </Link>
               )}
-              <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+              <h1 className="truncate text-lg font-semibold tracking-tight sm:text-xl">{title}</h1>
             </div>
-            {subtitle && <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>}
+            {subtitle && <p className="mt-1 hidden text-sm text-muted-foreground sm:block">{subtitle}</p>}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button variant="outline" size="sm">
-            <RefreshCw className="mr-2 h-4 w-4" /> Refresh
+          <Button variant="outline" size="sm" aria-label="Refresh">
+            <RefreshCw className="h-4 w-4 sm:mr-2" /> <span className="hidden sm:inline">Refresh</span>
           </Button>
-          <Button variant="outline" size="sm">
-            <ExternalLink className="mr-2 h-4 w-4" /> Open Monday Board
+          <Button variant="outline" size="sm" aria-label="Open Monday Board">
+            <ExternalLink className="h-4 w-4 sm:mr-2" /> <span className="hidden sm:inline">Open Monday Board</span>
           </Button>
         </div>
       </div>
