@@ -341,6 +341,9 @@ export function PrimarySubmitBoard({ navTo }: { navTo?: PrimarySubmitNavTo | nul
     const code = c.patientAddressState?.toUpperCase();
     if (code === "NY") return "NY";
     if (code === "NJ") return "NJ";
+    // FL routes to CareCentrix Florida Blue, not the out-of-state 803
+    // BlueCard route — it must not fall through to OTHER.
+    if (code === "FL") return "FL";
     if (code && code.length === 2) return "OTHER";
     // Fallback to re-parsing raw address text — keeps the validator
     // working even if the query layer skipped state derivation.

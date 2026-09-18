@@ -11,11 +11,19 @@ import {
   isBcbsByPayorId,
   ANTHEM_NY_PAYER_ID,
   HORIZON_NJ_PAYER_ID,
+  CARECENTRIX_FL_PAYER_ID,
   LEGACY_HORIZON_NJ_PAYER_ID,
   BCBS_TN_PAYER_ID,
   BCBS_WY_PAYER_ID,
   resolveLabelRoutedBluePlan,
   canOverrideHardStops,
+  requiredPayerIdFor,
+  requiredPosFor,
+  billingRouteForState,
+  missingLineModifiersForRoute,
+  missingLineModifiers,
+  EXPECTED_LINE_MODIFIERS_BY_ROUTE,
+  EXPECTED_LINE_MODIFIERS_BY_PAYER,
 } from "./bcbsSubmitGuard";
 
 describe("parsePatientStateFromAddress", () => {
@@ -27,6 +35,11 @@ describe("parsePatientStateFromAddress", () => {
   it("parses NJ", () => {
     expect(parsePatientStateFromAddress("45 Pine Ave, Newark, NJ 07102, US"))
       .toBe("NJ");
+  });
+
+  it("parses FL as its own bucket, not OTHER", () => {
+    expect(parsePatientStateFromAddress("900 Ocean Dr, Miami, FL 33139, US"))
+      .toBe("FL");
   });
 
   it("buckets MA as OTHER", () => {
@@ -57,6 +70,9 @@ describe("isBcbsByPayerLabel", () => {
     expect(isBcbsByPayerLabel("Empire BCBS NY")).toBe(true);
     expect(isBcbsByPayerLabel("Blue Cross Blue Shield")).toBe(true);
     expect(isBcbsByPayerLabel("Horizon BCBS NJ")).toBe(true);
+    // Florida Blue carries none of the other tokens but IS a Blues plan.
+    expect(isBcbsByPayerLabel("Florida Blue")).toBe(true);
+    expect(isBcbsByPayerLabel("BCBS FL")).toBe(true);
     expect(isBcbsByPayerLabel("Anthem Healthcare")).toBe(true);
   });
 
@@ -614,6 +630,276 @@ describe("evaluateBcbsSubmit — BCBS Wyoming (direct, 53767)", () => {
 // Rare-but-real: a NY/NJ patient who really should bill at POS 11. The
 // guard dialog offers an override for POS stops only — never for payer
 // ID or unresolvable address.
+
+// ── BCBS FL (Florida Blue via CareCentrix, 11345) ───────────────────────────
+// As of the 2026-09-10 CareCentrix amendment, Florida patients are in
+// network through CareCentrix Florida Blue. Before it they fell through
+// the "any other state" rule and billed Anthem 803 + POS Office, so these
+// cases guard the new branch AND the fact that it no longer leaks to 803.
+//
+// FL shares destination payer ID 11345 with Horizon NJ but is a SEPARATE
+// billing route: the fee schedules differ on A4230.
+describe("evaluateBcbsSubmit — BCBS FL (Florida Blue via CareCentrix)", () => {
+  const FL_BASE = {
+    payerLabel: "Florida Blue",
+    payorId: CARECENTRIX_FL_PAYER_ID,
+    placeOfService: "Home" as const,
+    patientState: "FL" as const,
+    lineAuthIds: ["AUTH-A", "AUTH-B"],
+  };
+
+  it("clean FL claim on 11345 + POS Home passes with no stops or warnings", () => {
+    const r = evaluateBcbsSubmit(FL_BASE);
+    expect(r.applies).toBe(true);
+    expect(r.hardStops).toEqual([]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("requiredPayerIdFor(FL) is 11345, NOT 803", () => {
+    expect(requiredPayerIdFor("FL")).toBe(CARECENTRIX_FL_PAYER_ID);
+    expect(requiredPayerIdFor("FL")).not.toBe(ANTHEM_NY_PAYER_ID);
+  });
+
+  it("requiredPosFor(FL) is Home, NOT Office", () => {
+    expect(requiredPosFor("FL")).toBe("Home");
+  });
+
+  it("hard-stops an FL patient still sitting on Anthem 803", () => {
+    const r = evaluateBcbsSubmit({ ...FL_BASE, payorId: ANTHEM_NY_PAYER_ID });
+    expect(r.hardStops.map((h) => h.code)).toContain("WRONG_PAYER_FL");
+    expect(r.hardStops[0].message).toContain(CARECENTRIX_FL_PAYER_ID);
+    // Payer-ID stops are never overridable.
+    expect(canOverrideHardStops(r)).toBe(false);
+  });
+
+  it("hard-stops a blank payor ID on an FL patient", () => {
+    const r = evaluateBcbsSubmit({ ...FL_BASE, payorId: null });
+    expect(r.hardStops.map((h) => h.code)).toContain("WRONG_PAYER_FL");
+  });
+
+  it("hard-stops FL on the legacy NJ ID 11348 — FL was never on 11348", () => {
+    const r = evaluateBcbsSubmit({
+      ...FL_BASE,
+      payorId: LEGACY_HORIZON_NJ_PAYER_ID,
+    });
+    expect(r.hardStops.map((h) => h.code)).toContain("WRONG_PAYER_FL");
+    // The legacy soft-warning escape hatch is NJ-only.
+    expect(r.warnings.some((w) => w.code === "LEGACY_NJ_PAYER_ID")).toBe(false);
+  });
+
+  it("hard-stops POS Office on an FL patient, and it IS overridable", () => {
+    const r = evaluateBcbsSubmit({ ...FL_BASE, placeOfService: "Office" });
+    expect(r.hardStops.map((h) => h.code)).toEqual(["WRONG_POS_NY_OR_NJ"]);
+    expect(canOverrideHardStops(r)).toBe(true);
+  });
+
+  // The BlueCard case from the handoff: an out-of-area Blues member (card
+  // says BCBS PA) who LIVES in Florida. Address is the master switch, so
+  // this routes to 11345 — the pre-amendment behaviour would have sent it
+  // to 803 + POS Office.
+  it("routes an out-of-state Blues member living in FL to 11345, not 803", () => {
+    const onFlRoute = evaluateBcbsSubmit({
+      payerLabel: "BCBS PA",
+      payorId: CARECENTRIX_FL_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "FL",
+      lineAuthIds: ["AUTH-A"],
+    });
+    expect(onFlRoute.applies).toBe(true);
+    expect(onFlRoute.hardStops).toEqual([]);
+
+    const onAnthem = evaluateBcbsSubmit({
+      payerLabel: "BCBS PA",
+      payorId: ANTHEM_NY_PAYER_ID,
+      placeOfService: "Office",
+      patientState: "FL",
+      lineAuthIds: ["AUTH-A"],
+    });
+    expect(onAnthem.hardStops.map((h) => h.code)).toEqual([
+      "WRONG_PAYER_FL",
+      "WRONG_POS_NY_OR_NJ",
+    ]);
+  });
+
+  it("raises the CareCentrix auth gap on an FL claim missing a line auth", () => {
+    const r = evaluateBcbsSubmit({
+      ...FL_BASE,
+      lineAuthIds: ["AUTH-A", ""],
+      lineProducts: ["A4239", "A4232"],
+    });
+    expect(r.hardStops).toEqual([]);
+    const gap = r.warnings.find((w) => w.code === "CARECENTRIX_AUTH_GAP");
+    expect(gap).toBeDefined();
+    expect(gap!.productsMissingAuth).toEqual(["A4232"]);
+    expect(gap!.message).toContain("Florida Blue");
+    expect(gap!.message).toContain(CARECENTRIX_FL_PAYER_ID);
+    // Florida auth must be secured before start of care — the detail line
+    // has to say so rather than reusing the generic NJ copy.
+    expect(gap!.detail).toContain("before start of care");
+  });
+
+  it("does not raise the auth gap when every FL line carries an auth", () => {
+    const r = evaluateBcbsSubmit({
+      ...FL_BASE,
+      lineProducts: ["A4239", "A4232"],
+    });
+    expect(r.warnings).toEqual([]);
+  });
+});
+
+// ── The shared-11345 split: NJ and FL price A4230 differently ───────────────
+// This is the case that forced the modifier table off payer-ID keying.
+// A4230 with an SC is correct for NJ and UNPRICED in Florida (277 reject,
+// "No rate on file ..."), so the same payer ID must yield two verdicts.
+describe("modifiers on the shared 11345 destination — NJ vs FL", () => {
+  const A4230_NU_ONLY = {
+    lineAuthIds: ["AUTH-A"],
+    lineHcpcs: ["A4230"],
+    lineModifiers: [["NU"]],
+    placeOfService: "Home" as const,
+  };
+  const A4230_NU_SC = { ...A4230_NU_ONLY, lineModifiers: [["NU", "SC"]] };
+
+  it("NJ still requires NU+SC on A4230 — NU alone is flagged", () => {
+    const r = evaluateBcbsSubmit({
+      ...A4230_NU_ONLY,
+      payerLabel: "Horizon BCBS NJ",
+      payorId: HORIZON_NJ_PAYER_ID,
+      patientState: "NJ",
+    });
+    const w = r.warnings.find((x) => x.code === "MODIFIER_MISMATCH");
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("SC");
+  });
+
+  it("FL accepts A4230 with NU alone — same payer ID, no warning", () => {
+    const r = evaluateBcbsSubmit({
+      ...A4230_NU_ONLY,
+      payerLabel: "Florida Blue",
+      payorId: CARECENTRIX_FL_PAYER_ID,
+      patientState: "FL",
+    });
+    expect(r.hardStops).toEqual([]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("NJ accepts A4230 with NU+SC — the mirror of the FL case", () => {
+    const r = evaluateBcbsSubmit({
+      ...A4230_NU_SC,
+      payerLabel: "Horizon BCBS NJ",
+      payorId: HORIZON_NJ_PAYER_ID,
+      patientState: "NJ",
+    });
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("FL A4232 keeps NU+SC — NU alone is flagged", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "Florida Blue",
+      payorId: CARECENTRIX_FL_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "FL",
+      lineAuthIds: ["AUTH-A"],
+      lineHcpcs: ["A4232"],
+      lineModifiers: [["NU"]],
+    });
+    expect(r.warnings.some((w) => w.code === "MODIFIER_MISMATCH")).toBe(true);
+  });
+
+  it("FL polices E0784 / E2103 as NU (NJ leaves them unchecked)", () => {
+    const fl = evaluateBcbsSubmit({
+      payerLabel: "Florida Blue",
+      payorId: CARECENTRIX_FL_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "FL",
+      lineAuthIds: ["AUTH-A", "AUTH-B"],
+      lineHcpcs: ["E0784", "E2103"],
+      lineModifiers: [["KX"], ["KX"]],
+    });
+    expect(fl.warnings.some((w) => w.code === "MODIFIER_MISMATCH")).toBe(true);
+
+    const nj = evaluateBcbsSubmit({
+      payerLabel: "Horizon BCBS NJ",
+      payorId: HORIZON_NJ_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "NJ",
+      lineAuthIds: ["AUTH-A", "AUTH-B"],
+      lineHcpcs: ["E0784", "E2103"],
+      lineModifiers: [["KX"], ["KX"]],
+    });
+    expect(nj.warnings).toEqual([]);
+  });
+
+  it("a clean full FL line set raises nothing", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "Florida Blue",
+      payorId: CARECENTRIX_FL_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "FL",
+      lineAuthIds: ["A", "B", "C", "D", "E"],
+      lineHcpcs: ["A4230", "A4232", "A4239", "E0784", "E2103"],
+      lineModifiers: [["NU"], ["NU", "SC"], ["NU"], ["NU"], ["NU"]],
+    });
+    expect(r.hardStops).toEqual([]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("the FL detail line names the NU-only A4230 rule", () => {
+    const r = evaluateBcbsSubmit({
+      payerLabel: "Florida Blue",
+      payorId: CARECENTRIX_FL_PAYER_ID,
+      placeOfService: "Home",
+      patientState: "FL",
+      lineAuthIds: ["AUTH-A"],
+      lineHcpcs: ["A4239"],
+      lineModifiers: [["KX"]],
+    });
+    const w = r.warnings.find((x) => x.code === "MODIFIER_MISMATCH");
+    expect(w!.detail).toContain("Florida Blue");
+    expect(w!.detail).toContain("A4230 \u2192 NU");
+  });
+});
+
+// Route keying is the mechanism the NJ/FL split depends on — check it
+// directly so a regression points at the table, not at a claim scenario.
+describe("billingRouteForState / EXPECTED_LINE_MODIFIERS_BY_ROUTE", () => {
+  it("maps each bucket to its route", () => {
+    expect(billingRouteForState("NY")).toBe("ANTHEM_NY");
+    expect(billingRouteForState("OTHER")).toBe("ANTHEM_NY");
+    expect(billingRouteForState("NJ")).toBe("HORIZON_NJ");
+    expect(billingRouteForState("FL")).toBe("CARECENTRIX_FL");
+    expect(billingRouteForState("UNKNOWN")).toBeNull();
+  });
+
+  it("NJ and FL are distinct routes despite sharing payer ID 11345", () => {
+    expect(CARECENTRIX_FL_PAYER_ID).toBe(HORIZON_NJ_PAYER_ID);
+    expect(billingRouteForState("FL")).not.toBe(billingRouteForState("NJ"));
+    expect(EXPECTED_LINE_MODIFIERS_BY_ROUTE.CARECENTRIX_FL.A4230)
+      .toEqual(["NU"]);
+    expect(EXPECTED_LINE_MODIFIERS_BY_ROUTE.HORIZON_NJ.A4230)
+      .toEqual(["NU", "SC"]);
+  });
+
+  it("missingLineModifiersForRoute splits A4230 by route", () => {
+    expect(missingLineModifiersForRoute("CARECENTRIX_FL", "A4230", ["NU"]))
+      .toEqual([]);
+    expect(missingLineModifiersForRoute("HORIZON_NJ", "A4230", ["NU"]))
+      .toEqual(["SC"]);
+  });
+
+  it("returns [] for a null route or an unpoliced code", () => {
+    expect(missingLineModifiersForRoute(null, "A4230", [])).toEqual([]);
+    expect(missingLineModifiersForRoute("HORIZON_NJ", "E0784", [])).toEqual([]);
+  });
+
+  it("the deprecated payer-ID shim still resolves 11345 to NJ", () => {
+    expect(EXPECTED_LINE_MODIFIERS_BY_PAYER[HORIZON_NJ_PAYER_ID].A4230)
+      .toEqual(["NU", "SC"]);
+    expect(missingLineModifiers(HORIZON_NJ_PAYER_ID, "A4230", ["NU"]))
+      .toEqual(["SC"]);
+  });
+});
+
 describe("canOverrideHardStops", () => {
   const NY_POS_OFFICE = {
     payerLabel: "Empire BCBS",

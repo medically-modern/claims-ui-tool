@@ -58,7 +58,8 @@ const COL = {
   CLAIM_RESENT_DATE: "date_mm29scz",
   // Patient address — location column. Drives the BCBS / Anthem
   // pre-submit validator: patient's home state is the master routing
-  // switch (NY → 803/POS12, NJ → 11345/POS12, other → 803/POS11).
+  // switch (NY → 803/POS12, NJ → 11345/POS12, FL → 11345/POS12,
+  // other → 803/POS11).
   // See lib/claims/bcbsSubmitGuard.ts.
   ADDRESS: "location_mkxxpesw",
 } as const;
@@ -265,7 +266,7 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
     ? rawStateMatch[1].toUpperCase()
     : stateBucket === "UNKNOWN"
       ? undefined
-      : stateBucket; // "NY" / "NJ"
+      : stateBucket; // "NY" / "NJ" / "FL"
   // Map Primary Status -> ThreadClaimStatus. The query filters to
   // Submit Claim / Submitted / Request rejected (lowercase 'r' on
   // Monday). The latter two share the "Submitted" bucket on the
