@@ -209,11 +209,10 @@ const HCPC_TO_PRODUCT: Record<string, string> = {
 
 // ---------- GraphQL types ----------
 
+// Only `text` is read by the mapper; `value`/`type` were dead weight on the wire.
 interface MondayColumnValue {
   id: string;
   text: string | null;
-  value: string | null;
-  type: string;
 }
 interface MondaySubitem {
   id: string;
@@ -252,8 +251,6 @@ const PAGE_QUERY = `
           column_values(ids: [${PARENT_COLUMN_IDS}]) {
             id
             text
-            value
-            type
           }
           subitems {
             id
@@ -261,8 +258,6 @@ const PAGE_QUERY = `
             column_values(ids: [${SUBITEM_COLUMN_IDS}]) {
               id
               text
-              value
-              type
             }
           }
         }

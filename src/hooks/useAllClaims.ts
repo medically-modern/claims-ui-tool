@@ -26,12 +26,12 @@ export function useAllClaims() {
     // Claim data updates relatively slowly. Five-minute freshness window is
     // fine; user can hit the Refresh button to force.
     //
-    // With localStorage persistence (PersistQueryClientProvider in App.tsx),
+    // With IndexedDB persistence (PersistQueryClientProvider in App.tsx),
     // a reload within this window renders from cache and skips Monday
-    // entirely — the difference between ~10s of paginated GraphQL and
-    // instant first paint. Past the window, we still show cached data
-    // immediately and refetch silently in the background, so the user
-    // never sees a blank screen.
+    // entirely — the difference between ~10s of parallel GraphQL (was
+    // ~50s as one sequential walk) and instant first paint. Past the
+    // window, we still show cached data immediately and refetch silently
+    // in the background, so the user never sees a blank screen.
     // 30s staleTime + always-refetch-on-mount: every page navigation
     // sees a refetch fire while the cached snapshot renders instantly.
     // Matches the Subscription Board pattern; eliminates the

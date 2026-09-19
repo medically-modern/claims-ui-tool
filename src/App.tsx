@@ -1,12 +1,11 @@
 // app entry
 //
 // React Query is wrapped in PersistQueryClientProvider so the cache
-// rehydrates from localStorage on every reload. That's the difference
-// between "10 seconds of blank screen while Monday's GraphQL API
-// re-paginates 1500+ claim rows" and "instant first paint with
-// yesterday's data, refresh in the background." A 5-min staleTime
-// on the heavy queries means a fresh reload within the staleness
-// window won't even hit Monday at all.
+// rehydrates from disk on every reload. That's the difference between
+// "a blank screen while Monday's GraphQL API re-reads 1,700 claim rows"
+// and "instant first paint with the last snapshot, refresh in the
+// background." A short staleTime on the heavy queries means a reload
+// within the staleness window won't even hit Monday at all.
 //
 // Cache buster: VITE_BUILD_SHA (set by the GH Pages workflow). When
 // a new deploy lands with a different commit hash, the persisted
@@ -14,14 +13,17 @@
 // new-build / old-cached-shape mismatches (e.g. the Claim type
 // gaining a new field that older entries don't carry).
 //
-// Storage: window.localStorage. ~5MB quota per origin; the claims
-// + secondary + playbook caches we persist add up to well under
-// that even on the biggest accounts. The persister writes JSON
-// synchronously per cache mutation; React Query throttles those
-// writes internally so we don't thrash the disk.
+// Storage: IndexedDB (via idb-keyval), NOT localStorage. The cache is
+// one JSON string holding every successful query; at ~1,700 claims it
+// is ~3.2 MB of characters = ~6.5 MB in localStorage's UTF-16 accounting,
+// past the ~5 MB per-origin quota. From mid-2026 the write silently
+// failed (the sync persister swallows QuotaExceededError), so NOTHING
+// was persisted and every open was a cold ~50s load — the "it's starting
+// to take a long time" regression. IndexedDB quotas are hundreds of MB.
 import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
+import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
+import { del, get, set } from "idb-keyval";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
@@ -60,13 +62,25 @@ const queryClient = new QueryClient({
   },
 });
 
-const persister = createSyncStoragePersister({
-  storage: window.localStorage,
-  key: "claims-ui-tool:react-query-cache",
-  // 1.5MB compact threshold — beyond this the persister skips
-  // serialising entries instead of blowing localStorage's quota.
-  // 1500 claim rows sit comfortably under this; the EFT enrollment
-  // tracker + playbook combos are tiny.
+const CACHE_KEY = "claims-ui-tool:react-query-cache";
+
+// The pre-IndexedDB cache lived under this same key in localStorage.
+// Drop it once so it stops eating the quota other features may use.
+try {
+  window.localStorage.removeItem(CACHE_KEY);
+} catch {
+  /* private mode / disabled storage — nothing to clean up */
+}
+
+const persister = createAsyncStoragePersister({
+  storage: {
+    getItem: (key) => get<string>(key).then((v) => v ?? null),
+    setItem: (key, value) => set(key, value),
+    removeItem: (key) => del(key),
+  },
+  key: CACHE_KEY,
+  // Coalesce the persister's writes — the cache mutates in bursts
+  // (every query settling, every optimistic update).
   throttleTime: 1000,
 });
 

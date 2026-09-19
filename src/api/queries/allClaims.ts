@@ -165,13 +165,42 @@ const HCPC_TO_PRODUCT: Record<string, string> = {
   E0784: "Insulin Pump",
 };
 
+// ---------- load strategy ----------
+//
+// Monday's items_page costs ~1.3s per request + ~25ms per item (subitems
+// included), and cursor pagination is strictly sequential — the whole board
+// as ONE paginated walk took ~52s at 1,685 rows (Sept 2026), and 78% of those
+// rows are Paid And Closed. So the board is loaded as INDEPENDENT requests
+// fired concurrently: every non-terminal group on its own, and Paid And
+// Closed cut into DOS-month windows (each well under a page). Wall time is
+// then the slowest single request (~10-13s) instead of the sum. Measured on
+// 2026-09-19: 9 requests, 12.9s, 1,685/1,685 items.
+const PAGE_LIMIT = 500;
+/** Concurrent Monday requests during a board load. Monday's per-request
+ *  latency rises with concurrency (its side is the bottleneck: ~130 items/s
+ *  aggregate vs ~32 items/s sequential), so more requests do not help —
+ *  the plan below is ~11 requests, all in flight at once. */
+const LOAD_CONCURRENCY = 12;
+/** Non-terminal groups are small (≤ ~120 rows each) but every request costs
+ *  ~1.5-4s of fixed overhead, so they are batched into this many requests
+ *  (halves in board order) rather than one per group. */
+const ACTIVE_GROUP_BATCHES = 2;
+/** Terminal group — 78% of the board — is split by DOS month. Located by
+ *  title at load time (ids are board-specific); if it is missing the loader
+ *  falls back to the legacy sequential walk. */
+const CLOSED_GROUP_TITLE = "Paid And Closed";
+/** Earliest complete Claims Board history — one "older" window covers
+ *  everything before it, monthly windows run from here to next month. */
+const DOS_HISTORY_FLOOR = "2026-05-01";
+
 // ---------- GraphQL ----------
 
+// Only `text` is ever read by the mapper below. `value` (raw JSON) and
+// `type` used to be requested too and doubled the payload (3.4 MB → 1.65 MB
+// per 500-item page) without being used anywhere.
 interface MondayColumnValue {
   id: string;
   text: string | null;
-  value: string | null;
-  type: string;
 }
 
 interface MondaySubitem {
@@ -191,15 +220,23 @@ interface MondayItem {
   subitems: MondaySubitem[] | null;
 }
 
+interface ItemsPage { cursor: string | null; items: MondayItem[] }
+
 interface QueryResponse {
-  boards: Array<{
-    items_page: { cursor: string | null; items: MondayItem[] };
-  }>;
-  next?: { cursor: string | null; items: MondayItem[] };
+  boards: Array<{ items_page: ItemsPage }>;
+}
+interface GroupsPageResponse {
+  boards: Array<{ groups: Array<{ id: string; items_page: ItemsPage }> }>;
+}
+interface NextPageResponse {
+  next_items_page: ItemsPage;
+}
+interface GroupsResponse {
+  boards: Array<{ groups: Array<{ id: string; title: string }> }>;
 }
 
 // Only request the columns we actually map. The board has ~66 parent columns
-// and ~54 subitem columns; we use ~21+16. Restricting projection cuts the
+// and ~54 subitem columns; we use ~38+24. Restricting projection cuts the
 // response size 3-4× and the API responds noticeably faster.
 const PARENT_COLUMN_IDS = Object.values(COL)
   .map((id) => `"${id}"`)
@@ -208,65 +245,94 @@ const SUBITEM_COLUMN_IDS = Object.values(SUB_COL)
   .map((id) => `"${id}"`)
   .join(", ");
 
+/** The item projection shared by every claims query below. */
+const ITEM_FIELDS = `
+  id
+  name
+  created_at
+  group { id title }
+  column_values(ids: [${PARENT_COLUMN_IDS}]) {
+    id
+    text
+  }
+  subitems {
+    id
+    name
+    column_values(ids: [${SUBITEM_COLUMN_IDS}]) {
+      id
+      text
+    }
+  }
+`;
+
+// Legacy whole-board pagination (sequential, ~13-17s per 500-item page,
+// ~50s for the board at 1,700 rows). Kept as the fallback when the parallel
+// loader below can't run.
 const PAGE_QUERY = `
   query AllClaims($cursor: String) {
     boards(ids: [${CLAIMS_BOARD_ID}]) {
       items_page(limit: 500, cursor: $cursor) {
         cursor
-        items {
-          id
-          name
-          created_at
-          group { id title }
-          column_values(ids: [${PARENT_COLUMN_IDS}]) {
-            id
-            text
-            value
-            type
-          }
-          subitems {
-            id
-            name
-            column_values(ids: [${SUBITEM_COLUMN_IDS}]) {
-              id
-              text
-              value
-              type
-            }
-          }
+        items { ${ITEM_FIELDS} }
+      }
+    }
+  }
+`;
+
+const GROUPS_QUERY = `
+  query ClaimGroups {
+    boards(ids: [${CLAIMS_BOARD_ID}]) {
+      groups { id title }
+    }
+  }
+`;
+
+/** First page of one or more groups. Continuation is via NEXT_PAGE_QUERY. */
+const GROUP_PAGE_QUERY = `
+  query ClaimsByGroup($ids: [String!]) {
+    boards(ids: [${CLAIMS_BOARD_ID}]) {
+      groups(ids: $ids) {
+        id
+        items_page(limit: ${PAGE_LIMIT}) {
+          cursor
+          items { ${ITEM_FIELDS} }
         }
       }
     }
   }
 `;
 
-// Single-item variant of the same projection. Used to pull ONE claim
-// (e.g. a freshly-spawned resubmission child) in ~0.5s instead of
-// re-paginating the entire board (~10s) just to find it.
-const ITEM_QUERY = `
-  query ClaimByItemId($ids: [ID!]) {
-    items(ids: $ids) {
-      id
-      name
-      created_at
-      group { id title }
-      column_values(ids: [${PARENT_COLUMN_IDS}]) {
+/** First page of a group filtered by a DOS window (or DOS empty). */
+const GROUP_DOS_PAGE_QUERY = `
+  query ClaimsByGroupAndDos($ids: [String!], $rules: [ItemsQueryRule!]) {
+    boards(ids: [${CLAIMS_BOARD_ID}]) {
+      groups(ids: $ids) {
         id
-        text
-        value
-        type
-      }
-      subitems {
-        id
-        name
-        column_values(ids: [${SUBITEM_COLUMN_IDS}]) {
-          id
-          text
-          value
-          type
+        items_page(limit: ${PAGE_LIMIT}, query_params: { rules: $rules }) {
+          cursor
+          items { ${ITEM_FIELDS} }
         }
       }
     }
+  }
+`;
+
+/** Any cursor (board, group or filtered) continues here. */
+const NEXT_PAGE_QUERY = `
+  query ClaimsNextPage($cursor: String!) {
+    next_items_page(cursor: $cursor, limit: ${PAGE_LIMIT}) {
+      cursor
+      items { ${ITEM_FIELDS} }
+    }
+  }
+`;
+
+// Single-item variant of the same projection. Used to pull ONE claim
+// (e.g. a freshly-spawned resubmission child) in ~0.5s instead of
+// re-loading the entire board just to find it.
+const ITEM_QUERY = `
+  query ClaimByItemId($ids: [ID!]) {
+    items(ids: $ids) { ${ITEM_FIELDS} }
   }
 `;
 
@@ -615,8 +681,114 @@ export async function fetchClaimByItemId(itemId: string): Promise<Claim | null> 
   return item ? mapMondayItemToClaim(item) : null;
 }
 
+// ---------- board loaders ----------
+
+/** Legacy: one sequential cursor walk over the whole board. */
+async function fetchBoardItemsSequential(): Promise<MondayItem[]> {
+  const out: MondayItem[] = [];
+  let cursor: string | null = null;
+  do {
+    const data = await mondayQuery<QueryResponse>(PAGE_QUERY, { cursor });
+    const page = data.boards[0]?.items_page;
+    out.push(...(page?.items ?? []));
+    cursor = page?.cursor ?? null;
+  } while (cursor);
+  return out;
+}
+
+/** Follow a cursor to the end (cursors encode the board/group/filter). */
+async function drainCursor(first: ItemsPage | undefined, out: MondayItem[]) {
+  if (!first) return;
+  out.push(...first.items);
+  let cursor = first.cursor;
+  while (cursor) {
+    const data = await mondayQuery<NextPageResponse>(NEXT_PAGE_QUERY, { cursor });
+    out.push(...data.next_items_page.items);
+    cursor = data.next_items_page.cursor;
+  }
+}
+
+/** Run async tasks with at most `limit` in flight; rejects on first failure. */
+async function runLimited<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      results[i] = await tasks[i]();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return results;
+}
+
+/** DOS windows that tile every possible value: older-than-floor, one per
+ *  month up to next month, and blank. Exported for tests. */
+export function dosWindows(today = new Date()): Array<{ label: string; rules: unknown[] }> {
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const between = (a: string, b: string) => [
+    { column_id: COL.DOS, compare_value: [a, b], operator: "between" },
+  ];
+  const floor = new Date(`${DOS_HISTORY_FLOOR}T00:00:00Z`);
+  const dayBefore = new Date(floor); dayBefore.setUTCDate(dayBefore.getUTCDate() - 1);
+  const windows = [{ label: `DOS < ${DOS_HISTORY_FLOOR}`, rules: between("1900-01-01", iso(dayBefore)) }];
+  // Monthly windows, floor → the month after today (future-dated DOS exist).
+  const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1));
+  for (let m = new Date(floor); m <= end; m = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))) {
+    const last = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 0));
+    windows.push({ label: `DOS ${iso(m).slice(0, 7)}`, rules: between(iso(m), iso(last)) });
+  }
+  const after = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 1));
+  windows.push({ label: `DOS ≥ ${iso(after)}`, rules: between(iso(after), "2100-12-31") });
+  windows.push({ label: "DOS empty", rules: [{ column_id: COL.DOS, compare_value: [], operator: "is_empty" }] });
+  return windows;
+}
+
 /**
- * Fetch every claim on the Claims Board, paginating until done.
+ * Load the whole board as independent concurrent requests: each non-terminal
+ * group by itself, and the Paid And Closed group cut into DOS windows. Items
+ * are deduped by id (a claim can change group mid-load). Throws if the board
+ * has no Paid And Closed group or any request fails — the caller falls back.
+ */
+async function fetchBoardItemsParallel(): Promise<MondayItem[]> {
+  const groupsData = await mondayQuery<GroupsResponse>(GROUPS_QUERY);
+  const groups = groupsData.boards[0]?.groups ?? [];
+  const closed = groups.find((g) => g.title.trim().toLowerCase() === CLOSED_GROUP_TITLE.toLowerCase());
+  if (!closed) throw new Error(`Claims Board has no "${CLOSED_GROUP_TITLE}" group`);
+
+  const firstGroupPage = (data: GroupsPageResponse) => data.boards[0]?.groups?.[0]?.items_page;
+  const tasks: Array<() => Promise<MondayItem[]>> = [];
+  // Paid And Closed windows first (the biggest requests → longest critical path).
+  for (const w of dosWindows()) {
+    tasks.push(async () => {
+      const out: MondayItem[] = [];
+      const data = await mondayQuery<GroupsPageResponse>(GROUP_DOS_PAGE_QUERY, { ids: [closed.id], rules: w.rules });
+      await drainCursor(firstGroupPage(data), out);
+      return out;
+    });
+  }
+  // Non-terminal groups, batched (board order) into a few requests. Each
+  // group's page is drained separately — cursors are per group.
+  const active = groups.filter((g) => g.id !== closed.id);
+  const batchSize = Math.max(1, Math.ceil(active.length / ACTIVE_GROUP_BATCHES));
+  for (let i = 0; i < active.length; i += batchSize) {
+    const ids = active.slice(i, i + batchSize).map((g) => g.id);
+    tasks.push(async () => {
+      const out: MondayItem[] = [];
+      const data = await mondayQuery<GroupsPageResponse>(GROUP_PAGE_QUERY, { ids });
+      for (const g of data.boards[0]?.groups ?? []) await drainCursor(g.items_page, out);
+      return out;
+    });
+  }
+
+  const chunks = await runLimited(tasks, LOAD_CONCURRENCY);
+  const byId = new Map<string, MondayItem>();
+  for (const chunk of chunks) for (const it of chunk) byId.set(it.id, it);
+  return [...byId.values()];
+}
+
+/**
+ * Fetch every claim on the Claims Board.
  * Excludes terminal/pre-submission states (Submit Claim, Future Claim,
  * Not Started Yet) so the Primary Board only shows in-flight work.
  *
@@ -627,18 +799,17 @@ export async function fetchAllClaims(opts?: {
   excludePreSubmission?: boolean;
 }): Promise<Claim[]> {
   const excludePreSubmission = opts?.excludePreSubmission ?? true;
-  let cursor: string | null = null;
-  const all: Claim[] = [];
-  // Pagination loop. items_page returns cursor=null when there's no next page.
-  do {
-    const data = await mondayQuery<QueryResponse>(PAGE_QUERY, { cursor });
-    const page = data.boards[0]?.items_page;
-    const items = page?.items ?? [];
-    for (const item of items) {
-      all.push(mapMondayItemToClaim(item));
-    }
-    cursor = page?.cursor ?? null;
-  } while (cursor);
+  let items: MondayItem[];
+  try {
+    items = await fetchBoardItemsParallel();
+  } catch (e) {
+    // Any failure of the parallel plan (renamed group, Monday complexity
+    // budget, a partition erroring) degrades to the slow-but-simple walk
+    // rather than a blank board.
+    console.warn("[claims] parallel load failed, falling back to sequential:", e);
+    items = await fetchBoardItemsSequential();
+  }
+  const all: Claim[] = items.map(mapMondayItemToClaim);
 
   // Derive `hasChildren` per claim from parent pointers across the load.
   // A parent claim that has any child resubmission falls out of active

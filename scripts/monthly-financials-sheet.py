@@ -8,6 +8,29 @@ Runs on the 1st of each month (scheduled Claude task), or manually:
     MONDAY_API_TOKEN=... RAILWAY_TOKEN=... python3 scripts/monthly-financials-sheet.py
     python3 scripts/monthly-financials-sheet.py --month 2026-07 --dry-run
 
+Month-to-date mode (daily scheduled Claude task, 8am ET):
+
+    python3 scripts/monthly-financials-sheet.py --mtd [--through YYYY-MM-DD] [--dry-run]
+
+  Writes the CURRENT month through today into ONE dedicated "MTD" column
+  on the Monthly Financials and KPIs tabs — always the LAST column,
+  rewritten in place every run (header "Sep 2026 MTD · thru Sep 18") and
+  rolling to the new month by itself. Month-end runs keep it last: on the
+  1st the run for the month just ended certifies the MTD column in place
+  (header → "Sep 2026", fixed costs → default), and a backfill for any
+  other month is inserted LEFT of it. Because the MTD column is last,
+  anything that reads "the latest month-end" off Monthly Financials must
+  skip the MTD header: the Fixed Costs tab's four lookups were rewritten
+  to ARRAYFORMULA(LOOKUP(2, 1/(ISNUMBER(row)*ISERROR(SEARCH("MTD",
+  header))), row)) on 2026-09-19 (fixed_costs_latest), and the MTD run
+  warns if any naive LOOKUP(1e12, row) comes back. The MTD run also
+  RE-MEASURES the Realization tab (collections to date as of this morning,
+  every DOS month through the current one) but never touches the Reorder
+  Funnel tab (a month cohort); its MoM-delta rows are left blank (MoM is a full-month comparison), and its
+  Fixed-costs cell is FIXED_COST_DEFAULT prorated by days elapsed (a
+  formula, rewritten daily — edit fixed costs on certified month columns
+  only).
+
 Env:
   MONDAY_API_TOKEN                     required
   GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON   optional — if unset, fetched from
@@ -127,6 +150,10 @@ PUMP_NAME_KEYS = ("mobi", "t:slim")
 # Sanity band per resolved pump row (July avg $3,788 + ~$200 list increase).
 # A price outside it means the lookup grabbed a cartridge / discontinued row.
 PUMP_PRICE_BAND = (3950.0, 4050.0)
+# SKU Tracker statuses that mean "not a current price": Inactive (the
+# re-keyed / Medicaid-only Mobi row sits at $0 Inactive). Available,
+# Backordered and Restricted all keep the contracted price.
+PUMP_SKIP_STATUSES = {"inactive"}
 
 MEDICAID_PRIMARIES = {"Fidelis Medicaid", "Anthem BCBS Medicaid (JLJ)",
                       "United Medicaid", "Medicaid"}
@@ -252,6 +279,9 @@ S_RAW_PAID = "numeric_mm201t4y"   # subitem: ERA line paid
 S_PARSED_PR = "numeric_mm1gredn"  # subitem: ERA line patient responsibility
 S_CARC = "dropdown_mm2pthcy"      # subitem: ERA line CARC codes
 REAL_HEADER_ROW = 3
+REAL_BLURB = ("One column per date-of-service month, RE-MEASURED every morning by the MTD "
+              "refresh (and on the 1st) — collections to date as of {asof}, so young months "
+              "read low and mature as payments land.")
 
 SECONDARY_BOARD = 18413019028
 S2_PAID = "numeric_mm115q76"    # secondary ERA paid amount (secondary board)
@@ -352,10 +382,14 @@ def pull_hardware_costs(token, subs):
         price = num(cv.get(SKU_PRICE))
         status = cv.get(SKU_STATUS, "").strip().lower()
         uom = cv.get(SKU_UOM, "").strip().upper()
-        # Pump rows: name-based (desc mentions Mobi / t:slim), sold per EA,
-        # currently Available. Cartridges share the names but are BX.
+        # Pump rows: name-based (desc mentions Mobi / t:slim), sold per EA.
+        # Cartridges share the names but are BX. Only Inactive rows are
+        # skipped: Backordered / Restricted still carry the contracted
+        # price (the t:slim flipped to Backordered on 2026-09-18 and the
+        # old Available-only rule made every run fail), and the price band
+        # below is the real guard against a wrong row.
         if any(k in desc for k in PUMP_NAME_KEYS) and uom == "EA":
-            if status != "available":
+            if status in PUMP_SKIP_STATUSES:
                 continue
             lo, hi = PUMP_PRICE_BAND
             if not (lo <= price <= hi):
@@ -512,7 +546,9 @@ def compute_realization(token, dos_year, dos_month):
                 rp_unadj=round(rp_unadj, 2), rp_zero=round(rp_zero, 2),
                 rp_ratevar=round(rp_ratevar, 2), rp_denial=round(rp_denial, 2),
                 lost=round(lost, 2), still=round(still, 2),
-                age_days=(dt.date.today() - r_last).days)
+                # "Days since month end" — 0 while the DOS month is still
+                # running (the daily MTD run measures the current month too).
+                age_days=max(0, (dt.date.today() - r_last).days))
 
 
 def _ensure_realization_tab(svc):
@@ -621,13 +657,18 @@ def update_realization_tab(svc, token, upto_year, upto_month):
     svc.spreadsheets().values().batchUpdate(
         spreadsheetId=SHEET_ID,
         body={"valueInputOption": "USER_ENTERED", "data": data}).execute()
-    # month headers must stay literal text, not date serials
+    # month headers must stay literal text, not date serials; row 2 says
+    # when the collections were last measured (the UI derives the same date
+    # from "Days since month end", this is for people reading the sheet).
+    today = dt.datetime.now(ZoneInfo("America/New_York")).date()
     svc.spreadsheets().values().batchUpdate(
         spreadsheetId=SHEET_ID,
         body={"valueInputOption": "RAW", "data": [
             {"range": f"'{REAL_TAB}'!{col_letter(i + 1)}{REAL_HEADER_ROW}",
              "values": [[dt.date(yy, mm, 1).strftime('%b %Y')]]}
-            for i, (yy, mm) in enumerate(months)]}).execute()
+            for i, (yy, mm) in enumerate(months)] + [
+            {"range": f"'{REAL_TAB}'!A2",
+             "values": [[REAL_BLURB.format(asof=f"{today:%b} {today.day}, {today.year}")]]}]}).execute()
     return len(months)
 
 
@@ -658,9 +699,17 @@ def label_from(blob):
 
 
 # ── KPI computation ────────────────────────────────────────────────────────
-def compute(token, year, month):
+def compute(token, year, month, through=None):
+    """KPIs for one calendar month. `through` (date) caps the window for a
+    month-to-date run: DOS / created / activity windows end there instead
+    of at month end (keeps pre-staged future-DOS claims, e.g. monthly pump
+    rentals, out of the MTD numbers). The board snapshot is always NOW."""
     first = dt.date(year, month, 1)
     last = (dt.date(year + (month == 12), (month % 12) + 1, 1) - dt.timedelta(days=1))
+    if through is not None:
+        if not (first <= through <= last):
+            raise ValueError(f"--through {through} is outside {year}-{month:02d}")
+        last = through
 
     # 1. Subscription snapshot
     subs = pull_subscription_snapshot(token)
@@ -984,18 +1033,179 @@ def norm_header(cell):
         return s
 
 
-def write_column(svc, kpis, year, month, dry_run=False):
-    label = dt.date(year, month, 1).strftime("%b %Y")
+# ── Month-to-date column ───────────────────────────────────────────────────
+# One MTD column per tab, ALWAYS THE LAST column (right of every certified
+# month). Header: "Sep 2026 MTD · thru Sep 18". Placement rules:
+#   * MTD run: rewrite the existing MTD column in place (relabeling it to
+#     the current month), else append it after the last column.
+#   * Month-end run: reuse the month's own column if it exists; else, if the
+#     MTD column IS that month, certify it in place (header → "Mon YYYY",
+#     fixed costs → default, amber header cleared); else insert the new
+#     month column immediately LEFT of the MTD column; else append.
+# Other tabs that want "the latest month-end" must skip the MTD header —
+# see FIXED_COSTS_LOOKUPS below (the Fixed Costs tab formulas were rewritten
+# to do exactly that on 2026-09-19; the MTD run warns if they regress).
+MTD_TAG = " MTD"
+MTD_HEADER_FILL = {"red": 1.0, "green": 0.95, "blue": 0.80}   # amber: "live, not certified"
+
+
+def mtd_label(year, month, through):
+    return f"{dt.date(year, month, 1):%b %Y}{MTD_TAG} · thru {through:%b} {through.day}"
+
+
+def is_mtd_header(h):
+    return MTD_TAG in norm_header(h)
+
+
+def mtd_month_of(h):
+    """'Sep 2026 MTD · thru Sep 18' -> 'Sep 2026' (None for non-MTD headers)."""
+    s = norm_header(h)
+    return s.split(MTD_TAG)[0].strip() if MTD_TAG in s else None
+
+
+def is_month_end_header(h):
+    """True for a certified month column ('Mon YYYY' exactly)."""
+    try:
+        dt.datetime.strptime(norm_header(h), "%b %Y")
+        return True
+    except ValueError:
+        return False
+
+
+def find_mtd_idx(norm):
+    """Index of the existing MTD column (any month), else None."""
+    return next((j for j, h in enumerate(norm) if j >= 1 and is_mtd_header(h)), None)
+
+
+def prev_month_end_idx(norm, before):
+    """Nearest certified-month column strictly left of `before` (skips the
+    MTD column), else None — the 'previous month' for delta / roll-forward
+    formulas."""
+    for j in range(before - 1, 0, -1):
+        if is_month_end_header(norm[j]):
+            return j
+    return None
+
+
+def last_month_end_idx(norm):
+    """Rightmost certified-month column, else None."""
+    return prev_month_end_idx(norm, len(norm))
+
+
+def first_month_end_idx(norm):
+    """Leftmost certified-month column (format source for new columns)."""
+    return next((j for j, h in enumerate(norm) if j >= 1 and is_month_end_header(h)), None)
+
+
+def sheet_id_of(svc, title):
+    meta = svc.spreadsheets().get(spreadsheetId=SHEET_ID, fields="sheets.properties").execute()
+    return next(s["properties"]["sheetId"] for s in meta["sheets"]
+                if s["properties"]["title"] == title)
+
+
+def insert_column(svc, sid, idx0):
+    """Insert one empty column at 0-based `idx0` (shifts everything right;
+    Sheets rewrites every formula that pointed at the shifted cells, on
+    this tab AND on other tabs)."""
+    svc.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": [{
+        "insertDimension": {
+            "range": {"sheetId": sid, "dimension": "COLUMNS",
+                      "startIndex": idx0, "endIndex": idx0 + 1},
+            "inheritFromBefore": False}}]}).execute()
+
+
+def copy_column_format(svc, sid, src_idx0, dst_idx0, row0, row1):
+    svc.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": [{
+        "copyPaste": {
+            "source": {"sheetId": sid, "startRowIndex": row0, "endRowIndex": row1,
+                       "startColumnIndex": src_idx0, "endColumnIndex": src_idx0 + 1},
+            "destination": {"sheetId": sid, "startRowIndex": row0, "endRowIndex": row1,
+                            "startColumnIndex": dst_idx0, "endColumnIndex": dst_idx0 + 1},
+            "pasteType": "PASTE_FORMAT"}}]}).execute()
+
+
+def paint_mtd_header(svc, sid, idx0, header_row):
+    svc.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": [{
+        "repeatCell": {
+            "range": {"sheetId": sid, "startRowIndex": header_row - 1, "endRowIndex": header_row,
+                      "startColumnIndex": idx0, "endColumnIndex": idx0 + 1},
+            "cell": {"userEnteredFormat": {"backgroundColor": MTD_HEADER_FILL,
+                                           "textFormat": {"bold": True}}},
+            "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat.bold"}}]}).execute()
+
+
+def place_column(norm, label, mtd):
+    """Decide where a column goes. Returns (idx, action) with action one of
+    'reuse' (header already there), 'append' (new last column), 'insert'
+    (new column at idx, shifting the MTD column right) or 'certify' (the
+    MTD column is this very month: overwrite it in place as month-end).
+    `norm` is the normalized header row (col A = the label column)."""
+    mtd_idx = find_mtd_idx(norm)
+    if mtd:
+        if mtd_idx is not None:
+            return mtd_idx, "reuse"
+        month = label.split(MTD_TAG)[0]
+        if month in norm:
+            raise SystemExit(f"{month} already has a certified column — refusing to "
+                             f"write an MTD column for a closed month.")
+        return max(len(norm), 1), "append"
+    if label in norm:
+        return norm.index(label), "reuse"
+    if mtd_idx is not None:
+        if mtd_month_of(norm[mtd_idx]) == label:
+            return mtd_idx, "certify"
+        return mtd_idx, "insert"
+    return max(len(norm), 1), "append"
+
+
+def apply_placement(svc, sid, norm, label, idx, action, dry_run):
+    """Perform the structural part of a placement (column insert) and return
+    the header row as it will look once the column is written."""
+    if action == "insert" and not dry_run:
+        insert_column(svc, sid, idx)
+    if action in ("insert", "append"):
+        norm = norm[:idx] + [label] + norm[idx:]
+    else:
+        norm = norm[:idx] + [label] + norm[idx + 1:]
+    return norm
+
+
+def finish_placement(svc, sid, norm, idx, action, mtd, header_row, row0, row1):
+    """Formats after the values are written: the written column takes the
+    first certified column's number formats on EVERY write (not just when
+    created — Aug 2026's payer-share cells lost their % format in a hand
+    correction and showed as 0.0926 until 2026-09-19); the MTD header is
+    amber; a certified (ex-MTD) header gets the normal header format back."""
+    src = first_month_end_idx(norm)
+    if src == idx:   # the very first certified column — nothing to copy from
+        src = None
+    if src is not None:
+        copy_column_format(svc, sid, src, idx, row0, row1)
+    if mtd:
+        paint_mtd_header(svc, sid, idx, header_row)
+
+
+def write_column(svc, kpis, year, month, dry_run=False, through=None):
+    """Write one column on the Monthly Financials tab.
+
+    Month-end (through=None): the month's own column — reused if the header
+    exists, else the MTD column certified in place when it is this month,
+    else a new column left of the MTD column (or appended).
+    MTD (through=date): the single MTD column — always last, created on
+    first use, rewritten in place afterwards; rolls to the new month by
+    itself. Returns (column letter, created).
+    """
+    mtd = through is not None
+    label = mtd_label(year, month, through) if mtd else dt.date(year, month, 1).strftime("%b %Y")
     hdr = svc.spreadsheets().values().get(
         spreadsheetId=SHEET_ID, range=f"'{TAB}'!{HEADER_ROW}:{HEADER_ROW}",
         valueRenderOption="UNFORMATTED_VALUE").execute().get("values", [[]])[0]
     norm = [norm_header(h) for h in hdr]
-    if label in norm:
-        idx = norm.index(label)
-        created = False
-    else:
-        idx = max(len(hdr), 1)  # first empty header cell after existing months
-        created = True
+    idx, action = place_column(norm, label, mtd)
+    sid = sheet_id_of(svc, TAB)
+    norm = apply_placement(svc, sid, norm, label, idx, action, dry_run)
+    created = action != "reuse"      # certify counts as new for fixed costs
+    prev_idx = prev_month_end_idx(norm, idx)
     col = col_letter(idx)
 
     R = ROWS
@@ -1109,10 +1319,12 @@ def write_column(svc, kpis, year, month, dry_run=False):
     # observed rental average, which legacy \$600-billed months inflate.
     pm = pump_payback_months(kpis["unit_cogs"]["pump"])
     cells[R["pb_months"]] = pm if pm is not None else "n/a"
-    # Month-over-month deltas — reference the previous month column;
-    # blank on the sheet's first month column.
-    if idx > 1:
-        pc = col_letter(idx - 1)
+    # Month-over-month deltas — reference the previous certified month
+    # column; blank on the sheet's first month column, and ALWAYS blank on
+    # the MTD column (a partial month vs a full one is not a MoM delta —
+    # the UI keeps MoM on the last two full months).
+    if prev_idx is not None and not mtd:
+        pc = col_letter(prev_idx)
         for k, r_ in (("d_rev", "rev_total"), ("d_gp", "gp_total"),
                       ("d_np", "np_total"), ("d_arr", "arr_total")):
             cells[R[k]] = f"=IF(N({pc}{R[r_]})=0,\"\",{col}{R[r_]}/{pc}{R[r_]}-1)"
@@ -1135,9 +1347,10 @@ def write_column(svc, kpis, year, month, dry_run=False):
     #   Total(A+P)  = prev Total + New − Churned
     #   Active      = prev Active + New − Newly paused + Resumed − Churned
     # (Active uses total churn; churn-from-paused inflates the residual
-    # slightly, covered by the tolerance.)
-    if idx > 1:
-        pc = col_letter(idx - 1)
+    # slightly, covered by the tolerance.) The MTD column rolls forward
+    # from the last certified month — a valid mid-month tie.
+    if prev_idx is not None:
+        pc = col_letter(prev_idx)
         cells[R["audit_rollfwd_total"]] = (
             f"=IF({pc}{R['total_u']}=\"\",\"\","
             f"{col}{R['total_u']}-({pc}{R['total_u']}"
@@ -1159,11 +1372,18 @@ def write_column(svc, kpis, year, month, dry_run=False):
                                 f"ABS(N({col}{R['audit_rollfwd_total']}))<=5,"
                                 f"ABS(N({col}{R['audit_rollfwd_active']}))<=5),\"OK\",\"CHECK\")")
     cells[HEADER_ROW] = label
-    if created:
+    if mtd:
+        # Partial month → fixed costs prorated by days elapsed, as a visible
+        # formula. Rewritten every run (the MTD column is machine-owned;
+        # operator edits belong on certified month columns).
+        days_in_month = (dt.date(year + (month == 12), (month % 12) + 1, 1)
+                         - dt.date(year, month, 1)).days
+        cells[R["fixed"]] = f"=ROUND({FIXED_COST_DEFAULT}*{through.day}/{days_in_month},0)"
+    elif created:
         cells[R["fixed"]] = FIXED_COST_DEFAULT  # never overwrite an existing month's fixed costs
 
     if dry_run:
-        print(f"[dry-run] would write column {col} ({label}), created={created}")
+        print(f"[dry-run] would write column {col} ({label}), action={action}, mtd={mtd}")
         for row in sorted(cells):
             print(f"  {col}{row} = {cells[row]}")
         return col, created
@@ -1178,18 +1398,7 @@ def write_column(svc, kpis, year, month, dry_run=False):
         spreadsheetId=SHEET_ID,
         body={"valueInputOption": "USER_ENTERED", "data": data}).execute()
 
-    if created and col != "B":
-        # copy number/percent/bold formats from column B onto the new column
-        meta = svc.spreadsheets().get(spreadsheetId=SHEET_ID, fields="sheets.properties").execute()
-        sid = next(s["properties"]["sheetId"] for s in meta["sheets"]
-                   if s["properties"]["title"] == TAB)
-        svc.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": [{
-            "copyPaste": {
-                "source": {"sheetId": sid, "startRowIndex": HEADER_ROW - 1, "endRowIndex": LAST_ROW,
-                           "startColumnIndex": 1, "endColumnIndex": 2},
-                "destination": {"sheetId": sid, "startRowIndex": HEADER_ROW - 1, "endRowIndex": LAST_ROW,
-                                "startColumnIndex": idx, "endColumnIndex": idx + 1},
-                "pasteType": "PASTE_FORMAT"}}]}).execute()
+    finish_placement(svc, sid, norm, idx, action, mtd, HEADER_ROW, HEADER_ROW - 1, LAST_ROW)
     return col, created
 
 
@@ -1255,21 +1464,28 @@ def _ensure_kpi_tab(svc):
     return sid
 
 
-def write_kpi_column(svc, mcol, label):
+def write_kpi_column(svc, mcol, label, mtd=False):
     """One formula column on the KPIs tab.
 
     The KPI column is resolved by matching the month label in header row 3
     (NOT by reusing Monthly's column letter — the KPIs tab carries extra
     backfill columns, e.g. May/Jun 2026 ARR/ARP, so letters can differ).
     `mcol` is the Monthly Financials column the formulas point at.
+    mtd=True targets the single MTD column (always last, created on first
+    use, relabeled in place afterwards) — same placement rules as Monthly
+    (place_column): a month-end run certifies the MTD column in place when
+    it is that month, or inserts left of it.
     """
-    _ensure_kpi_tab(svc)
+    sid = _ensure_kpi_tab(svc)
     hdr = svc.spreadsheets().values().get(
         spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!3:3",
         valueRenderOption="UNFORMATTED_VALUE").execute().get("values", [[]])[0]
     norm = [norm_header(h) for h in hdr]
-    kcol = col_letter(norm.index(label) if label in norm else max(len(hdr), 1))
+    kidx, action = place_column(norm, label, mtd)
+    norm = apply_placement(svc, sid, norm, label, kidx, action, dry_run=False)
+    kcol = col_letter(kidx)
     mf = f"'{TAB}'!{mcol}"
+    real_key = f'"{mtd_month_of(label)}"' if mtd else f"{kcol}$3"
     R = ROWS
     rows = {
         4: f"={mf}{R['active_u']}",
@@ -1286,8 +1502,10 @@ def write_kpi_column(svc, mcol, label):
         13: f"={mf}{R['pp_ann_rev']}",
         14: f"={mf}{R['pp_ann_gp']}",
         15: f"={mf}{R['sub_gm']}",
+        # True realization for this DOS month — the MTD column matches on
+        # its month ("Sep 2026"), certified columns on their own header.
         16: (f"=IFERROR(INDEX('{REAL_TAB}'!$12:$12,"
-             f"MATCH({kcol}$3,'{REAL_TAB}'!$3:$3,0)),"")"),
+             f"MATCH({real_key},'{REAL_TAB}'!$3:$3,0)),"")"),
         # Funnel KPIs (Brandon 2026-08-09) — INDEX into the Reorder Funnel tab
         17: (f"=IFERROR(INDEX('{FUNNEL_TAB}'!${FUNNEL_ROWS['conv']}:${FUNNEL_ROWS['conv']},"
              f"MATCH({kcol}$3,'{FUNNEL_TAB}'!$3:$3,0)),"")"),
@@ -1299,6 +1517,45 @@ def write_kpi_column(svc, mcol, label):
         body={"valueInputOption": "USER_ENTERED", "data": data}).execute()
     svc.spreadsheets().values().update(spreadsheetId=SHEET_ID, range=f"'{KPI_TAB}'!{kcol}3",
         valueInputOption="RAW", body={"values": [[label]]}).execute()
+    finish_placement(svc, sid, norm, kidx, action, mtd, 3, 2, 18)
+
+
+# The Fixed Costs tab reads "the latest month-end" off Monthly Financials.
+# Its formulas must skip the MTD header (see FIXED_COSTS_LATEST for the
+# idiom) — a plain LOOKUP(1e12, row) would pick up the MTD column now that
+# it is the last one. The MTD run checks these cells and warns loudly.
+FIXED_COSTS_TAB = "Fixed Costs"
+FIXED_COSTS_LOOKUP_CELLS = ("G68", "B77", "B79", "B80")
+FIXED_COSTS_NAIVE = "LOOKUP(1000000000000,'Monthly Financials'!"
+
+
+def fixed_costs_latest(row):
+    """Formula fragment: last numeric cell of Monthly Financials row `row`
+    whose header (row 3) is NOT an MTD header — i.e. the latest certified
+    month-end value. Must be wrapped in ARRAYFORMULA by the caller."""
+    return (f"LOOKUP(2,1/(ISNUMBER('{TAB}'!{row}:{row})"
+            f"*ISERROR(SEARCH(\"MTD\",'{TAB}'!$3:$3))),'{TAB}'!{row}:{row})")
+
+
+def check_fixed_costs_lookups(svc):
+    """Warn if any Fixed Costs 'latest month-end' formula regressed to the
+    naive LOOKUP(1e12, row) — that would read the MTD column as 'latest'."""
+    try:
+        rng = f"'{FIXED_COSTS_TAB}'!A1:H100"
+        rows = svc.spreadsheets().values().get(spreadsheetId=SHEET_ID, range=rng,
+                                               valueRenderOption="FORMULA").execute().get("values", [])
+    except Exception as e:   # the tab is Brandon's; never fail the run over it
+        print(f"WARNING: could not read the {FIXED_COSTS_TAB} tab ({e})")
+        return
+    bad = []
+    for i, row in enumerate(rows, start=1):
+        for j, cell in enumerate(row):
+            if isinstance(cell, str) and FIXED_COSTS_NAIVE in cell:
+                bad.append(f"{col_letter(j)}{i}")
+    if bad:
+        print(f"WARNING: {FIXED_COSTS_TAB} cells {', '.join(bad)} use LOOKUP(1e12, row) and will "
+              f"read the MTD column as 'latest month-end'. Replace with "
+              f"=ARRAYFORMULA({fixed_costs_latest('<row>')}) (see fixed_costs_latest).")
 
 
 # ── Reorder funnel & patient portal tab ────────────────────────────────────
@@ -1613,6 +1870,10 @@ def print_sanity(kpis, year, month):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--month", help="YYYY-MM to compute (default: previous month, ET)")
+    ap.add_argument("--mtd", action="store_true",
+                    help="month-to-date: write the CURRENT month through today into the MTD "
+                         "column (always the last column) of the Monthly Financials + KPIs tabs")
+    ap.add_argument("--through", help="YYYY-MM-DD cut-off for --mtd (default: today, ET)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -1620,6 +1881,34 @@ def main():
     if not token:
         sys.exit("MONDAY_API_TOKEN env var required")
 
+    if args.mtd:
+        if args.month:
+            sys.exit("--mtd takes --through YYYY-MM-DD, not --month")
+        through = (dt.date.fromisoformat(args.through) if args.through
+                   else dt.datetime.now(ZoneInfo("America/New_York")).date())
+        year, month = through.year, through.month
+        print(f"Computing MONTH-TO-DATE KPIs for {year}-{month:02d} through {through} ...")
+        kpis = compute(token, year, month, through=through)
+        print(json.dumps(kpis, indent=2))
+        print_sanity(kpis, year, month)
+
+        svc = get_sheets_service()
+        col, created = write_column(svc, kpis, year, month, dry_run=args.dry_run, through=through)
+        label = mtd_label(year, month, through)
+        print(f"{'Would write' if args.dry_run else 'Wrote'} MTD column {col} ({label}, "
+              f"{'created' if created else 'rewritten in place'}).")
+        if not args.dry_run:
+            write_kpi_column(svc, col, label, mtd=True)
+            print("KPIs tab MTD column written.")
+            # Collections to date, as of this morning, for every DOS month
+            # through the current one (Brandon 2026-09-19: "use today's data").
+            n = update_realization_tab(svc, token, year, month)
+            print(f"Realization tab re-measured: {n} DOS month column(s) as of today.")
+            check_fixed_costs_lookups(svc)
+        return   # Reorder Funnel is a month-cohort tab — month-end only
+
+    if args.through:
+        sys.exit("--through only applies with --mtd")
     if args.month:
         year, month = map(int, args.month.split("-"))
     else:
