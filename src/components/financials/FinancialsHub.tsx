@@ -179,12 +179,15 @@ function MtdNote({ mtd, extra }: { mtd: MtdColumn; extra?: string }) {
 
 // ─── MTD on charts ───────────────────────────────────────────────────────────
 // The month-to-date point is provisional, so it never looks like a month-end
-// point: it is drawn in the MTD amber used by the tables — a dotted amber
-// connector and a hollow amber marker on lines, a hatched bar with an amber
-// outline on bars — and its x tick reads "MTD" in amber. The tooltip spells
-// it out, so the meaning never rides on style alone.
+// point: on lines it is a dotted light-blue connector ending in a hollow
+// light-blue marker; on bars it is the series color hatched (the hatching
+// alone carries it — no outline). Its x tick still reads "MTD" in amber,
+// matching the tinted MTD column in the tables. The tooltip spells it out,
+// so the meaning never rides on style alone.
 const MTD_COLOR = "#b45309";   // amber-700: ticks, text
-const MTD_MARK = "#d97706";    // amber-600: strokes
+// sky-400. Deliberately lighter than the SERIES_2.a data blue (#0284c7) so a
+// provisional point never reads as another certified series.
+const MTD_MARK = "#38bdf8";    // sky-400: strokes
 const MTD_DOT = "1 5";         // round-capped dots
 const hatchId = (color: string) => `mtd-hatch-${color.replace("#", "")}`;
 
@@ -208,18 +211,17 @@ function mtdHatchDefs(colors: string[]) {
   );
 }
 
-/** Hollow amber marker drawn only at the MTD point of the connector series. */
+/** Hollow light-blue marker drawn only at the MTD point of the connector series. */
 function MtdDot(props: { cx?: number; cy?: number; payload?: { isMtd?: boolean }; r?: number }) {
   const { cx, cy, payload, r = 5 } = props;
   if (!payload?.isMtd || cx === undefined || cy === undefined) return null;
   return <circle cx={cx} cy={cy} r={r} fill="#ffffff" stroke={MTD_MARK} strokeWidth={2.5} />;
 }
 
-/** Bar cells: certified months solid; the MTD bar hatched with an amber outline. */
+/** Bar cells: certified months solid; the MTD bar hatched (no outline). */
 function mtdCells(data: { isMtd?: boolean }[], color: string) {
   return data.map((d, i) => (
-    <Cell key={i} fill={d.isMtd ? `url(#${hatchId(color)})` : color}
-      stroke={d.isMtd ? MTD_MARK : undefined} strokeWidth={d.isMtd ? 2 : 0} />
+    <Cell key={i} fill={d.isMtd ? `url(#${hatchId(color)})` : color} />
   ));
 }
 
@@ -277,7 +279,9 @@ function MtdChartHint({ mtd, kind, extra }: { mtd: MtdColumn | null; kind: "line
   if (!mtd) return null;
   return (
     <span className="basis-full text-[11px] font-normal text-slate-500 sm:ml-auto sm:basis-auto">
-      <span className="font-semibold text-amber-700">{kind === "line" ? "Amber dotted" : "Amber-outlined bar"}</span>
+      <span className={cn("font-semibold", kind === "line" ? "text-sky-600" : "text-slate-600")}>
+        {kind === "line" ? "Blue dotted" : "Hatched bar"}
+      </span>
       {" "}= {mtdTickLabel(mtd)}{mtd.thru ? ` (thru ${mtd.thru})` : ""}{extra ? ` · ${extra}` : ""}
     </span>
   );
