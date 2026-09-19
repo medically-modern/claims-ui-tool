@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtShortDate, isMonthOf, isMtdTick, lastFull, mtdTickLabel, parseMtdLabel, pickFull, realizationMeasuredOn, spansYears, splitMonthColumns, tickLabel } from "./monthColumns";
+import { fmtShortDate, isMonthOf, isMtdTick, lastFull, monthTicks, mtdTickLabel, parseMtdLabel, pickFull, realizationMeasuredOn, splitMonthColumns, tickLabel } from "./monthColumns";
 
 describe("parseMtdLabel", () => {
   it("parses the job's header format", () => {
@@ -55,13 +55,10 @@ describe("pickFull / lastFull — MoM stays on the last two FULL months", () => 
 });
 
 describe("chart tick labels", () => {
-  it("shortens month labels; adds the year only when the chart spans years", () => {
-    expect(tickLabel("Jul 2026", false)).toBe("Jul");
-    expect(tickLabel("Jul 2026", true)).toBe("Jul '26");
-    expect(tickLabel("Sep MTD", true)).toBe("Sep MTD");
-    expect(tickLabel("something else", true)).toBe("something else");
-    expect(spansYears(["Jul 2026", "Aug 2026", "Sep MTD"])).toBe(false);
-    expect(spansYears(["Apr 2025", "Aug 2026"])).toBe(true);
+  it("shortens month labels and always carries the year", () => {
+    expect(tickLabel("Jul 2026")).toBe("Jul '26");
+    expect(tickLabel("Sep MTD")).toBe("Sep MTD");
+    expect(tickLabel("something else")).toBe("something else");
   });
   it("names and recognises the MTD tick", () => {
     expect(mtdTickLabel({ month: "Sep 2026" })).toBe("Sep MTD");
@@ -88,5 +85,65 @@ describe("realizationMeasuredOn", () => {
     expect(d?.toISOString().slice(0, 10)).toBe("2027-01-03");
     expect(realizationMeasuredOn(["Sep 2026"], [0])).toBeNull();
     expect(realizationMeasuredOn([], [])).toBeNull();
+  });
+});
+
+describe("tickLabel always carries the year", () => {
+  it("labels every month the same way, single-year chart or not", () => {
+    expect(tickLabel("Jul 2026")).toBe("Jul '26");
+    expect(tickLabel("Apr 2025")).toBe("Apr '25");
+  });
+  it("passes the MTD tick through untouched", () => {
+    expect(tickLabel("Sep MTD")).toBe("Sep MTD");
+  });
+  it("passes anything unrecognised through", () => {
+    expect(tickLabel("whatever")).toBe("whatever");
+  });
+});
+
+describe("monthTicks — one constant stride", () => {
+  const months = (n: number) => Array.from({ length: n }, (_, i) => `M${i}`);
+
+  it("shows every month when they all fit", () => {
+    expect(monthTicks(months(5))).toEqual(["M0", "M1", "M2", "M3", "M4"]);
+    expect(monthTicks(months(7))).toEqual(months(7));
+  });
+
+  it("uses ONE stride across the whole axis, never a mix", () => {
+    // 19 points, budget 7 -> stride 3, and every gap is 3.
+    const picked = monthTicks(months(19));
+    const idx = picked.map((m) => Number(m.slice(1)));
+    const gaps = new Set(idx.slice(1).map((v, i) => v - idx[i]));
+    expect(gaps).toEqual(new Set([3]));
+  });
+
+  it("always labels the newest point — the MTD tick", () => {
+    const m = [...months(18), "Sep MTD"];
+    expect(monthTicks(m).at(-1)).toBe("Sep MTD");
+    expect(monthTicks([...months(40), "Sep MTD"]).at(-1)).toBe("Sep MTD");
+  });
+
+  it("stays inside the tick budget", () => {
+    for (const n of [8, 13, 19, 25, 40, 100]) {
+      expect(monthTicks(months(n)).length).toBeLessThanOrEqual(7);
+    }
+  });
+
+  it("honours a custom budget", () => {
+    expect(monthTicks(months(12), 4).length).toBeLessThanOrEqual(4);
+  });
+
+  it("includes the oldest month only when it lands on the stride", () => {
+    // 19 @ stride 3 counting back from index 18 reaches 0 exactly.
+    expect(monthTicks(months(19))[0]).toBe("M0");
+    // 20 @ stride 3 counting back from index 19 lands on 1, so the oldest
+    // month is dropped rather than pinned — pinning it would put one short
+    // gap into an otherwise even axis.
+    expect(monthTicks(months(20))[0]).toBe("M1");
+  });
+
+  it("handles the degenerate cases", () => {
+    expect(monthTicks([])).toEqual([]);
+    expect(monthTicks(["Sep MTD"])).toEqual(["Sep MTD"]);
   });
 });
