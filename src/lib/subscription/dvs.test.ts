@@ -42,27 +42,55 @@ describe("dvsState", () => {
   it("is not part of the circle before the order comes due", () => {
     expect(dvsState({ ...base, orderDate: "2026-10-01" }).kind).toBe("n/a");
   });
-  it("Medicaid + due + nothing run = needed (the open circle)", () => {
+  it("Medicaid + due + nothing run = needed", () => {
     expect(dvsState(base).kind).toBe("needed");
   });
-  it("treats queued, running and retry as in flight", () => {
-    for (const label of ["Trigger DVS", "Running", "Retry Queued"]) {
-      expect(dvsState({ ...base, triggerDvs: label }).kind).toBe("inFlight");
-    }
-    expect(dvsState({ ...base, triggerDvs: "Running" })).toMatchObject({ label: "DVS running" });
+
+  describe('"…" — an answer is already coming', () => {
+    it("covers queued, running and retry", () => {
+      for (const label of ["Trigger DVS", "Running", "Retry Queued"]) {
+        expect(dvsState({ ...base, triggerDvs: label }).kind).toBe("running");
+      }
+      expect(dvsState({ ...base, triggerDvs: "Running" }))
+        .toMatchObject({ label: "DVS running" });
+    });
+
+    // The whole point of the claim gate: a clean DVS is only half of it,
+    // because for Medicaid the claim has to PAY before the order ships.
+    it("covers a clean DVS whose claim is still out", () => {
+      expect(dvsState({ ...base, triggerDvs: "Success", claimsStatus: "Claims Running" }))
+        .toMatchObject({ kind: "running", label: "DVS clear — claim claims running" });
+      expect(dvsState({ ...base, triggerDvs: "Success", claimsStatus: "Submit Claims" }).kind)
+        .toBe("running");
+      expect(dvsState({ ...base, triggerDvs: "Success", claimsStatus: "" }))
+        .toMatchObject({ kind: "running", label: "DVS clear — waiting on the claim" });
+    });
+
+    it("does NOT go green on a clean DVS alone", () => {
+      expect(dvsState({ ...base, triggerDvs: "Success" }).kind).not.toBe("cleared");
+    });
   });
-  it("hands a clean DVS back to the standing-auth read", () => {
-    expect(dvsState({ ...base, triggerDvs: "Success" }).kind).toBe("ok");
+
+  it("goes green only when the DVS is clean AND the claim paid", () => {
+    expect(dvsState({ ...base, triggerDvs: "Success", claimsStatus: "Claims Paid" }))
+      .toEqual({ kind: "cleared", label: "DVS clear, claim paid" });
   });
-  it("asks for a human on failure, manual review and MLTC", () => {
-    for (const label of ["Failed", "Manual Review", "MLTC"]) {
-      expect(dvsState({ ...base, triggerDvs: label }).kind).toBe("needsHuman");
-    }
-  });
-  it("surfaces an unrecognised label instead of passing it as clear", () => {
-    const s = dvsState({ ...base, triggerDvs: "Something New" });
-    expect(s.kind).toBe("needsHuman");
-    expect(s).toMatchObject({ label: 'Trigger DVS = "Something New"' });
+
+  describe("red X — somebody has to go look", () => {
+    it("covers a stopped DVS", () => {
+      for (const label of ["Failed", "Manual Review", "MLTC"]) {
+        expect(dvsState({ ...base, triggerDvs: label }).kind).toBe("failed");
+      }
+    });
+    it("covers a stopped claim after a clean DVS", () => {
+      for (const c of ["Claims Denied", "Claims Error", "Payment Incorrect"]) {
+        expect(dvsState({ ...base, triggerDvs: "Success", claimsStatus: c }).kind).toBe("failed");
+      }
+    });
+    it("surfaces an unrecognised Trigger DVS label instead of passing it", () => {
+      expect(dvsState({ ...base, triggerDvs: "Something New" }))
+        .toMatchObject({ kind: "failed", label: 'Trigger DVS = "Something New"' });
+    });
   });
 });
 

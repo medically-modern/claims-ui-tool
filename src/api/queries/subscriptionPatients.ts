@@ -200,6 +200,13 @@ export const SUB_COL = {
   // ("$564.30") on every paid row, so the forecast uses Total Revenue for the
   // settled *amount* and only trusts claims_paid_date for settled *timing*.
   claims_status_col:    "color_mm2n5rkg",
+  // Comms counts since the patient's last order, written by the backend's
+  // hourly RingCentral pass (stedi-monday-integration). The row shows them on
+  // the phone / speech-bubble icons. These columns do not exist on the board
+  // yet — `get` returns "" and the icons render without a number until the
+  // backend ships them. Fill the real IDs in when the columns are created.
+  calls_since_order:    "numeric_calls_since_order__TODO",
+  texts_since_order:    "numeric_texts_since_order__TODO",
   claims_paid_date:     "date_mm2nr2vz",
   claims_paid_amount:   "text_mm2nxwze",
   partial_approval_date:"date_mm2na60z",
@@ -326,6 +333,16 @@ function getNum(item: MondayItem, col: string): number {
   if (raw === "" || raw === "-" || raw === ".") return 0;
   const n = Number(raw);
   return Number.isFinite(n) ? n : 0;
+}
+
+/** A Monday numeric cell as a count. Blank stays undefined — "we have not
+ *  counted" and "we counted zero" are different facts and the row shows them
+ *  differently. */
+function countOrUndef(raw: string): number | undefined {
+  const t = String(raw ?? "").trim();
+  if (!t) return undefined;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 // ─── Checkpoint derivation ──────────────────────────────────────────────────
@@ -524,20 +541,35 @@ function deriveAuth(item: MondayItem, subType: string, today: string): Checkpoin
     subType !== "Sensors"  ? get(item, SUB_COL.supplies_auth_status) : "",
   ].filter(Boolean);
 
-  // Action metadata: is running a DVS the next thing to do on this row? Read
-  // from Trigger DVS, and deliberately kept out of tone and label — it decides
-  // which checkbox appears, never what the circle says.
-  const dvsNeeded = dvsState({
-    payer:      get(item, SUB_COL.primary_insurance),
-    orderDate:  get(item, SUB_COL.next_order),
-    triggerDvs: get(item, SUB_COL.trigger_dvs),
+  // ── Medicaid, order due: the circle follows the DVS → claim ladder ──
+  // Still mirroring Monday, just across three of its columns instead of one.
+  // Supplies Auth Status alone can't answer "clear to order?" for Medicaid,
+  // because it flips to Auth Valid the moment DVS succeeds — before the claim
+  // has paid, and Brandon's sequence is DVS, get paid, THEN order. So the
+  // ladder reads Trigger DVS and Claims Status too, and every state below is
+  // a value some Monday column is actually holding (Brandon, 2026-09-19).
+  const dvs = dvsState({
+    payer:        get(item, SUB_COL.primary_insurance),
+    orderDate:    get(item, SUB_COL.next_order),
+    triggerDvs:   get(item, SUB_COL.trigger_dvs),
+    claimsStatus: get(item, SUB_COL.claims_status_col),
     today,
-  }).kind === "needed";
+  });
+  switch (dvs.kind) {
+    case "needed":
+      // Amber, and the only state that offers the Run DVS checkbox.
+      return { ...renderAuth(labels), dvsNeeded: true, medicaidDvs: true };
+    case "running":
+      // "…" — an answer is coming from the bot or the payer. Don't act.
+      return { tone: "pending", awaiting: true, label: dvs.label, medicaidDvs: true };
+    case "cleared":
+      return { tone: "ok", label: dvs.label, medicaidDvs: true };
+    case "failed":
+      return { tone: "bad", label: dvs.label, medicaidDvs: true };
+  }
 
-  return {
-    ...renderAuth(labels),
-    ...(dvsNeeded ? { dvsNeeded: true, medicaidDvs: true } : {}),
-  };
+  // Everyone else: the circle is Supplies/Sensors Auth Status, nothing more.
+  return renderAuth(labels);
 }
 
 function fmtMoney(raw: string): string | null {
@@ -641,6 +673,8 @@ function mapItem(
     phone: get(item, SUB_COL.phone),
     primaryPayer: get(item, SUB_COL.primary_insurance) || "—",
     nextOrderDate: get(item, SUB_COL.next_order),
+    callsSinceOrder: countOrUndef(get(item, SUB_COL.calls_since_order)),
+    textsSinceOrder: countOrUndef(get(item, SUB_COL.texts_since_order)),
     subscriptionType: subType,
     runCheck: "—",
     patientStatus: normalizeStatus(get(item, SUB_COL.status)),

@@ -20,7 +20,7 @@ import { forwardRef, useMemo, useState } from "react";
 import {
   AlertTriangle, Bell, Building2, CalendarClock, Check, ClipboardCheck,
   Clock, DollarSign, ExternalLink, Heart, Loader2,
-  MessageSquare, PauseCircle, Pencil, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
+  MessageSquare, PauseCircle, Pencil, Phone, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
   Server, Shield, Stethoscope, UserCog, Unlock, UserCircle, UserX, X,
 } from "lucide-react";
 
@@ -46,7 +46,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 import { PatientProfile } from "./PatientProfile";
-import { CommsButton } from "@/components/comms/CommsButton";
+import { CommsIcons } from "@/components/comms/CommsIcons";
+import { CommsSheet } from "@/components/comms/CommsSheet";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
 import { NewOrders } from "./NewOrders";
@@ -150,12 +151,16 @@ const NOT_YET_LABELS = new Set([
   "Not sent", "Not run", "Not checked", "Not Serving", "Unknown",
 ]);
 
-type CircleState = "outline" | "gray" | "green" | "yellow" | "red";
+type CircleState = "green" | "red" | "yellow" | "gray" | "outline" | "waiting";
 
 function circleStateFor(c: Checkpoint): CircleState {
   // A check with no data behind it is a blank, whatever its tone says
   // about readiness — see Checkpoint.unknown.
   if (c.unknown)         return "outline";
+  // Something is already working on this one. "…" is not a verdict, it is the
+  // absence of one with a promise attached: a check or an X is coming, so the
+  // operator should wait rather than act. See Checkpoint.awaiting.
+  if (c.awaiting)        return "waiting";
   if (c.tone === "ok")   return "green";
   if (c.tone === "bad")  return "red";
   if (c.tone === "warn") return "yellow";
@@ -187,11 +192,21 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
     state === "green" ? <Check className={cn("h-4 w-4", delayedGreen ? "text-emerald-600" : "text-white")} strokeWidth={3} /> :
     state === "red"   ? <X     className="h-4 w-4 text-white"  strokeWidth={3} /> :
     state === "yellow" ? <span className="text-white font-bold text-[14px] leading-none">!</span> :
+    // Three dots that breathe, staggered, so a glance down the column tells
+    // you something is in flight without reading a single label.
+    state === "waiting" ? (
+      <span className="flex items-end gap-[3px]" aria-hidden>
+        <span className="h-[3px] w-[3px] rounded-full bg-white animate-pulse [animation-delay:0ms]" />
+        <span className="h-[3px] w-[3px] rounded-full bg-white animate-pulse [animation-delay:200ms]" />
+        <span className="h-[3px] w-[3px] rounded-full bg-white animate-pulse [animation-delay:400ms]" />
+      </span>
+    ) :
     null;
   const cls =
     state === "green"  ? (delayedGreen ? "bg-emerald-50 ring-emerald-600" : "bg-emerald-600 ring-emerald-600")
     : state === "red"  ? "bg-rose-600 ring-rose-600"
     : state === "yellow" ? "bg-amber-400 ring-amber-400"
+    : state === "waiting" ? "bg-slate-400 ring-slate-400"
     : state === "gray" ? "bg-slate-300 ring-slate-300"
     : "bg-transparent ring-slate-300";
   return (
@@ -560,9 +575,10 @@ function ReviewAndSubmit({ p, onSubmit, onBlock, sending, sent }: {
           <PauseCircle className="h-3.5 w-3.5" />
         </Button>
       )}
-      {/* Texts + calls with this patient (RingCentral via Josh's gateway).
-          Opens a sheet; nothing is fetched until it's clicked. */}
-      <CommsButton patient={p} />
+      {/* Calls and texts with this patient, each showing how many since their
+          last order and opening the sheet on its own tab. Counts come off
+          Monday; nothing is fetched from RingCentral until one is clicked. */}
+      <CommsIcons patient={p} />
       <Button
         size="sm"
         onClick={handleSend}
@@ -594,6 +610,55 @@ function ReviewAndSubmit({ p, onSubmit, onBlock, sending, sent }: {
 
 
 // ─── Drawer ──────────────────────────────────────────────────────────────────
+/**
+ * The comms block inside the profile drawer. It opens the existing CommsSheet
+ * rather than inlining the tabs, because the drawer is itself a Radix Sheet
+ * and nesting two scroll-locked overlays is how you get a page that cannot be
+ * dismissed. One click, the thread opens over the top, closing returns here.
+ */
+function ProfileComms({ patient }: { patient: SubscriptionPatient }) {
+  const [tab, setTab] = useState<"texts" | "calls" | null>(null);
+  const calls = patient.callsSinceOrder;
+  const texts = patient.textsSinceOrder;
+  const line =
+    typeof calls === "number" || typeof texts === "number"
+      ? `${calls ?? "—"} calls · ${texts ?? "—"} texts since the last order`
+      : "Open the thread and call log for this patient";
+  return (
+    <Card className="p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Comms</div>
+          <div className="mt-0.5 truncate text-[12px] text-slate-600">{line}</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            variant="outline" size="sm"
+            className="h-7 gap-1 px-2 text-[11px] font-semibold text-sky-800 border-sky-200 hover:bg-sky-50"
+            onClick={() => setTab("calls")}
+          >
+            <Phone className="h-3.5 w-3.5" />
+            {typeof calls === "number" && <span className="tabular-nums">{calls}</span>}
+            Calls
+          </Button>
+          <Button
+            variant="outline" size="sm"
+            className="h-7 gap-1 px-2 text-[11px] font-semibold text-sky-800 border-sky-200 hover:bg-sky-50"
+            onClick={() => setTab("texts")}
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            {typeof texts === "number" && <span className="tabular-nums">{texts}</span>}
+            Texts
+          </Button>
+        </div>
+      </div>
+      {tab && (
+        <CommsSheet patient={patient} defaultTab={tab} open onOpenChange={(o) => !o && setTab(null)} />
+      )}
+    </Card>
+  );
+}
+
 function PatientDrawer({
   patient, kind, onClose,
 }: {
@@ -660,6 +725,11 @@ function PatientDrawer({
                 </div>
               </Card>
             )}
+            {/* Comms lives in the profile now, not only behind a row button
+                (Brandon, 2026-09-19). The full redesign of this panel comes
+                later; this is the thread and the call log in the one place an
+                operator already opens before deciding to order. */}
+            <ProfileComms patient={patient} />
             <Card className="p-3 space-y-1.5 text-[13px]">
               <div className="flex justify-between"><span className="text-muted-foreground">Phone</span><span>{patient.phone}</span></div>
               <div className="flex justify-between"><span className="text-muted-foreground">Monday ID</span><span className="font-mono text-[11px]">{patient.mondayItemId}</span></div>
@@ -2144,7 +2214,12 @@ function DvsSelectBox({
       disabled={blocked || disabled}
       onCheckedChange={() => onToggle(p.mondayItemId)}
       onClick={(e) => e.stopPropagation()}
-      className="mr-2 shrink-0 data-[state=checked]:border-sky-700 data-[state=checked]:bg-sky-700"
+      // Absolutely placed so the circle stays on the column's centre line
+      // whether or not this row has a tick. left-1/2 puts the box's left edge
+      // at centre; -translate-x-[35px] walks it back past the 30px circle with
+      // a few px of air. A checkbox in the flow (mr-2) shifted every ticked
+      // row's circle right and broke the column — Brandon caught it on screen.
+      className="absolute left-1/2 top-1/2 z-10 -translate-x-[35px] -translate-y-1/2 shrink-0 data-[state=checked]:border-sky-700 data-[state=checked]:bg-sky-700"
       aria-label={blocked
         ? `Cannot run DVS for ${p.name} — the patient said no. Override the Confirm in their profile first.`
         : `Select ${p.name} for Run DVS`}
@@ -2231,7 +2306,7 @@ function OverviewTable({
               <CheckpointCircle check={p.benefits} />
             </CircleEditPopover>
           </div>
-          <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+          <div className="relative flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
             <DvsSelectBox p={p} selected={dvsSelected} onToggle={onToggleDvs} disabled={dvsRunning} />
             <CircleEditPopover check={p.auth} kind="auth" patient={p} onBlockRequest={onBlock}>
               <CheckpointCircle check={p.auth} />
@@ -2445,7 +2520,7 @@ function PhaseTable({
               </TableCell>
               <TableCell><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></TableCell>
               <TableCell className="text-[13px]">{p.primaryPayer}</TableCell>
-              <TableCell><div className="flex items-center justify-center">
+              <TableCell><div className="relative flex items-center justify-center">
                 {phase === "auth" && (
                   <DvsSelectBox p={p} selected={dvsSelected} onToggle={onToggleDvs} disabled={dvsRunning} />
                 )}

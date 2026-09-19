@@ -105,10 +105,14 @@ export function CommsSheet({
   patient,
   open,
   onOpenChange,
+  defaultTab = "texts",
 }: {
   patient: SubscriptionPatient;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Which tab to land on — the row's phone icon opens calls, the speech
+   *  bubble opens texts, so the click lands where the operator was looking. */
+  defaultTab?: "texts" | "calls";
 }) {
   const phone = useMemo(() => toE164(patient.phone), [patient.phone]);
   const markers = useMemo(() => markersFor(patient), [patient]);
@@ -157,7 +161,7 @@ export function CommsSheet({
             The Comms gateway isn't configured for this build (<code>VITE_COMMS_GATEWAY_URL</code>).
           </p>
         ) : (
-          <Tabs defaultValue="texts" className="flex min-h-0 flex-1 flex-col">
+          <Tabs defaultValue={defaultTab} className="flex min-h-0 flex-1 flex-col">
             <TabsList className="mx-4 mt-3 grid w-auto grid-cols-2">
               <TabsTrigger value="texts" className="gap-1.5 text-[13px]">
                 <MessageSquare className="h-3.5 w-3.5" /> Texts
