@@ -50,6 +50,13 @@ export type Checkpoint = {
    *  is nuance that belongs in the profile (Brandon, 2026-09-19).
    *  See lib/subscription/confirmationSignals.ts. */
   needsRead?: string;
+  /** The hover behind that badge: one line per thing to read, with the
+   *  message text, e.g. "Subscription note: wants 90 days". */
+  needsReadLines?: string[];
+  /** Auth only: a Medicaid row with an order due and no DVS run for it yet.
+   *  Renders as an open circle with the M, and is what the board's Run DVS
+   *  multi-select picks up. See lib/subscription/dvs.ts. */
+  dvsNeeded?: boolean;
   /** Auth is expired specifically because of a Medicaid DVS lapse. DVS can
    *  only be re-issued day-of-service, so this is "leave alone until ship
    *  day", not a real action item. Renders a small "M" overlay on the Auth
@@ -88,10 +95,12 @@ export type SubscriptionPatient = {
   nextCheckIn?: string;
   stuckReason?: string;
   financials?: PatientFinancials;
-  /** Notes read at confirmation time (runbook step 2). Optional because mock
-   *  rows don't carry them; the live query always sets both. */
+  /** The two notes read at confirmation time (runbook step 2): ours, and the
+   *  patient's own words from the reorder portal. Optional because mock rows
+   *  don't carry them; the live query always sets both. Patient Portal Notes
+   *  (long_text_mm3evvzj) is deliberately not one of them — Brandon,
+   *  2026-09-19. */
   coordinatorNotes?: string;
-  portalNotes?: string;
   patientHelpMessage?: string;
   orderType?: string;  // "First Order" / "Reorder" (Order Type column)
   // Order Cycle v2 block tracking (live columns; optional so mock rows

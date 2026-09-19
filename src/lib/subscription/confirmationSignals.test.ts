@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  agoLabel, parseContactStamp, parseReorderTextSent, readSignal, readWindowStart,
+  agoLabel, excerpt, parseContactStamp, parseReorderTextSent, readSignal, readWindowStart,
 } from "./confirmationSignals";
 
 const ORDER = "2026-09-14";
@@ -58,7 +58,7 @@ describe("readWindowStart", () => {
 
 describe("readSignal", () => {
   const base = {
-    portalNotes: "", helpMessage: "", coordinatorNotes: "",
+    helpMessage: "", coordinatorNotes: "",
     notesUpdatedAt: null as number | null, lastPatientContact: "", orderDate: ORDER,
   };
 
@@ -72,11 +72,68 @@ describe("readSignal", () => {
     expect(s.summary).toBe("note 2d ago");
   });
 
-  it("counts a portal note and a help message the same way", () => {
-    for (const k of ["portalNotes", "helpMessage"] as const) {
+  it("counts our note and the patient's portal message the same way", () => {
+    for (const k of ["coordinatorNotes", "helpMessage"] as const) {
       const s = readSignal({ ...base, [k]: "something", notesUpdatedAt: at(2026, 9, 10) }, NOW);
       expect(s.needsRead).toBe(true);
     }
+  });
+
+  // Brandon, 2026-09-19: "when I hover over a confirm with a message icon, it
+  // should say what the message is. Like: Subscription note: abc… / Patient
+  // Portal: xyz…"
+  describe("hover lines", () => {
+    it("labels each note with whose it is, ours first", () => {
+      const s = readSignal({
+        ...base,
+        coordinatorNotes: "called, wants 90 days",
+        helpMessage: "please ship to my daughter",
+        notesUpdatedAt: at(2026, 9, 13),
+      }, NOW);
+      expect(s.lines).toEqual([
+        "Subscription note: called, wants 90 days",
+        "Patient portal: please ship to my daughter",
+      ]);
+    });
+
+    it("only lines up the columns that actually have text", () => {
+      const s = readSignal(
+        { ...base, coordinatorNotes: "just ours", notesUpdatedAt: at(2026, 9, 13) }, NOW);
+      expect(s.lines).toEqual(["Subscription note: just ours"]);
+    });
+
+    it("points an inbound text at the comms sheet rather than quoting it", () => {
+      const s = readSignal({ ...base, lastPatientContact: "2026-09-08T20:08 in sms" }, NOW);
+      expect(s.lines).toEqual(["Patient texted 5d ago — open Comms to read it"]);
+    });
+
+    it("stays empty when nothing is in the window", () => {
+      const s = readSignal(
+        { ...base, coordinatorNotes: "ancient", notesUpdatedAt: at(2026, 6, 1) }, NOW);
+      expect(s.needsRead).toBe(false);
+      expect(s.lines).toEqual([]);
+    });
+  });
+
+  describe("excerpt", () => {
+    it("leaves a short note alone and collapses its whitespace", () => {
+      expect(excerpt("  wants   90\n days ")).toBe("wants 90 days");
+    });
+    it("cuts a long note at the last word that leaves most of the excerpt", () => {
+      const out = excerpt("the patient called and asked for overnight shipping again", 40);
+      expect(out).toBe("the patient called and asked for…");
+    });
+    it("hard-cuts rather than throwing away most of the excerpt for a word break", () => {
+      // The only space is at char 20 of a 40-char budget — honouring it would
+      // halve the excerpt, so the cut wins over the word boundary.
+      expect(excerpt("a".repeat(20) + " " + "b".repeat(200), 40))
+        .toBe("a".repeat(20) + " " + "b".repeat(19) + "…");
+      expect(excerpt("x".repeat(200), 10)).toBe("x".repeat(10) + "…");
+    });
+    it("is empty for empty input", () => {
+      expect(excerpt(null)).toBe("");
+      expect(excerpt(undefined)).toBe("");
+    });
   });
 
   it("an inbound text inside the window needs a read", () => {

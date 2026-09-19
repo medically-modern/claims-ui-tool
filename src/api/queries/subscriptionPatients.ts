@@ -37,6 +37,8 @@ import type {
 } from "@/components/subscription/mockData";
 import { deriveMr } from "@/lib/subscription/mrCheck";
 import { readSignal } from "@/lib/subscription/confirmationSignals";
+import { dvsState } from "@/lib/subscription/dvs";
+import { todayIso } from "@/lib/subscription/lanes";
 import { fetchNoteActivity } from "./noteActivity";
 
 export const SUBSCRIPTION_BOARD_ID = 18407459988;
@@ -62,14 +64,13 @@ export const SUB_COL = {
   inf_set_2:         "color_mkxmx5wk",
   inf_qty_2:         "numeric_mkwac234",
   patient_notes:     "long_text_mm3rj7k7",
-  // The two notes the operator reads at confirmation time (runbook step 2):
-  // what the patient typed into the reorder portal, and what the patient
-  // coordinator wrote down after a call or text. Brandon 2026-09-14:
-  // surfacing these in the tool is the other half of the RingCentral read —
-  // a coordinator's note can be the only record that a patient asked for
-  // overnight shipping or a different name on the box.
+  // What our team wrote down after a call or text (runbook step 2). Brandon
+  // 2026-09-14: surfacing this in the tool is the other half of the
+  // RingCentral read — a coordinator's note can be the only record that a
+  // patient asked for overnight shipping or a different name on the box.
+  // The patient's own words come from patient_help_message; Patient Portal
+  // Notes (long_text_mm3evvzj) is deliberately absent (Brandon, 2026-09-19).
   subscription_notes: "text_mm6vp1z3",
-  portal_notes:       "long_text_mm3evvzj",
   // Insurance
   primary_insurance:   "color_mm254qxj",
   member_id_1:         "text_mkvp6zfg",
@@ -218,10 +219,9 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   infusionSet1: string; infusionSet1Qty: string;
   infusionSet2: string; infusionSet2Qty: string;
   subscriptionNotes: string;
-  /** Patient coordinator's notes (text_mm6vp1z3) + the patient's own portal
-   *  notes (long_text_mm3evvzj) - read at confirmation time, runbook step 2. */
+  /** What our team wrote down (text_mm6vp1z3) — read at confirmation time,
+   *  runbook step 2. The patient's side is patientHelpMessage. */
   coordinatorNotes: string;
-  portalNotes: string;
   memberId1: string; secondaryInsurance: string; memberId2: string;
   insuranceCardName: string;
   patientInsuranceResponse: string;
@@ -363,10 +363,9 @@ function deriveConfirmation(item: MondayItem, notesUpdatedAt: number | null): Ch
   const summary = get(item, SUB_COL.patient_change_summary);
   const reorderTextSent = get(item, SUB_COL.reorder_text_sent);
   // The row's one badge: is there anything to read before ordering?
-  // Notes + portal message + inbound text/call, scoped to 30 days before
-  // the order date. See lib/subscription/confirmationSignals.ts.
+  // Our note + the patient's portal message + an inbound text/call, scoped
+  // to 30 days before the order date. See lib/subscription/confirmationSignals.ts.
   const signal = readSignal({
-    portalNotes:      get(item, SUB_COL.portal_notes),
     helpMessage:      msg,
     coordinatorNotes: get(item, SUB_COL.subscription_notes),
     notesUpdatedAt,
@@ -425,6 +424,7 @@ function deriveConfirmation(item: MondayItem, notesUpdatedAt: number | null): Ch
     label,
     detail,
     needsRead: signal.needsRead ? signal.summary : undefined,
+    needsReadLines: signal.lines.length ? signal.lines : undefined,
     changes: changes.length ? changes : undefined,
     delayed: delayed || undefined,
     patientMessage: msg || undefined,
@@ -502,16 +502,49 @@ function deriveBenefits(item: MondayItem): Checkpoint {
   return { tone: "pending", label: "Not run" };
 }
 
-function deriveAuth(item: MondayItem, subType: string): Checkpoint {
+function deriveAuth(item: MondayItem, subType: string, today: string): Checkpoint {
   const sensors  = get(item, SUB_COL.sensors_auth_status);
   const supplies = get(item, SUB_COL.supplies_auth_status);
   const payer    = get(item, SUB_COL.primary_insurance);
+
+  // Medicaid re-verifies per order through ePACES, so for a Medicaid row with
+  // an order due the Authorization circle answers "has DVS been run for THIS
+  // order?" before it answers anything about a standing auth. An open circle
+  // with an M means not yet, and the board can fire it in bulk.
+  // See lib/subscription/dvs.ts.
+  const dvs = dvsState({
+    payer,
+    orderDate:  get(item, SUB_COL.next_order),
+    triggerDvs: get(item, SUB_COL.trigger_dvs),
+    today,
+  });
+  if (dvs.kind === "needed") {
+    return {
+      tone: "pending",
+      unknown: true,               // -> open circle
+      label: "DVS needed",
+      detail: "Medicaid re-verifies per order. Select the row and Run DVS.",
+      medicaidDvs: true,
+      dvsNeeded: true,
+    };
+  }
+  if (dvs.kind === "inFlight") {
+    return { tone: "pending", label: dvs.label, detail: "ePACES bot is working on it — nothing to do.", medicaidDvs: true };
+  }
+  if (dvs.kind === "needsHuman") {
+    return { tone: "warn", label: dvs.label, medicaidDvs: true };
+  }
+  // dvs.kind === "ok" or "n/a" — fall through to the standing-auth read. A
+  // clean DVS does NOT paint over a Denied auth column.
+
   const needSensors  = subType !== "Supplies";
   const needSupplies = subType !== "Sensors";
   const sensorsOk  = !needSensors  || AUTH_OK.has(sensors);
   const suppliesOk = !needSupplies || AUTH_OK.has(supplies);
   if (sensorsOk && suppliesOk) {
-    return { tone: "ok", label: "Valid", pill: undefined };
+    return dvs.kind === "ok"
+      ? { tone: "ok", label: "Valid — DVS clear for this order", medicaidDvs: true }
+      : { tone: "ok", label: "Valid", pill: undefined };
   }
   // Pick the more-severe label between the two relevant statuses
   const labels = [
@@ -609,11 +642,15 @@ function normalizeStatus(raw: string): PatientStatus {
 // overcount actives (FinancialsHub hero bug, 2026-08-02).
 
 // ─── Map one item ───────────────────────────────────────────────────────────
-function mapItem(item: MondayItem, notesUpdatedAt: number | null = null): LiveSubscriptionPatient {
+function mapItem(
+  item: MondayItem,
+  notesUpdatedAt: number | null = null,
+  today: string = todayIso(),
+): LiveSubscriptionPatient {
   const subType = normalizeSubscriptionType(get(item, SUB_COL.subscription));
   const confirmation = deriveConfirmation(item, notesUpdatedAt);
   const benefits     = deriveBenefits(item);
-  const auth         = deriveAuth(item, subType);
+  const auth         = deriveAuth(item, subType, today);
   const lastPaid     = deriveLastPaid(item);
   const referralSource = get(item, SUB_COL.referral_source);
   const mnExpiry       = get(item, SUB_COL.mn_expiry);
@@ -655,7 +692,6 @@ function mapItem(item: MondayItem, notesUpdatedAt: number | null = null): LiveSu
     infusionSet2Qty:     get(item, SUB_COL.inf_qty_2),
     subscriptionNotes:   get(item, SUB_COL.patient_notes),
     coordinatorNotes:    get(item, SUB_COL.subscription_notes),
-    portalNotes:         get(item, SUB_COL.portal_notes),
     memberId1:           get(item, SUB_COL.member_id_1),
     secondaryInsurance:  get(item, SUB_COL.secondary_insurance),
     memberId2:           get(item, SUB_COL.member_id_2),
@@ -746,9 +782,8 @@ interface NextPageResponse {
   next_items_page: { cursor: string | null; items: MondayItem[] };
 }
 
-/** The three note columns whose last-written time decides the row's badge. */
+/** The two note columns whose last-written time decides the row's badge. */
 const NOTE_ACTIVITY_COLS = [
-  SUB_COL.portal_notes,
   SUB_COL.patient_help_message,
   SUB_COL.subscription_notes,
 ];

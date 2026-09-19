@@ -14,14 +14,17 @@
  * something, you have to read it before you order, and that cannot wait for
  * a click.
  *
- * So the row carries exactly one badge, and this module decides it. Four
+ * So the row carries exactly one badge, and this module decides it. Three
  * sources feed it, because from the operator's side they are the same fact —
  * "there is something here to read":
  *
- *   Patient Portal Notes      long_text_mm3evvzj   the patient typed it
- *   Patient Help Message      long_text_mm3xnb6k   free text on the reorder form
- *   Subscription Notes        text_mm6vp1z3        the coordinator wrote it down
+ *   Patient Help Message      long_text_mm3xnb6k   the patient typed it in the portal
+ *   Subscription Notes        text_mm6vp1z3        our team wrote it down
  *   an inbound text or call   text_mm5frhe9        stamped by the triage job
+ *
+ * Patient Portal Notes (long_text_mm3evvzj) is deliberately NOT here and is
+ * not read anywhere in this tool — Brandon, 2026-09-19. Two note columns, one
+ * ours and one the patient's, is the whole surface.
  *
  * ⚠️ SCOPED TO THIS ORDER, NOT TO ALL TIME. The window opens 30 days before
  * the order date. Without that, a note from six months ago badges the row
@@ -104,16 +107,19 @@ export interface ReadSignal {
   summary: string;
   /** Which sources fired, for the hover. */
   sources: string[];
+  /** The hover itself: one line per thing to read, the message text included,
+   *  e.g. "Subscription note: called back, wants 90 days" (Brandon,
+   *  2026-09-19 — "when I hover over a confirm with a message icon, it should
+   *  say what the message is"). Truncated; the profile has it in full. */
+  lines: string[];
 }
 
 export interface ReadInputs {
-  /** long_text_mm3evvzj */
-  portalNotes?: string | null;
-  /** long_text_mm3xnb6k */
+  /** long_text_mm3xnb6k — the patient wrote this in the portal. */
   helpMessage?: string | null;
-  /** text_mm6vp1z3 */
+  /** text_mm6vp1z3 — our team wrote this. */
   coordinatorNotes?: string | null;
-  /** Epoch ms of the most recent write to any of those three, from the
+  /** Epoch ms of the most recent write to either note column, from the
    *  Monday activity log. Null/undefined = unknown age = does not count. */
   notesUpdatedAt?: number | null;
   /** text_mm5frhe9, "<ISO ts> in|out sms|call|email" */
@@ -143,24 +149,50 @@ export function readWindowStart(orderDate: string | null | undefined, now: numbe
 export function readSignal(p: ReadInputs, now: number = Date.now()): ReadSignal {
   const since = readWindowStart(p.orderDate, now);
   const sources: string[] = [];
+  const lines: string[] = [];
 
-  const hasNoteText = [p.portalNotes, p.helpMessage, p.coordinatorNotes]
-    .some((v) => String(v ?? "").trim().length > 0);
   const noteAt = typeof p.notesUpdatedAt === "number" ? p.notesUpdatedAt : null;
-  const noteCounts = hasNoteText && noteAt != null && noteAt >= since;
-  if (noteCounts) sources.push(`note ${agoLabel(noteAt as number, now)}`);
+  const noteFresh = noteAt != null && noteAt >= since;
+
+  /** The two note columns, in the order the operator should read them:
+   *  ours first (it is likelier to say what to do), the patient's second. */
+  const notes: Array<[string, string | null | undefined]> = [
+    ["Subscription note", p.coordinatorNotes],
+    ["Patient portal", p.helpMessage],
+  ];
+  const written = notes.filter(([, v]) => String(v ?? "").trim().length > 0);
+  if (noteFresh && written.length > 0) {
+    sources.push(`note ${agoLabel(noteAt as number, now)}`);
+    for (const [label, v] of written) lines.push(`${label}: ${excerpt(v)}`);
+  }
 
   const contact = parseContactStamp(p.lastPatientContact);
   const contactCounts = !!contact && contact.direction === "in" && contact.at >= since;
   if (contactCounts && contact) {
     const verb = contact.channel === "call" ? "called"
       : contact.channel === "email" ? "emailed" : "texted";
-    sources.push(`${verb} ${agoLabel(contact.at, now)}`);
+    const ago = agoLabel(contact.at, now);
+    sources.push(`${verb} ${ago}`);
+    lines.push(`Patient ${verb} ${ago} — open Comms to read it`);
   }
 
   return {
     needsRead: sources.length > 0,
     summary: sources.join(" · "),
     sources,
+    lines,
   };
+}
+
+/** How much of a note fits in a tooltip. Long enough to tell a "wants 90 days"
+ *  from a "moving to Florida", short enough not to cover the row. */
+export const EXCERPT_CHARS = 140;
+
+/** One line of a note, whitespace collapsed, cut at a word where it can be. */
+export function excerpt(raw: string | null | undefined, max = EXCERPT_CHARS): string {
+  const text = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return (space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd() + "…";
 }

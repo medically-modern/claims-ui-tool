@@ -21,11 +21,12 @@ import {
   AlertTriangle, Bell, Building2, CalendarClock, Check, ClipboardCheck,
   Clock, DollarSign, ExternalLink, Heart, Loader2,
   MessageSquare, PauseCircle, Pencil, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
-  Server, Shield, UserCog, Unlock, UserCircle, UserX, X,
+  Server, Shield, Stethoscope, UserCog, Unlock, UserCircle, UserX, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -53,6 +54,8 @@ import { DvsQueue } from "./DvsQueue";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { markConfirmedByOperator, runEligibilityCheck, sendToOrder } from "@/api/setSubscriptionPatient";
+import { bulkTriggerDvs } from "@/api/setDvsTrigger";
+import { canRunDvs } from "@/lib/subscription/dvs";
 import {
   blockPatient, unblockPatient, recordCheckIn, churnPatient,
 } from "@/api/blockPatient";
@@ -201,7 +204,16 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           `${check.label}${check.detail ? " — " + check.detail : ""}`,
           check.changes?.length ? `Changes: ${check.changes.join(" • ")}` : null,
           check.patientMessage ? `Patient message: ${check.patientMessage}` : null,
-          check.needsRead ? `Read before ordering — ${check.needsRead}` : null,
+          // The badge's own hover: what was actually said, one line each
+          // ("Subscription note: …" / "Patient portal: …"). Brandon,
+          // 2026-09-19 — hovering has to answer "what's the message?"
+          // without a click. Falls back to the recency summary when the
+          // lines are missing (mock rows, older cached payloads).
+          check.needsRead
+            ? ["Read before ordering:", ...(check.needsReadLines?.length
+                ? check.needsReadLines
+                : [check.needsRead])].join("\n  ")
+            : null,
         ].filter(Boolean).join("\n")
       }
       className={cn("relative inline-flex items-center justify-center", className)}
@@ -1389,6 +1401,21 @@ function OrderCycleWorkflow() {
   // table.
   const [sendingIds, setSendingIds] = useState<Set<string>>(() => new Set());
   const [sentIds, setSentIds]       = useState<Set<string>>(() => new Set());
+  // ── Run DVS multi-select ──
+  // Medicaid re-verifies eligibility per order, so a Medicaid row with an
+  // order due needs a DVS run before it can be ordered — an open circle with
+  // an M in the Authorization column. Those rows get a checkbox, and one
+  // button fires Trigger DVS on every selected row at once (Brandon,
+  // 2026-09-19). Held as Monday item ids so the set survives a refetch that
+  // replaces the row objects.
+  const [dvsSelected, setDvsSelected] = useState<Set<string>>(() => new Set());
+  const [dvsRunning, setDvsRunning] = useState(false);
+  const toggleDvsSelected = (id: string) =>
+    setDvsSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
   // Order Prep > Authorization sub-view toggle. When true, the
   // Authorization tab swaps the default PhaseTable for the existing
   // DvsQueue component — auto-filtered to Medicaid + non-Sensors-only
@@ -1574,6 +1601,60 @@ function OrderCycleWorkflow() {
     return sorted;
   }, [filteredAll, filteredBase, phase, primary, prepPhase, duePhase, sortKey, sortDir, todayStr]);
 
+  // ── Run DVS: the rows in view that need one, and the ones we'll fire for ──
+  // Scoped to the visible rows on purpose. The operator selects what they can
+  // see; a hidden row cannot be silently included in a bulk write.
+  // The tick only exists where a table draws it: the Overview grid, and the
+  // Authorization phase table in its default (non-DvsQueue) view. Anywhere
+  // else the bar would offer a "Select all" with nothing to select.
+  const dvsSelectable =
+    primary !== "blocked" && (phase === "overview" || (phase === "auth" && !dvsView));
+  const dvsCandidates = useMemo(
+    () => (dvsSelectable ? rows.filter((p) => !!p.auth.dvsNeeded) : []),
+    [rows, dvsSelectable],
+  );
+  const dvsEligible   = useMemo(() => dvsCandidates.filter(canRunDvs), [dvsCandidates]);
+  const dvsEligibleIds = useMemo(
+    () => new Set(dvsEligible.map((p) => p.mondayItemId)),
+    [dvsEligible],
+  );
+  // Only ever act on ids that are still both visible and eligible — a row that
+  // scrolled out of the filter, or whose Confirm went red since it was ticked,
+  // drops out of the run rather than riding along in a stale set.
+  const dvsToRun = useMemo(
+    () => [...dvsSelected].filter((id) => dvsEligibleIds.has(id)),
+    [dvsSelected, dvsEligibleIds],
+  );
+
+  const runDvsForSelected = async () => {
+    const ids = dvsToRun;
+    if (!ids.length || dvsRunning) return;
+    setDvsRunning(true);
+    setBatchRunning(true);
+    setBatchMsg(`Triggering DVS for ${ids.length} patient${ids.length === 1 ? "" : "s"}…`);
+    try {
+      const res = await bulkTriggerDvs(ids, (done, total) =>
+        setBatchMsg(`Triggering DVS… ${done}/${total}`),
+      );
+      setDvsSelected((prev) => {
+        // Keep whatever failed selected so a retry is one click, not a re-tick.
+        const failed = new Set(res.failures.map((f) => f.id));
+        return new Set([...prev].filter((id) => failed.has(id)));
+      });
+      setBatchMsg(
+        res.failures.length
+          ? `DVS triggered for ${res.successIds.length}, ${res.failures.length} failed — still selected, try again`
+          : `DVS triggered for ${res.successIds.length} patient${res.successIds.length === 1 ? "" : "s"} ✓`,
+      );
+      invalidateSubscription();
+    } catch (e) {
+      setBatchMsg(`Run DVS failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setDvsRunning(false);
+      setBatchRunning(false);
+      setTimeout(() => setBatchMsg(null), 6000);
+    }
+  };
 
   const renderPhaseTab = (k: PhaseTab, label: string, count: number) => (
     <TabsTrigger value={k} className="gap-1.5">
@@ -1824,6 +1905,52 @@ function OrderCycleWorkflow() {
         </Select>
       </div>
 
+      {/* Run DVS bar — only when there is something to run. Medicaid rows with
+          an order due and no DVS yet show an open circle with an M in the
+          Authorization column; tick them and fire them all at once. */}
+      {dvsCandidates.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-sky-200 bg-sky-50/70 px-4 py-2.5">
+          <Stethoscope className="h-4 w-4 shrink-0 text-sky-700" />
+          <div className="text-[13px] text-sky-900">
+            <span className="font-semibold">{dvsCandidates.length}</span>
+            {" "}Medicaid {dvsCandidates.length === 1 ? "order" : "orders"} due need a DVS
+            {dvsCandidates.length !== dvsEligible.length && (
+              <span className="text-sky-800/80">
+                {" "}· {dvsCandidates.length - dvsEligible.length} blocked by a red Confirm
+                {" "}(override in the profile first)
+              </span>
+            )}
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-[12px] text-sky-800 hover:bg-sky-100"
+              disabled={dvsRunning || dvsEligible.length === 0}
+              onClick={() =>
+                setDvsSelected(
+                  dvsToRun.length === dvsEligible.length ? new Set() : new Set(dvsEligibleIds),
+                )
+              }
+            >
+              {dvsToRun.length === dvsEligible.length && dvsEligible.length > 0
+                ? "Clear selection"
+                : `Select all ${dvsEligible.length}`}
+            </Button>
+            <Button
+              size="sm"
+              className="h-8 bg-sky-700 text-[12px] font-semibold hover:bg-sky-800"
+              disabled={dvsRunning || dvsToRun.length === 0}
+              onClick={runDvsForSelected}
+            >
+              {dvsRunning
+                ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Running…</>
+                : <>Run DVS{dvsToRun.length ? ` (${dvsToRun.length})` : ""}</>}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Table per phase */}
       {/* No overflow-hidden here: it would break position:sticky on the
           table header rows (a clipping ancestor becomes the sticky
@@ -1851,6 +1978,9 @@ function OrderCycleWorkflow() {
             onCellClick={openCell}
             onPatientClick={openPatient}
             onSubmit={sendToOrderBoard}
+            dvsSelected={dvsSelected}
+            onToggleDvs={toggleDvsSelected}
+            dvsRunning={dvsRunning}
             onBlock={(p) => setBlockTarget(p as LanePatient)}
             showOrderType={(primary === "due" && duePhase === "ready")
               || (primary === "prep" && prepPhase === "readysub")}
@@ -1867,6 +1997,9 @@ function OrderCycleWorkflow() {
             onCellClick={openCell}
             onPatientClick={openPatient}
             onSubmit={sendToOrderBoard}
+            dvsSelected={dvsSelected}
+            onToggleDvs={toggleDvsSelected}
+            dvsRunning={dvsRunning}
             onBlock={(p) => setBlockTarget(p as LanePatient)}
             sortKey={sortKey}
             sortDir={sortDir}
@@ -1981,9 +2114,46 @@ function SortableLabel({
   );
 }
 
+/**
+ * The Run DVS tick, sat beside the Authorization circle on Medicaid rows whose
+ * order is due and whose DVS hasn't been run. It lives in this cell rather
+ * than in a select column of its own because the thing being selected IS this
+ * circle — the open M next to it is the reason the box is there.
+ *
+ * A red Confirm renders it disabled instead of hiding it: "you can't run this
+ * one, and here's why" beats a silently missing checkbox on the row the
+ * operator was looking for (see canRunDvs in lib/subscription/dvs.ts).
+ */
+function DvsSelectBox({
+  p, selected, onToggle, disabled,
+}: {
+  p: SubscriptionPatient;
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+  disabled?: boolean;
+}) {
+  if (!p.auth.dvsNeeded) return null;
+  const blocked = !canRunDvs(p);
+  return (
+    <Checkbox
+      checked={selected.has(p.mondayItemId)}
+      disabled={blocked || disabled}
+      onCheckedChange={() => onToggle(p.mondayItemId)}
+      onClick={(e) => e.stopPropagation()}
+      className="mr-2 shrink-0 data-[state=checked]:border-sky-700 data-[state=checked]:bg-sky-700"
+      aria-label={blocked
+        ? `Cannot run DVS for ${p.name} — the patient said no. Override the Confirm in their profile first.`
+        : `Select ${p.name} for Run DVS`}
+      title={blocked
+        ? "Confirm is a red X — override it in the patient's profile before running DVS"
+        : "Select for Run DVS"}
+    />
+  );
+}
+
 function OverviewTable({
   rows, onCellClick, onPatientClick, onSubmit, onBlock, showOrderType, sortKey, sortDir, onSort,
-  sendingIds, sentIds,
+  sendingIds, sentIds, dvsSelected, onToggleDvs, dvsRunning,
 }: {
   rows: SubscriptionPatient[];
   onCellClick: (p: SubscriptionPatient, k: CheckpointKind) => void;
@@ -1996,6 +2166,9 @@ function OverviewTable({
   onSort: (k: OverviewSortKey) => void;
   sendingIds: Set<string>;
   sentIds:    Set<string>;
+  dvsSelected: Set<string>;
+  onToggleDvs: (id: string) => void;
+  dvsRunning: boolean;
 }) {
   const grid = showOrderType ? OVERVIEW_GRID_TYPE : OVERVIEW_GRID;
   return (
@@ -2055,6 +2228,7 @@ function OverviewTable({
             </CircleEditPopover>
           </div>
           <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            <DvsSelectBox p={p} selected={dvsSelected} onToggle={onToggleDvs} disabled={dvsRunning} />
             <CircleEditPopover check={p.auth} kind="auth" patient={p} onBlockRequest={onBlock}>
               <CheckpointCircle check={p.auth} />
             </CircleEditPopover>
@@ -2218,7 +2392,7 @@ function BlockedRow({
 
 function PhaseTable({
   rows, phase, onCellClick, onPatientClick, onSubmit, onBlock, sortKey, sortDir, onSort,
-  sendingIds, sentIds,
+  sendingIds, sentIds, dvsSelected, onToggleDvs, dvsRunning,
 }: {
   rows: SubscriptionPatient[];
   phase: CheckpointKind;
@@ -2231,6 +2405,9 @@ function PhaseTable({
   onSort: (k: OverviewSortKey) => void;
   sendingIds: Set<string>;
   sentIds:    Set<string>;
+  dvsSelected: Set<string>;
+  onToggleDvs: (id: string) => void;
+  dvsRunning: boolean;
 }) {
   return (
     <Table>
@@ -2265,6 +2442,9 @@ function PhaseTable({
               <TableCell><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></TableCell>
               <TableCell className="text-[13px]">{p.primaryPayer}</TableCell>
               <TableCell><div className="flex items-center justify-center">
+                {phase === "auth" && (
+                  <DvsSelectBox p={p} selected={dvsSelected} onToggle={onToggleDvs} disabled={dvsRunning} />
+                )}
                 <CircleEditPopover check={c} kind={phase} patient={p} onBlockRequest={onBlock}>
                   <CheckpointCircle check={c} />
                 </CircleEditPopover>
