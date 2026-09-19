@@ -54,20 +54,18 @@ export function markersFor(p: SubscriptionPatient): TimelineMarker[] {
 
 /**
  * The notes an operator reads alongside the thread (runbook step 2, and
- * Brandon 2026-09-14: "very important"). Three sources, in the order they
- * carry weight:
- *   - the patient coordinator's running notes from calls and texts
- *   - whatever the patient typed into the reorder portal
- *   - the free-text help message from the reorder form
+ * Brandon 2026-09-14: "very important"). Two sources — one ours, one the
+ * patient's:
+ *   - the subscription notes our team keeps from calls and texts
+ *   - the free-text message the patient typed into the reorder portal
  * A coordinator's note is often the only record of an infusion-set switch,
  * an overnight-shipping request, or a different name for the box — none of
  * which appear anywhere in the text thread itself.
  */
 function NotesBlock({ patient }: { patient: SubscriptionPatient }) {
   const entries = [
-    { label: "Coordinator notes", body: (patient.coordinatorNotes || "").trim() },
-    { label: "Patient portal notes", body: (patient.portalNotes || "").trim() },
-    { label: "Help message from the reorder form", body: (patient.patientHelpMessage || "").trim() },
+    { label: "Subscription notes", body: (patient.coordinatorNotes || "").trim() },
+    { label: "Patient message from the reorder portal", body: (patient.patientHelpMessage || "").trim() },
   ].filter((e) => e.body);
   if (!entries.length) return null;
   return (
