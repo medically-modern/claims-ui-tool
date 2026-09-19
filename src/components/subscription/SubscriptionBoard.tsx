@@ -236,11 +236,15 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           aria-label={`read before ordering — ${check.needsRead}`}
         />
       )}
+      {/* The M marks a Medicaid row whose order is due with no DVS run yet —
+          the same rows that get the Run DVS checkbox. It is a note about what
+          to DO, sitting next to a circle that only ever reports what Monday
+          says (Brandon, 2026-09-19). */}
       {check.medicaidDvs && (
         <span
           className="absolute -bottom-1 -right-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-[9px] font-bold leading-none text-sky-700 ring-1 ring-sky-300"
-          aria-label="Medicaid DVS"
-          title="Medicaid DVS — re-issued day of service only. Nothing to do until ship day."
+          aria-label="Medicaid — needs a DVS for this order"
+          title="Medicaid re-verifies per order. Tick the box and Run DVS."
         >M</span>
       )}
     </button>

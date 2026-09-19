@@ -38,6 +38,7 @@ import type {
 import { deriveMr } from "@/lib/subscription/mrCheck";
 import { readSignal } from "@/lib/subscription/confirmationSignals";
 import { dvsState } from "@/lib/subscription/dvs";
+import { renderAuth } from "@/lib/subscription/authStatus";
 import { todayIso } from "@/lib/subscription/lanes";
 import { fetchNoteActivity } from "./noteActivity";
 
@@ -328,8 +329,6 @@ function getNum(item: MondayItem, col: string): number {
 }
 
 // ─── Checkpoint derivation ──────────────────────────────────────────────────
-const AUTH_OK = new Set(["Auth Valid", "Not Serving", "No Auth Needed"]);
-
 /**
  * Extract change-list items from the latest Patient Change Summary entry.
  *
@@ -502,65 +501,43 @@ function deriveBenefits(item: MondayItem): Checkpoint {
   return { tone: "pending", label: "Not run" };
 }
 
+/**
+ * Authorization = what Supplies/Sensors Auth Status say, for the categories
+ * this patient is actually served for.
+ *
+ * Medicaid used to be special-cased here — the circle was forced to an open
+ * "DVS needed" state off the Trigger DVS column while Monday sat there saying
+ * "Auth Valid". That was the tool disagreeing with the board, and it has been
+ * removed. The board now handles it itself: ordering a Medicaid patient sets
+ * Supplies Auth Status back to "Required" and clears the auth window, so by
+ * the time the next order comes due the board already says an auth is needed.
+ *
+ * What survives of the DVS logic is the ACTION, not the verdict: dvsNeeded
+ * marks the rows the Run DVS button can fire for. It decides which checkbox
+ * appears, never what colour the circle is. See lib/subscription/dvs.ts.
+ */
 function deriveAuth(item: MondayItem, subType: string, today: string): Checkpoint {
-  const sensors  = get(item, SUB_COL.sensors_auth_status);
-  const supplies = get(item, SUB_COL.supplies_auth_status);
-  const payer    = get(item, SUB_COL.primary_insurance);
+  // Sensors-only and Supplies-only patients are not waiting on the auth they
+  // aren't served for. (Medicaid is Supplies-only on 258 of 264 active rows.)
+  const labels = [
+    subType !== "Supplies" ? get(item, SUB_COL.sensors_auth_status)  : "",
+    subType !== "Sensors"  ? get(item, SUB_COL.supplies_auth_status) : "",
+  ].filter(Boolean);
 
-  // Medicaid re-verifies per order through ePACES, so for a Medicaid row with
-  // an order due the Authorization circle answers "has DVS been run for THIS
-  // order?" before it answers anything about a standing auth. An open circle
-  // with an M means not yet, and the board can fire it in bulk.
-  // See lib/subscription/dvs.ts.
-  const dvs = dvsState({
-    payer,
+  // Action metadata: is running a DVS the next thing to do on this row? Read
+  // from Trigger DVS, and deliberately kept out of tone and label — it decides
+  // which checkbox appears, never what the circle says.
+  const dvsNeeded = dvsState({
+    payer:      get(item, SUB_COL.primary_insurance),
     orderDate:  get(item, SUB_COL.next_order),
     triggerDvs: get(item, SUB_COL.trigger_dvs),
     today,
-  });
-  if (dvs.kind === "needed") {
-    return {
-      tone: "pending",
-      unknown: true,               // -> open circle
-      label: "DVS needed",
-      detail: "Medicaid re-verifies per order. Select the row and Run DVS.",
-      medicaidDvs: true,
-      dvsNeeded: true,
-    };
-  }
-  if (dvs.kind === "inFlight") {
-    return { tone: "pending", label: dvs.label, detail: "ePACES bot is working on it — nothing to do.", medicaidDvs: true };
-  }
-  if (dvs.kind === "needsHuman") {
-    return { tone: "warn", label: dvs.label, medicaidDvs: true };
-  }
-  // dvs.kind === "ok" or "n/a" — fall through to the standing-auth read. A
-  // clean DVS does NOT paint over a Denied auth column.
+  }).kind === "needed";
 
-  const needSensors  = subType !== "Supplies";
-  const needSupplies = subType !== "Sensors";
-  const sensorsOk  = !needSensors  || AUTH_OK.has(sensors);
-  const suppliesOk = !needSupplies || AUTH_OK.has(supplies);
-  if (sensorsOk && suppliesOk) {
-    return dvs.kind === "ok"
-      ? { tone: "ok", label: "Valid — DVS clear for this order", medicaidDvs: true }
-      : { tone: "ok", label: "Valid", pill: undefined };
-  }
-  // Pick the more-severe label between the two relevant statuses
-  const labels = [
-    needSensors  ? sensors  : "",
-    needSupplies ? supplies : "",
-  ].filter(Boolean);
-  const label = labels.join(" / ") || "Not set";
-  const tone: CheckpointTone =
-    labels.some((l) => /(Denied|Expired|Mismatch|Required)/i.test(l)) ? "bad" : "warn";
-  // Medicaid DVS lapses look like "Auth Expired" but can only be re-issued
-  // on the day of service — there is nothing the operator can do about
-  // them before ship day. Flag so the circle gets a small "M" overlay and
-  // ops can skip these in their Auth-bucket triage.
-  const medicaidDvs =
-    /medicaid/i.test(payer) && /expired/i.test(label);
-  return { tone, label, ...(medicaidDvs ? { medicaidDvs: true } : {}) };
+  return {
+    ...renderAuth(labels),
+    ...(dvsNeeded ? { dvsNeeded: true, medicaidDvs: true } : {}),
+  };
 }
 
 function fmtMoney(raw: string): string | null {
