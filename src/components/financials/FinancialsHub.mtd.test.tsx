@@ -200,15 +200,15 @@ describe("FinancialsHub — MTD column", () => {
   it("charts: the MTD point is plotted last and styled as provisional; growth stays month-end", async () => {
     mount();
     await screen.findByText("Metric");
-    // Every chart carries a style legend naming the MTD point (amber dotted / amber-outlined bar).
-    const hints = screen.getAllByText((_, el) => el?.tagName === "SPAN" && /^(Amber dotted|Amber-outlined bar) = Sep MTD \(thru Sep 17\)/.test(el.textContent ?? ""));
-    expect(hints.filter((h) => h.textContent?.startsWith("Amber dotted")).length).toBe(2);
-    expect(hints.filter((h) => h.textContent?.startsWith("Amber-outlined bar")).length).toBe(2);
+    // Every chart carries a style legend naming the MTD point (blue dotted / hatched bar).
+    const hints = screen.getAllByText((_, el) => el?.tagName === "SPAN" && /^(Blue dotted|Hatched bar) = Sep MTD \(thru Sep 17\)/.test(el.textContent ?? ""));
+    expect(hints.filter((h) => h.textContent?.startsWith("Blue dotted")).length).toBe(2);
+    expect(hints.filter((h) => h.textContent?.startsWith("Hatched bar")).length).toBe(2);
     // Book MoM is still Aug vs Jul (696/657 = +5.9%), not MTD vs Aug (798/696 = +14.7%).
     const bookCard = screen.getByText("Total patient book").closest("div.rounded-lg") as HTMLElement;
     expect(within(bookCard).getByText(/^MoM/).parentElement?.textContent).toContain("+5.9%");
     expect(bookCard.textContent).not.toContain("+14.7%");
-    // (The marks themselves — hollow dot, dashed connector, hatched bars — need
+    // (The marks themselves — hollow blue dot, dashed connector, hatched bars — need
     // a laid-out ResponsiveContainer, which jsdom does not provide; they are
     // checked in a real browser. See the PR screenshots.)
   });
