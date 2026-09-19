@@ -28,24 +28,35 @@
 /** Trigger DVS labels that mean "a run is already on its way". */
 const DVS_IN_FLIGHT = new Set(["Trigger DVS", "Running", "Retry Queued"]);
 
-/** Trigger DVS labels that mean "the bot is done and a human is needed". */
-const DVS_NEEDS_HUMAN: Record<string, string> = {
+/** Trigger DVS labels that mean the bot stopped and a human has to act. */
+const DVS_STOPPED: Record<string, string> = {
   "Failed": "DVS failed — needs a manual ePACES check",
   "Manual Review": "DVS flagged for manual review",
   "MLTC": "Managed long-term care plan — DVS does not apply, bill the plan",
 };
 
+/** Claims Status labels that mean the claim stopped short of paying. */
+const CLAIM_STOPPED: Record<string, string> = {
+  "Claims Denied": "Medicaid claim denied",
+  "Claims Error": "Medicaid claim errored",
+  "Payment Incorrect": "Medicaid paid the wrong amount",
+};
+
+/** The one Claims Status that clears a Medicaid order to ship. */
+const CLAIM_PAID = "Claims Paid";
+
 export type DvsState =
   /** Not a Medicaid row, or no order due — DVS is not part of this circle. */
   | { kind: "n/a" }
-  /** Order due, nothing run yet. Open circle + M, selectable for Run DVS. */
+  /** Order due, nothing run yet. Amber, plus the Run DVS checkbox and the M. */
   | { kind: "needed" }
-  /** Queued or running. Gray + M; nothing to do but wait for the bot. */
-  | { kind: "inFlight"; label: string }
-  /** Bot finished but could not answer. Amber + M. */
-  | { kind: "needsHuman"; label: string }
-  /** Clean DVS for this order. Defer to the ordinary auth derivation. */
-  | { kind: "ok" };
+  /** The bot is working, or the claim it raised is still out. Renders "…" —
+   *  an answer is coming, wait for it rather than acting. */
+  | { kind: "running"; label: string }
+  /** DVS clean AND the claim paid. This is the only green. */
+  | { kind: "cleared"; label: string }
+  /** The run or the claim stopped. Red X — somebody has to go look. */
+  | { kind: "failed"; label: string };
 
 export interface DvsInputs {
   /** Primary insurance label (color_mm254qxj). */
@@ -54,6 +65,8 @@ export interface DvsInputs {
   orderDate: string | null | undefined;
   /** Trigger DVS label (color_mm2narpj). */
   triggerDvs: string | null | undefined;
+  /** Claims Status label (color_mm2n5rkg) — the claim the DVS raised. */
+  claimsStatus?: string | null;
   /** Today, yyyy-mm-dd. Passed in so the derivation stays pure. */
   today: string;
 }
@@ -76,17 +89,33 @@ export function orderIsDue(orderDate: string | null | undefined, today: string):
 
 export function dvsState(p: DvsInputs): DvsState {
   if (!isMedicaid(p.payer) || !orderIsDue(p.orderDate, p.today)) return { kind: "n/a" };
-  const label = String(p.triggerDvs ?? "").trim();
-  if (!label) return { kind: "needed" };
-  if (DVS_IN_FLIGHT.has(label)) {
-    return { kind: "inFlight", label: label === "Running" ? "DVS running" : "DVS requested" };
+
+  const trigger = String(p.triggerDvs ?? "").trim();
+  const claim   = String(p.claimsStatus ?? "").trim();
+
+  if (!trigger) return { kind: "needed" };
+  if (DVS_IN_FLIGHT.has(trigger)) {
+    return { kind: "running", label: trigger === "Running" ? "DVS running" : "DVS requested" };
   }
-  const human = DVS_NEEDS_HUMAN[label];
-  if (human) return { kind: "needsHuman", label: human };
-  if (/^success$/i.test(label)) return { kind: "ok" };
-  // An unrecognised label is a data question, not an all-clear. Treat it the
-  // way the board treats every other unknown: surface it, don't hide it.
-  return { kind: "needsHuman", label: `Trigger DVS = "${label}"` };
+  const stopped = DVS_STOPPED[trigger];
+  if (stopped) return { kind: "failed", label: stopped };
+
+  if (!/^success$/i.test(trigger)) {
+    // An unrecognised label is a data question, not an all-clear. Surface it.
+    return { kind: "failed", label: `Trigger DVS = "${trigger}"` };
+  }
+
+  // DVS came back clean. For Medicaid that is only half the gate: the claim
+  // goes out on the DVS and has to PAY before the order ships (Brandon:
+  // "we get the dvs, we get paid, then we order"). So a clean DVS with a
+  // claim still out is "…", not a green light.
+  const claimStopped = CLAIM_STOPPED[claim];
+  if (claimStopped) return { kind: "failed", label: claimStopped };
+  if (claim === CLAIM_PAID) return { kind: "cleared", label: "DVS clear, claim paid" };
+  return {
+    kind: "running",
+    label: claim ? `DVS clear — claim ${claim.toLowerCase()}` : "DVS clear — waiting on the claim",
+  };
 }
 
 // ─── The Run DVS guard ───────────────────────────────────────────────────────

@@ -53,6 +53,10 @@ export type Checkpoint = {
   /** The hover behind that badge: one line per thing to read, with the
    *  message text, e.g. "Subscription note: wants 90 days". */
   needsReadLines?: string[];
+  /** An answer is already on its way — the DVS bot is running, or the claim
+   *  it raised is still out. Renders "…" instead of a verdict: expect a check
+   *  or an X shortly, and don't act in the meantime. */
+  awaiting?: boolean;
   /** Auth only: a Medicaid row with an order due and no DVS run for it yet.
    *  Renders as an open circle with the M, and is what the board's Run DVS
    *  multi-select picks up. See lib/subscription/dvs.ts. */
@@ -95,6 +99,11 @@ export type SubscriptionPatient = {
   nextCheckIn?: string;
   stuckReason?: string;
   financials?: PatientFinancials;
+  /** Calls and texts exchanged with the patient since their last order,
+   *  counted by the backend and read off Monday. Undefined = not counted yet
+   *  (the columns are new), which renders as an icon with no number. */
+  callsSinceOrder?: number;
+  textsSinceOrder?: number;
   /** The two notes read at confirmation time (runbook step 2): ours, and the
    *  patient's own words from the reorder portal. Optional because mock rows
    *  don't carry them; the live query always sets both. Patient Portal Notes
