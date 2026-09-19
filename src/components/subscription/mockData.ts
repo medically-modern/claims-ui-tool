@@ -22,8 +22,10 @@ export type Checkpoint = {
   /** Pill-displayed metadata. Used for Auth (auth-end date) and Last Paid
       (link / amount). Keeps the row legible without opening the popover. */
   pill?: string;
-  /** True when the patient delayed via the reorder form. Confirmation tone
-   *  stays green but the circle renders a Clock overlay so ops know. */
+  /** The patient delayed via the reorder form. Kept for the profile/drawer
+   *  only — the ROW no longer distinguishes it. Delaying moves the order date
+   *  automatically, so against the date the row is showing the patient has
+   *  answered and the circle is a plain green check (Brandon, 2026-09-19). */
   delayed?: boolean;
   /** Passes, but only just: rendered as a hollow (light green) circle. Used
    *  by the MR check for "records not valid, but OK to order" — the tone is
@@ -41,12 +43,13 @@ export type Checkpoint = {
    *  Help Message column on Monday). Renders a MessageSquare overlay on the
    *  Confirmation circle so ops can hover to read it. */
   patientMessage?: string;
-  /** The patient answered us by text or call but never completed the portal,
-   *  so a human has to read the thread before we decide — "texted 2d ago".
-   *  Set on Confirmation only. Deliberately survives the backend's auto-flip
-   *  to No Response: the flip is the default, this is the exception to it.
+  /** Somebody said something that has to be read before we order — a note,
+   *  a portal message, or an inbound text/call, within 30 days of the order
+   *  date. "note 2d ago · texted 5d ago". Set on Confirmation only, and the
+   *  ONLY badge the row carries: everything else (edits, delay, overrides)
+   *  is nuance that belongs in the profile (Brandon, 2026-09-19).
    *  See lib/subscription/confirmationSignals.ts. */
-  evaluate?: string;
+  needsRead?: string;
   /** Auth is expired specifically because of a Medicaid DVS lapse. DVS can
    *  only be re-issued day-of-service, so this is "leave alone until ship
    *  day", not a real action item. Renders a small "M" overlay on the Auth

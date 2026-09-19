@@ -1,5 +1,5 @@
 /**
- * confirmationSignals.ts — "did the patient answer, and did anyone read it?"
+ * confirmationSignals.ts — "is there something to read before we order?"
  *
  * Spec: REORDER_PROCESS.md step 2 + Brandon 2026-09-14. The backend triage
  * job (stedi-monday-integration/services/reorder_triage_service.py) decides
@@ -7,23 +7,32 @@
  * browser's read of the same two columns, so the row can show the state
  * without waiting for the next cron tick.
  *
- * Three outcomes on a due patient who never completed the portal:
+ * The row answers ONE question at a glance: can I order for this patient?
+ * Everything else — what they edited, whether they delayed, who overrode a
+ * check — is nuance that belongs in the profile, not on the row (Brandon,
+ * 2026-09-19). The single exception is correspondence: if somebody said
+ * something, you have to read it before you order, and that cannot wait for
+ * a click.
  *
- *   silence        -> the job sets Patient Order Response = No Response
- *   they answered  -> EVALUATE: a human reads the thread and decides
- *   never asked    -> not our problem yet; the reorder cron fires at 20 days
+ * So the row carries exactly one badge, and this module decides it. Four
+ * sources feed it, because from the operator's side they are the same fact —
+ * "there is something here to read":
  *
- * ⚠️ EVALUATE SURVIVES THE FLIP. Once the job has written "No Response" the
- * response column no longer says "blank", but the fact that they texted is
- * unchanged — so Evaluate keys off the CONTACT, not off the response being
- * empty. The flip is the default; the icon is the exception to it, and
- * hiding the exception once the default lands is how the signal would get
- * lost exactly when it matters.
+ *   Patient Portal Notes      long_text_mm3evvzj   the patient typed it
+ *   Patient Help Message      long_text_mm3xnb6k   free text on the reorder form
+ *   Subscription Notes        text_mm6vp1z3        the coordinator wrote it down
+ *   an inbound text or call   text_mm5frhe9        stamped by the triage job
  *
- * ⚠️ The stamp is compared against WHEN WE ASKED, not against "recently".
- * Three of five patients with contact on 2026-09-14 had last written on
- * Aug 25 — the day their reorder text fired for a Sep 14 order. Anything
- * time-boxed to the last few days discards real replies.
+ * ⚠️ SCOPED TO THIS ORDER, NOT TO ALL TIME. The window opens 30 days before
+ * the order date. Without that, a note from six months ago badges the row
+ * forever — the failure that made the old Pencil badge worthless (measured
+ * 2026-09-19: of the pencils on unanswered rows, 11 were from a previous
+ * cycle against 1 from the current one, and 33 of the change lines said
+ * "Cartridge quantity changed from 3 to 3").
+ *
+ * ⚠️ The note columns carry no timestamp of their own; `notesUpdatedAt` comes
+ * from Monday's activity log (api/queries/noteActivity.ts). No timestamp means
+ * no badge — an unknown age must not be treated as recent.
  */
 
 /** Monday's Reorder Text Sent stamp: "Jul 12, 2026, 2:00 PM ET". */
@@ -88,54 +97,70 @@ export function agoLabel(at: number, now: number = Date.now()): string {
   return `${Math.floor(days / 7)}w ago`;
 }
 
-export interface EvaluateSignal {
-  /** A human needs to read this thread before we decide. */
-  evaluate: boolean;
-  /** The contact that triggered it, when there is one. */
-  contact: ContactStamp | null;
-  /** e.g. "texted 2d ago" — for the badge tooltip and the filter row. */
+export interface ReadSignal {
+  /** Something was said that a human should read before ordering. */
+  needsRead: boolean;
+  /** Short reason for the tooltip and the "Needs a read" filter. */
   summary: string;
+  /** Which sources fired, for the hover. */
+  sources: string[];
 }
 
-export interface ConfirmationInputs {
-  /** Patient Order Response cell text. */
-  orderResponse: string | undefined | null;
-  /** Reorder Text Sent cell text. */
-  reorderTextSent: string | undefined | null;
-  /** Last Patient Contact cell text. */
-  lastPatientContact: string | undefined | null;
+export interface ReadInputs {
+  /** long_text_mm3evvzj */
+  portalNotes?: string | null;
+  /** long_text_mm3xnb6k */
+  helpMessage?: string | null;
+  /** text_mm6vp1z3 */
+  coordinatorNotes?: string | null;
+  /** Epoch ms of the most recent write to any of those three, from the
+   *  Monday activity log. Null/undefined = unknown age = does not count. */
+  notesUpdatedAt?: number | null;
+  /** text_mm5frhe9, "<ISO ts> in|out sms|call|email" */
+  lastPatientContact?: string | null;
+  /** yyyy-mm-dd — the window ends here and opens 30 days earlier. */
+  orderDate?: string | null;
 }
 
-const ANSWERED = /^(confirmed|delay)/i;
+/** How far before the order date a note or a text still counts. */
+export const READ_WINDOW_DAYS = 30;
+
+/** Start of the window: 30 days before the order date, or before today when
+ *  the row has no order date (a patient with no date can still be talked to). */
+export function readWindowStart(orderDate: string | null | undefined, now: number): number {
+  const d = String(orderDate ?? "").slice(0, 10);
+  const anchor = /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(d + "T00:00:00").getTime() : now;
+  return anchor - READ_WINDOW_DAYS * 86_400_000;
+}
 
 /**
- * Does this row need a human to read the correspondence?
+ * Is there anything to read on this patient before ordering?
  *
- * True when we asked, the patient never completed the portal, and there is
- * INBOUND contact at or after the ask. A patient who already confirmed (or
- * delayed) has answered — nothing to evaluate. An outbound-only stamp is us
- * talking, not them.
+ * Note that a note written AFTER the order date still counts — the window has
+ * a floor, not a ceiling. A coordinator writing something today about an order
+ * that came due last Thursday is the most urgent case there is.
  */
-export function evaluateSignal(
-  p: ConfirmationInputs,
-  now: number = Date.now(),
-): EvaluateSignal {
-  const none: EvaluateSignal = { evaluate: false, contact: null, summary: "" };
-  const resp = String(p.orderResponse ?? "").trim();
-  if (ANSWERED.test(resp)) return none;
+export function readSignal(p: ReadInputs, now: number = Date.now()): ReadSignal {
+  const since = readWindowStart(p.orderDate, now);
+  const sources: string[] = [];
 
-  const asked = parseReorderTextSent(p.reorderTextSent);
-  if (asked == null) return none;   // never asked → not an unanswered reorder
+  const hasNoteText = [p.portalNotes, p.helpMessage, p.coordinatorNotes]
+    .some((v) => String(v ?? "").trim().length > 0);
+  const noteAt = typeof p.notesUpdatedAt === "number" ? p.notesUpdatedAt : null;
+  const noteCounts = hasNoteText && noteAt != null && noteAt >= since;
+  if (noteCounts) sources.push(`note ${agoLabel(noteAt as number, now)}`);
 
   const contact = parseContactStamp(p.lastPatientContact);
-  if (!contact || contact.direction !== "in") return none;
-  // A stamp from before the ask belongs to the previous cycle.
-  if (contact.at < asked) return { ...none, contact };
+  const contactCounts = !!contact && contact.direction === "in" && contact.at >= since;
+  if (contactCounts && contact) {
+    const verb = contact.channel === "call" ? "called"
+      : contact.channel === "email" ? "emailed" : "texted";
+    sources.push(`${verb} ${agoLabel(contact.at, now)}`);
+  }
 
-  const verb = contact.channel === "call" ? "called" : contact.channel === "email" ? "emailed" : "texted";
   return {
-    evaluate: true,
-    contact,
-    summary: `${verb} ${agoLabel(contact.at, now)}`,
+    needsRead: sources.length > 0,
+    summary: sources.join(" · "),
+    sources,
   };
 }
