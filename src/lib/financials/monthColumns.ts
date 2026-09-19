@@ -103,21 +103,48 @@ const MTD_TICK_RE = /^[A-Za-z]{3} MTD$/;
 export const isMtdTick = (value: string) => MTD_TICK_RE.test(value);
 
 /**
- * Compact x-axis labels that fit a phone: "Jul", "Aug" — with the year
- * ("Apr '25") only on charts that span more than one calendar year — and
- * "Sep MTD" for the provisional point. Anything else passes through.
+ * X-axis labels: "Apr '25", "Jul '26", and "Sep MTD" for the provisional
+ * point. Anything else passes through.
+ *
+ * The year is ALWAYS shown. It used to appear only on charts that spanned
+ * more than one calendar year, which meant a bare "Jul" on one card and
+ * "Jul '26" on the card beside it — the reader had to work out which chart
+ * was telling them the year and which was assuming it (Brandon, 2026-09-19).
+ * Four cards on one screen should label their axes the same way.
  */
-export function tickLabel(value: string, withYear: boolean): string {
+export function tickLabel(value: string): string {
   if (isMtdTick(value)) return value;
   const m = /^([A-Za-z]{3}) (\d{4})$/.exec(value.trim());
   if (!m) return value;
-  return withYear ? `${m[1]} '${m[2].slice(2)}` : m[1];
+  return `${m[1]} '${m[2].slice(2)}`;
 }
 
-/** True when the month labels cover more than one calendar year. */
-export function spansYears(months: string[]): boolean {
-  const years = new Set(months.map((v) => /(\d{4})$/.exec(v)?.[1]).filter(Boolean));
-  return years.size > 1;
+/**
+ * Which month labels to actually draw, at a CONSTANT stride.
+ *
+ * Recharts' own thinning (`interval="preserveStartEnd"` + `minTickGap`) drops
+ * whichever tick happens to collide, so the gaps come out uneven — the patient
+ * book chart was reading Apr, Jul, Sep, Dec, Mar, Jun: three months, then two,
+ * then three. A reader can't scan that, because the spacing stops meaning a
+ * fixed amount of time (Brandon, 2026-09-19).
+ *
+ * So: every month if they all fit, otherwise every 2nd, every 3rd, and so on —
+ * one stride for the whole axis. Counting runs BACKWARDS from the newest point
+ * so the latest month (the MTD tick, the one being read most) is always
+ * labelled; the oldest month is added only when it lands on the stride, since
+ * forcing it would put one short gap back into an otherwise even axis.
+ *
+ * `maxTicks` is the budget for the narrowest card these charts render in;
+ * labels are ~46px wide with the year, so 7 sits comfortably in a half-width
+ * card and still fits a phone.
+ */
+export function monthTicks(months: string[], maxTicks = 7): string[] {
+  const n = months.length;
+  if (n <= maxTicks) return [...months];
+  const stride = Math.ceil(n / maxTicks);
+  const picked: string[] = [];
+  for (let i = n - 1; i >= 0; i -= stride) picked.push(months[i]);
+  return picked.reverse();
 }
 
 // ─── Realization freshness ───────────────────────────────────────────────────

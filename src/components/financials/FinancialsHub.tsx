@@ -40,7 +40,7 @@ import { ForecastDashboard } from "@/pages/Forecast";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import {
   fmtShortDate, isMonthOf, isMtdTick, lastFull, mtdTickLabel, pickFull, realizationMeasuredOn,
-  spansYears, splitMonthColumns, tickLabel, type MtdColumn,
+  monthTicks, splitMonthColumns, tickLabel, type MtdColumn,
 } from "@/lib/financials/monthColumns";
 
 // ─── Types from GET /monthly-financials ─────────────────────────────────────
@@ -224,14 +224,14 @@ function mtdCells(data: { isMtd?: boolean }[], color: string) {
 }
 
 /** recharts custom tick: compact label, amber for the MTD point. */
-function MonthTick(props: { x?: number; y?: number; payload?: { value: string }; withYear: boolean }) {
-  const { x = 0, y = 0, payload, withYear } = props;
+function MonthTick(props: { x?: number; y?: number; payload?: { value: string } }) {
+  const { x = 0, y = 0, payload } = props;
   const v = payload?.value ?? "";
   const isMtd = isMtdTick(v);
   return (
     <text x={x} y={y + 12} textAnchor="middle" fontSize={11}
       fill={isMtd ? MTD_COLOR : "#64748b"} fontWeight={isMtd ? 700 : 400}>
-      {tickLabel(v, withYear)}
+      {tickLabel(v)}
     </text>
   );
 }
@@ -624,7 +624,8 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
             <LineChart data={chartData} margin={{ top: 16, right: 40, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
               <XAxis dataKey="month" tickLine={false} interval={0}
-                tick={<MonthTick withYear={spansYears(chartData.map((d) => d.month))} />} />
+                ticks={monthTicks(chartData.map((d) => d.month))}
+                tick={<MonthTick />} />
               <YAxis fontSize={11} tickLine={false} width={40} />
               <Tooltip content={<MonthTip fmt={(v) => v.toLocaleString()} mtd={mtdM} />} />
               <Line dataKey="active" name="Active unique patients" stroke={SERIES_2.a}
@@ -649,7 +650,7 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
                 </span>
                 <span>
                   <span className="text-muted-foreground font-normal">
-                    YoY{bookGrowth.yoyBase ? ` (vs ${tickLabel(bookGrowth.yoyBase, true)})` : ""}{" "}
+                    YoY{bookGrowth.yoyBase ? ` (vs ${tickLabel(bookGrowth.yoyBase)})` : ""}{" "}
                   </span>
                   {fmtPct(bookGrowth.yoy)}
                 </span>
@@ -660,8 +661,9 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
           <ResponsiveContainer width="100%" height={190}>
             <LineChart data={bookHistory} margin={{ top: 12, right: 40, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-              <XAxis dataKey="month" tickLine={false} interval="preserveStartEnd" minTickGap={28}
-                tick={<MonthTick withYear={spansYears(bookHistory.map((d) => d.month))} />} />
+              <XAxis dataKey="month" tickLine={false} interval={0}
+                ticks={monthTicks(bookHistory.map((d) => d.month))}
+                tick={<MonthTick />} />
               <YAxis fontSize={11} tickLine={false} width={40} />
               <Tooltip content={<MonthTip fmt={(v) => v.toLocaleString()} mtd={mtdM} />} />
               <Line dataKey="book" name="Total patient book" stroke="#0284c7"
@@ -686,7 +688,8 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
               {mtdHatchDefs([SERIES_2.a, SERIES_2.b])}
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
               <XAxis dataKey="month" tickLine={false} interval={0}
-                tick={<MonthTick withYear={spansYears(arrArpHistory.map((d) => d.month))} />} />
+                ticks={monthTicks(arrArpHistory.map((d) => d.month))}
+                tick={<MonthTick />} />
               <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} tickLine={false} width={52} />
               <Tooltip content={<MonthTip fmt={(v) => `$${Math.round(v).toLocaleString()}`} mtd={mtdM} />} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -709,7 +712,8 @@ function KpisView({ data }: { data: MonthlyFinancialsPayload }) {
               {mtdHatchDefs([SERIES_2.a, SERIES_2.b])}
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
               <XAxis dataKey="month" tickLine={false} interval={0}
-                tick={<MonthTick withYear={spansYears(chartData.map((d) => d.month))} />} />
+                ticks={monthTicks(chartData.map((d) => d.month))}
+                tick={<MonthTick />} />
               <YAxis tickFormatter={(v) => fmtMoney(v)} fontSize={11} tickLine={false} width={52} />
               <Tooltip content={<MonthTip fmt={(v) => `$${Math.round(v).toLocaleString()}`} mtd={mtdM} />} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -1043,7 +1047,8 @@ function RealizationView({ data }: { data: MonthlyFinancialsPayload }) {
             <BarChart data={gap} margin={{ top: 4, right: 8, bottom: 0, left: 0 }} barCategoryGap="28%">
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
               <XAxis dataKey="month" tickLine={false} interval={0}
-                tick={<MonthTick withYear={spansYears(gap.map((d) => d.month))} />} />
+                ticks={monthTicks(gap.map((d) => d.month))}
+                tick={<MonthTick />} />
               <YAxis tickFormatter={fmtK} fontSize={11} tickLine={false} width={48} />
               <Tooltip formatter={(v: number) => `$${Math.round(v).toLocaleString()}`} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
