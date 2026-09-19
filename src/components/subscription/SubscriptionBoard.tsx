@@ -18,10 +18,10 @@
 
 import { forwardRef, useMemo, useState } from "react";
 import {
-  AlertTriangle, ArrowRight, Bell, Building2, CalendarClock, Check, ClipboardCheck,
+  AlertTriangle, Bell, Building2, CalendarClock, Check, ClipboardCheck,
   Clock, DollarSign, ExternalLink, Heart, Loader2,
   MessageSquare, PauseCircle, Pencil, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
-  Reply, Server, Shield, UserCog, Unlock, UserCircle, UserX, X,
+  Server, Shield, UserCog, Unlock, UserCircle, UserX, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -174,12 +174,11 @@ type CheckpointCircleProps = {
 const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
   function CheckpointCircle({ check, size = 30, title, className, style, ...rest }, ref) {
   const state = circleStateFor(check);
-  // Delayed confirmation reads as a "hollow" green check — still a
-  // pass, but visually distinct from a solid "Confirmed" so ops can
-  // tell at a glance the patient pressed Delay instead of Yes. The MR
-  // check reuses the same look (`light`) for "records not valid, but
-  // OK to order".
-  const delayedGreen = state === "green" && (!!check.delayed || !!check.light);
+  // A "hollow" green check — a pass with a caveat. Used only by the MR
+  // check ("records expired, but OK to order"). Delay used to render this
+  // way too; it no longer does, because delaying moves the order date, so
+  // against the date on the row the patient has simply answered.
+  const delayedGreen = state === "green" && !!check.light;
   const sizeStyle = { width: size, height: size };
   const inner =
     state === "green" ? <Check className={cn("h-4 w-4", delayedGreen ? "text-emerald-600" : "text-white")} strokeWidth={3} /> :
@@ -202,7 +201,7 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           `${check.label}${check.detail ? " — " + check.detail : ""}`,
           check.changes?.length ? `Changes: ${check.changes.join(" • ")}` : null,
           check.patientMessage ? `Patient message: ${check.patientMessage}` : null,
-          check.evaluate ? `Evaluate — patient ${check.evaluate}; read the thread before ordering` : null,
+          check.needsRead ? `Read before ordering — ${check.needsRead}` : null,
         ].filter(Boolean).join("\n")
       }
       className={cn("relative inline-flex items-center justify-center", className)}
@@ -214,16 +213,15 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
       >
         {inner}
       </span>
-      {check.overrideReason && check.tone === "ok" && (
-        <Unlock
-          className="absolute -top-1.5 -right-1.5 h-3.5 w-3.5 text-emerald-700 bg-white rounded-full p-[1px] ring-1 ring-emerald-300"
-          aria-label="override"
-        />
-      )}
-      {check.changes && check.changes.length > 0 && (
-        <Pencil
-          className="absolute -bottom-1 -right-1 h-3 w-3 text-orange-600 bg-white rounded-full p-[1px] ring-1 ring-orange-200"
-          aria-label="changes"
+      {/* The row carries ONE badge. Edits, delay, overrides and the rest are
+          real but they are nuance — they live in the profile, a click away.
+          What cannot wait for a click is somebody having said something:
+          a note, a portal message, or an inbound text/call inside the 30 days
+          before the order date. See lib/subscription/confirmationSignals.ts. */}
+      {check.needsRead && (
+        <MessageSquare
+          className="absolute -top-1.5 -right-1.5 h-4 w-4 text-sky-700 bg-white rounded-full p-[2px] ring-1 ring-sky-300"
+          aria-label={`read before ordering — ${check.needsRead}`}
         />
       )}
       {check.medicaidDvs && (
@@ -232,28 +230,6 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           aria-label="Medicaid DVS"
           title="Medicaid DVS — re-issued day of service only. Nothing to do until ship day."
         >M</span>
-      )}
-      {check.delayed && (
-        <Clock
-          className="absolute -bottom-1 -left-1 h-3 w-3 text-amber-600 bg-white rounded-full p-[1px] ring-1 ring-amber-200"
-          aria-label="delayed"
-        />
-      )}
-      {check.patientMessage && (
-        <MessageSquare
-          className="absolute -top-1 -left-1 h-3 w-3 text-sky-600 bg-white rounded-full p-[1px] ring-1 ring-sky-200"
-          aria-label="patient message"
-        />
-      )}
-      {/* They answered by text or call but never completed the portal —
-          somebody has to read it. Amber because it is a decision waiting on
-          a human, not a failure. Sits opposite the patient-message dot so
-          the two can show together. */}
-      {check.evaluate && (
-        <Reply
-          className="absolute -top-1.5 -right-1.5 h-3.5 w-3.5 rotate-180 text-amber-700 bg-white rounded-full p-[1px] ring-1 ring-amber-300"
-          aria-label={`evaluate — ${check.evaluate}`}
-        />
       )}
     </button>
   );
@@ -535,9 +511,8 @@ function CheckInCell({ iso, stuckSince }: { iso?: string; stuckSince?: string })
   );
 }
 
-function ReviewAndSubmit({ p, onReview, onSubmit, onBlock, sending, sent }: {
+function ReviewAndSubmit({ p, onSubmit, onBlock, sending, sent }: {
   p: SubscriptionPatient;
-  onReview: () => void;
   onSubmit: () => void;
   onBlock?: () => void;
   sending?: boolean;
@@ -556,7 +531,7 @@ function ReviewAndSubmit({ p, onReview, onSubmit, onBlock, sending, sent }: {
     // pl-8 pushes the buttons away from the Medical Records circle in the
     // OverviewTable grid layout; justify-end keeps them right-anchored
     // so the spacing scales with column width.
-    <div className="flex items-center justify-end gap-1.5 pl-8">
+    <div className="flex items-center justify-end gap-1.5 pl-8" onClick={(e) => e.stopPropagation()}>
       {onBlock && (
         <Button
           variant="outline"
@@ -572,15 +547,6 @@ function ReviewAndSubmit({ p, onReview, onSubmit, onBlock, sending, sent }: {
       {/* Texts + calls with this patient (RingCentral via Josh's gateway).
           Opens a sheet; nothing is fetched until it's clicked. */}
       <CommsButton patient={p} />
-      <Button
-        variant="outline"
-        size="sm"
-        className="h-7 px-2.5 text-[11px] font-semibold"
-        onClick={onReview}
-        disabled={sending || sent}
-      >
-        Review<ArrowRight className="ml-1 h-3 w-3" />
-      </Button>
       <Button
         size="sm"
         onClick={handleSend}
@@ -1356,7 +1322,7 @@ function OrderCycleWorkflow() {
       if (getLane(lp, todayStr) === "due") {
         c.due++;
         if (ready) c.dueReady++; else c.duePrep++;
-        if (p.confirmation.evaluate) c.dueNeedsRead++;
+        if (p.confirmation.needsRead) c.dueNeedsRead++;
         continue;
       }
       c.scheduled++;
@@ -1525,7 +1491,7 @@ function OrderCycleWorkflow() {
       // "Needs a read" cuts across readiness: it is the set where the
       // patient said something and nobody has decided what it means yet.
       base = duePhase === "needsread"
-        ? dueRows.filter((p) => !!p.confirmation.evaluate)
+        ? dueRows.filter((p) => !!p.confirmation.needsRead)
         : dueRows.filter((p) => (duePhase === "ready") === isReady(p as LanePatient));
     } else if (phase === "overview") {
       if (primary === "prep" && prepPhase === "all") {
@@ -1819,12 +1785,11 @@ function OrderCycleWorkflow() {
                 {counts.dueReady}
               </span>
             </TabsTrigger>
-            {/* The patients who answered by text or call instead of the
-                portal. Everyone else who didn't answer is already flipped
-                to No Response by the triage job — these are the ones that
-                still need a human to read the thread. */}
-            <TabsTrigger value="needsread" className="gap-1.5" title="Patient texted or called but never answered the portal — read the thread and decide">
-              <Reply className="h-3.5 w-3.5 rotate-180 text-amber-700" />
+            {/* Somebody said something — a note, a portal message, or an
+                inbound text/call — within 30 days of the order date. The one
+                thing on the row that can't be judged without reading it. */}
+            <TabsTrigger value="needsread" className="gap-1.5" title="A note, portal message, or inbound text/call in the 30 days before the order date — read it before ordering">
+              <MessageSquare className="h-3.5 w-3.5 text-sky-700" />
               Needs a read
               <span className="rounded-full bg-amber-100 text-amber-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
                 {counts.dueNeedsRead}
@@ -2053,8 +2018,21 @@ function OverviewTable({
         <div className="text-center"><SortableLabel label="Medical Records" k="mr"           sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-right pr-2">Actions</div>
       </div>
+      {/* The whole row opens the profile — there is no Review button any
+          more, because a button that does what clicking the row does is a
+          button in the way. Cells that are themselves interactive (the five
+          circles, the action cluster) stop the click so they keep working. */}
       {rows.map((p) => (
-        <div key={p.id} className={cn(grid, "border-b px-6 py-4 hover:bg-muted/30 transition-colors items-center")}>
+        <div
+          key={p.id}
+          role="button"
+          tabIndex={0}
+          onClick={() => onPatientClick(p)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPatientClick(p); }
+          }}
+          className={cn(grid, "border-b px-6 py-4 hover:bg-muted/30 transition-colors items-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset")}
+        >
           <button type="button" onClick={() => onPatientClick(p)} className="text-left">
             <div className="text-[15px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /><ShipCandidateBadge patient={p} /></div>
             <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">{p.phone}</div>
@@ -2066,33 +2044,33 @@ function OverviewTable({
           <div><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></div>
           {showOrderType && <div><OrderTypePill patient={p} /></div>}
           <div className="text-[14px] truncate">{p.primaryPayer}</div>
-          <div className="flex items-center justify-center">
+          <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
             <CircleEditPopover check={p.confirmation} kind="confirmation" patient={p} onBlockRequest={onBlock}>
               <CheckpointCircle check={p.confirmation} />
             </CircleEditPopover>
           </div>
-          <div className="flex items-center justify-center">
+          <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
             <CircleEditPopover check={p.benefits} kind="benefits" patient={p} onBlockRequest={onBlock}>
               <CheckpointCircle check={p.benefits} />
             </CircleEditPopover>
           </div>
-          <div className="flex items-center justify-center">
+          <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
             <CircleEditPopover check={p.auth} kind="auth" patient={p} onBlockRequest={onBlock}>
               <CheckpointCircle check={p.auth} />
             </CircleEditPopover>
             <MetaPill check={p.auth} />
           </div>
-          <div className="flex items-center justify-center">
+          <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
             <CircleEditPopover check={p.lastPaid} kind="lastPaid" patient={p} onBlockRequest={onBlock}>
               <CheckpointCircle check={p.lastPaid} />
             </CircleEditPopover>
           </div>
-          <div className="flex items-center justify-center">
+          <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
             <CircleEditPopover check={mrOf(p)} kind="mr" patient={p} onBlockRequest={onBlock}>
               <CheckpointCircle check={mrOf(p)} />
             </CircleEditPopover>
           </div>
-          <ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} onBlock={onBlock ? () => onBlock(p) : undefined} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} />
+          <ReviewAndSubmit p={p} onSubmit={() => onSubmit(p)} onBlock={onBlock ? () => onBlock(p) : undefined} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} />
         </div>
       ))}
     </div>
@@ -2295,7 +2273,7 @@ function PhaseTable({
               <TableCell><BlockedByPill value={p.blockedBy} /></TableCell>
               <TableCell><CheckInCell iso={p.nextCheckIn} stuckSince={p.stuckSince} /></TableCell>
               <TableCell className="text-[12px] text-muted-foreground max-w-[340px]">{p.stuckReason ?? "—"}</TableCell>
-              <TableCell><ReviewAndSubmit p={p} onReview={() => onPatientClick(p)} onSubmit={() => onSubmit(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} /></TableCell>
+              <TableCell><ReviewAndSubmit p={p} onSubmit={() => onSubmit(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} /></TableCell>
             </TableRow>
           );
         })}

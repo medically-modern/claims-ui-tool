@@ -36,7 +36,8 @@ import type {
   PatientStatus, PatientFinancials,
 } from "@/components/subscription/mockData";
 import { deriveMr } from "@/lib/subscription/mrCheck";
-import { evaluateSignal } from "@/lib/subscription/confirmationSignals";
+import { readSignal } from "@/lib/subscription/confirmationSignals";
+import { fetchNoteActivity } from "./noteActivity";
 
 export const SUBSCRIPTION_BOARD_ID = 18407459988;
 
@@ -355,17 +356,22 @@ function parseLatestChangeLines(summary: string): string[] {
   );
 }
 
-function deriveConfirmation(item: MondayItem): Checkpoint {
+function deriveConfirmation(item: MondayItem, notesUpdatedAt: number | null): Checkpoint {
   const por = get(item, SUB_COL.patient_order_response);
   const pir = get(item, SUB_COL.patient_insurance_response);
   const msg = get(item, SUB_COL.patient_help_message);
   const summary = get(item, SUB_COL.patient_change_summary);
   const reorderTextSent = get(item, SUB_COL.reorder_text_sent);
-  // Did they answer us some other way? (runbook step 2 / the triage job)
-  const signal = evaluateSignal({
-    orderResponse: por,
-    reorderTextSent,
+  // The row's one badge: is there anything to read before ordering?
+  // Notes + portal message + inbound text/call, scoped to 30 days before
+  // the order date. See lib/subscription/confirmationSignals.ts.
+  const signal = readSignal({
+    portalNotes:      get(item, SUB_COL.portal_notes),
+    helpMessage:      msg,
+    coordinatorNotes: get(item, SUB_COL.subscription_notes),
+    notesUpdatedAt,
     lastPatientContact: get(item, SUB_COL.last_patient_contact),
+    orderDate:        get(item, SUB_COL.next_order),
   });
   // Source of truth for what the patient changed = the parsed change
   // summary written by Josh's reorder backend (covers address, order
@@ -386,9 +392,17 @@ function deriveConfirmation(item: MondayItem): Checkpoint {
   // Monday's actual status label is "Delay" (verified on the board
   // 2026-07-28 — Brian Gillen sat gray/pending because this compared
   // against "Delayed"). Prefix-match so both spellings count.
+  // Delaying pushes the order date automatically, so against the date the
+  // row is showing, a delayed patient HAS answered. Plain green check, same
+  // as any other confirmation — the fact that they delayed is in the detail
+  // and the profile, not in a second visual state (Brandon, 2026-09-19).
   const delayed = /^delay/i.test(por);
   if (por === "Confirmed") { tone = "ok"; label = "Confirmed"; }
-  else if (delayed)        { tone = "ok"; label = "Confirmed (delayed)"; }
+  else if (delayed) {
+    tone = "ok";
+    label = "Confirmed";
+    detail = "Patient chose to delay — the order date has already moved";
+  }
   // ── The three labels this used to ignore (added 2026-09-14) ─────────────
   // The column carries five labels; only two were handled, so 65 rows
   // reading "No Response" rendered as an indistinguishable gray "Awaiting"
@@ -410,8 +424,7 @@ function deriveConfirmation(item: MondayItem): Checkpoint {
     tone,
     label,
     detail,
-    evaluate: signal.evaluate ? signal.summary : undefined,
-    pill: delayed ? "Delayed" : undefined,
+    needsRead: signal.needsRead ? signal.summary : undefined,
     changes: changes.length ? changes : undefined,
     delayed: delayed || undefined,
     patientMessage: msg || undefined,
@@ -596,9 +609,9 @@ function normalizeStatus(raw: string): PatientStatus {
 // overcount actives (FinancialsHub hero bug, 2026-08-02).
 
 // ─── Map one item ───────────────────────────────────────────────────────────
-function mapItem(item: MondayItem): LiveSubscriptionPatient {
+function mapItem(item: MondayItem, notesUpdatedAt: number | null = null): LiveSubscriptionPatient {
   const subType = normalizeSubscriptionType(get(item, SUB_COL.subscription));
-  const confirmation = deriveConfirmation(item);
+  const confirmation = deriveConfirmation(item, notesUpdatedAt);
   const benefits     = deriveBenefits(item);
   const auth         = deriveAuth(item, subType);
   const lastPaid     = deriveLastPaid(item);
@@ -733,14 +746,27 @@ interface NextPageResponse {
   next_items_page: { cursor: string | null; items: MondayItem[] };
 }
 
+/** The three note columns whose last-written time decides the row's badge. */
+const NOTE_ACTIVITY_COLS = [
+  SUB_COL.portal_notes,
+  SUB_COL.patient_help_message,
+  SUB_COL.subscription_notes,
+];
+
 export async function fetchSubscriptionPatients(): Promise<LiveSubscriptionPatient[]> {
   const out: LiveSubscriptionPatient[] = [];
 
+  // When each patient's notes were last touched. Started first and awaited
+  // once, so the extra call overlaps the row paging instead of adding to it;
+  // it resolves to an empty map on failure, which simply means no note badges.
+  const notesP = fetchNoteActivity(SUBSCRIPTION_BOARD_ID, NOTE_ACTIVITY_COLS);
+
+  const raw: MondayItem[] = [];
   const first = await mondayQuery<PageResponse>(PAGE_QUERY, {
     boardId: String(SUBSCRIPTION_BOARD_ID),
     cols: READ_IDS,
   });
-  for (const it of first.boards[0]?.items_page?.items ?? []) out.push(mapItem(it));
+  raw.push(...(first.boards[0]?.items_page?.items ?? []));
   let cursor = first.boards[0]?.items_page?.cursor ?? null;
 
   while (cursor) {
@@ -748,8 +774,11 @@ export async function fetchSubscriptionPatients(): Promise<LiveSubscriptionPatie
       cursor,
       cols: READ_IDS,
     });
-    for (const it of next.next_items_page?.items ?? []) out.push(mapItem(it));
+    raw.push(...(next.next_items_page?.items ?? []));
     cursor = next.next_items_page?.cursor ?? null;
   }
+
+  const notes = await notesP;
+  for (const it of raw) out.push(mapItem(it, notes.get(String(it.id)) ?? null));
   return out;
 }

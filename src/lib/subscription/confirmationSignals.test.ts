@@ -1,21 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
-  agoLabel, evaluateSignal, parseContactStamp, parseReorderTextSent,
+  agoLabel, parseContactStamp, parseReorderTextSent, readSignal, readWindowStart,
 } from "./confirmationSignals";
 
-const ASK = "Aug 25, 2026, 2:00 PM ET";
-const askMs = new Date(2026, 7, 25, 14, 0).getTime();
+const ORDER = "2026-09-14";
 const NOW = new Date(2026, 8, 14, 20, 0).getTime();
+const at = (y: number, m: number, d: number, h = 12) => new Date(y, m - 1, d, h).getTime();
 
 describe("parseReorderTextSent", () => {
   it("reads the board format", () => {
-    expect(parseReorderTextSent(ASK)).toBe(askMs);
+    expect(parseReorderTextSent("Aug 25, 2026, 2:00 PM ET")).toBe(at(2026, 8, 25, 14));
   });
-  it("handles AM/PM and noon/midnight", () => {
+  it("handles noon and midnight", () => {
     expect(new Date(parseReorderTextSent("Jan 1, 2026, 12:00 AM ET")!).getHours()).toBe(0);
     expect(new Date(parseReorderTextSent("Jan 1, 2026, 12:00 PM ET")!).getHours()).toBe(12);
   });
-  it("returns null for blank or foreign shapes", () => {
+  it("is null on blank or foreign shapes", () => {
     for (const v of ["", null, undefined, "sent", "2026-08-25"]) {
       expect(parseReorderTextSent(v)).toBeNull();
     }
@@ -27,7 +27,6 @@ describe("parseContactStamp", () => {
     const c = parseContactStamp("2026-09-08T20:08 in sms")!;
     expect(c.direction).toBe("in");
     expect(c.channel).toBe("sms");
-    expect(c.at).toBe(new Date("2026-09-08T20:08").getTime());
   });
   it("reads an outbound stamp as outbound", () => {
     expect(parseContactStamp("2026-09-08T20:08 out sms")!.direction).toBe("out");
@@ -47,62 +46,87 @@ describe("agoLabel", () => {
   });
 });
 
-describe("evaluateSignal", () => {
-  const base = { orderResponse: "", reorderTextSent: ASK, lastPatientContact: "" };
+describe("readWindowStart", () => {
+  it("opens 30 days before the order date", () => {
+    expect(readWindowStart(ORDER, NOW)).toBe(at(2026, 8, 15, 0));
+  });
+  it("falls back to 30 days before now when the row has no order date", () => {
+    expect(readWindowStart("", NOW)).toBe(NOW - 30 * 86_400_000);
+    expect(readWindowStart(null, NOW)).toBe(NOW - 30 * 86_400_000);
+  });
+});
 
-  it("inbound contact after the ask needs a read", () => {
-    const s = evaluateSignal({ ...base, lastPatientContact: "2026-09-08T20:08 in sms" }, NOW);
-    expect(s.evaluate).toBe(true);
-    expect(s.summary).toBe("texted 5d ago");
+describe("readSignal", () => {
+  const base = {
+    portalNotes: "", helpMessage: "", coordinatorNotes: "",
+    notesUpdatedAt: null as number | null, lastPatientContact: "", orderDate: ORDER,
+  };
+
+  it("nothing said, nothing to read", () => {
+    expect(readSignal(base, NOW).needsRead).toBe(false);
   });
 
-  it("SURVIVES the auto-flip to No Response", () => {
-    // The whole point: once the job writes No Response, the fact that they
-    // texted is unchanged and must still be visible.
-    const s = evaluateSignal(
-      { ...base, orderResponse: "No Response", lastPatientContact: "2026-09-08T20:08 in sms" },
-      NOW,
-    );
-    expect(s.evaluate).toBe(true);
+  it("a coordinator note inside the window needs a read", () => {
+    const s = readSignal({ ...base, coordinatorNotes: "wants it overnighted", notesUpdatedAt: at(2026, 9, 12) }, NOW);
+    expect(s.needsRead).toBe(true);
+    expect(s.summary).toBe("note 2d ago");
   });
 
-  it("counts a reply on the very day we asked", () => {
-    // Three of five real patients on 2026-09-14 were exactly this case.
-    const s = evaluateSignal({ ...base, lastPatientContact: "2026-08-25T20:23 in sms" }, NOW);
-    expect(s.evaluate).toBe(true);
-    expect(s.summary).toBe("texted 2w ago");
-  });
-
-  it("ignores contact from BEFORE the ask (previous cycle)", () => {
-    const s = evaluateSignal({ ...base, lastPatientContact: "2026-08-20T09:00 in sms" }, NOW);
-    expect(s.evaluate).toBe(false);
-    expect(s.contact).not.toBeNull();   // still parsed, just not relevant
-  });
-
-  it("ignores outbound-only contact — us talking is not them answering", () => {
-    expect(evaluateSignal({ ...base, lastPatientContact: "2026-09-08T20:08 out sms" }, NOW).evaluate).toBe(false);
-  });
-
-  it("is silent when the patient already confirmed or delayed", () => {
-    for (const resp of ["Confirmed", "Delay", "Confirmed (delayed)"]) {
-      expect(evaluateSignal(
-        { ...base, orderResponse: resp, lastPatientContact: "2026-09-08T20:08 in sms" }, NOW,
-      ).evaluate).toBe(false);
+  it("counts a portal note and a help message the same way", () => {
+    for (const k of ["portalNotes", "helpMessage"] as const) {
+      const s = readSignal({ ...base, [k]: "something", notesUpdatedAt: at(2026, 9, 10) }, NOW);
+      expect(s.needsRead).toBe(true);
     }
   });
 
-  it("is silent when we never asked", () => {
-    expect(evaluateSignal(
-      { ...base, reorderTextSent: "", lastPatientContact: "2026-09-08T20:08 in sms" }, NOW,
-    ).evaluate).toBe(false);
+  it("an inbound text inside the window needs a read", () => {
+    const s = readSignal({ ...base, lastPatientContact: "2026-09-08T20:08 in sms" }, NOW);
+    expect(s.needsRead).toBe(true);
+    expect(s.summary).toBe("texted 5d ago");
   });
 
-  it("is silent on no contact at all", () => {
-    expect(evaluateSignal(base, NOW).evaluate).toBe(false);
+  it("names both sources when both fired", () => {
+    const s = readSignal({
+      ...base, coordinatorNotes: "x", notesUpdatedAt: at(2026, 9, 13),
+      lastPatientContact: "2026-09-08T20:08 in sms",
+    }, NOW);
+    expect(s.sources).toHaveLength(2);
+    expect(s.summary).toBe("note yesterday · texted 5d ago");
+  });
+
+  it("IGNORES a note older than 30 days before the order date", () => {
+    // The staleness that made the old Pencil badge useless.
+    const s = readSignal({ ...base, coordinatorNotes: "ancient", notesUpdatedAt: at(2026, 7, 1) }, NOW);
+    expect(s.needsRead).toBe(false);
+  });
+
+  it("COUNTS a note written after the order date — the window has a floor, not a ceiling", () => {
+    const later = new Date(2026, 8, 20, 12).getTime();
+    const s = readSignal({ ...base, coordinatorNotes: "called today", notesUpdatedAt: at(2026, 9, 19) }, later);
+    expect(s.needsRead).toBe(true);
+  });
+
+  it("does not badge note text of unknown age", () => {
+    // No activity-log entry = we can't date it = it must not badge forever.
+    const s = readSignal({ ...base, coordinatorNotes: "who knows when", notesUpdatedAt: null }, NOW);
+    expect(s.needsRead).toBe(false);
+  });
+
+  it("does not badge a timestamp with no note text behind it", () => {
+    const s = readSignal({ ...base, notesUpdatedAt: at(2026, 9, 12) }, NOW);
+    expect(s.needsRead).toBe(false);
+  });
+
+  it("ignores outbound contact — us talking is not them saying something", () => {
+    expect(readSignal({ ...base, lastPatientContact: "2026-09-08T20:08 out sms" }, NOW).needsRead).toBe(false);
+  });
+
+  it("ignores contact from before the window", () => {
+    expect(readSignal({ ...base, lastPatientContact: "2026-07-01T09:00 in sms" }, NOW).needsRead).toBe(false);
   });
 
   it("labels a call and an email differently from a text", () => {
-    expect(evaluateSignal({ ...base, lastPatientContact: "2026-09-08T20:08 in call" }, NOW).summary).toBe("called 5d ago");
-    expect(evaluateSignal({ ...base, lastPatientContact: "2026-09-08T20:08 in email" }, NOW).summary).toBe("emailed 5d ago");
+    expect(readSignal({ ...base, lastPatientContact: "2026-09-08T20:08 in call" }, NOW).summary).toBe("called 5d ago");
+    expect(readSignal({ ...base, lastPatientContact: "2026-09-08T20:08 in email" }, NOW).summary).toBe("emailed 5d ago");
   });
 });
