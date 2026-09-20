@@ -1352,8 +1352,13 @@ function OrderCycleWorkflow() {
   const [primary, setPrimary] = useState<PrimaryTab>("due");
   type PrepPhase = CheckpointKind | "all" | "readysub";
   const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
-  type DuePhase = "ready" | "prepwork" | "needsread";
+  type DuePhase = "ready" | "prepwork";
   const [duePhase, setDuePhase] = useState<DuePhase>("prepwork");
+  // Needs Review is a filter INSIDE Order Prep, not a third bucket: every
+  // row with an unread message is also in Order Prep, so showing it as a
+  // sibling tab made 2 + 1 + 14 look like it should equal 16 (Brandon,
+  // 2026-09-20).
+  const [needsReviewOnly, setNeedsReviewOnly] = useState(false);
   // `phase` is the derived view selection used by the rest of the component.
   const phase: PhaseTab =
     primary === "overview" ? "overview"
@@ -1650,9 +1655,8 @@ function OrderCycleWorkflow() {
         && getLane(p as LanePatient, todayStr) === "due");
       // "Needs a read" cuts across readiness: it is the set where the
       // patient said something and nobody has decided what it means yet.
-      base = duePhase === "needsread"
-        ? dueRows.filter((p) => !!p.confirmation.needsRead)
-        : dueRows.filter((p) => (duePhase === "ready") === isReady(p as LanePatient));
+      base = dueRows.filter((p) => (duePhase === "ready") === isReady(p as LanePatient));
+      if (duePhase === "prepwork" && needsReviewOnly) base = base.filter((p) => !!p.confirmation.needsRead);
     } else if (phase === "overview") {
       if (primary === "prep" && prepPhase === "all") {
         // Scheduled > All: every future-dated, unblocked order
@@ -1732,7 +1736,7 @@ function OrderCycleWorkflow() {
         : bv.localeCompare(av, undefined, { numeric: true, sensitivity: "base" });
     });
     return sorted;
-  }, [filteredAll, filteredBase, phase, primary, prepPhase, duePhase, sortKey, sortDir, todayStr]);
+  }, [filteredAll, filteredBase, phase, primary, prepPhase, duePhase, needsReviewOnly, sortKey, sortDir, todayStr]);
 
   // ── Run DVS: the rows in view that need one, and the ones we'll fire for ──
   // Scoped to the visible rows on purpose. The operator selects what they can
@@ -1999,34 +2003,39 @@ function OrderCycleWorkflow() {
           Order Prep = automations didn't clear it, decide manually:
           fix + it auto-promotes, or set a block reason. */}
       {primary === "due" && (
-        <Tabs value={duePhase} onValueChange={(v) => setDuePhase(v as DuePhase)}>
-          <TabsList className="bg-card border">
-            <TabsTrigger value="prepwork" className="gap-1.5" title="Date arrived but not clear — evaluate: fix, or assign a block reason">
-              <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
-              Order Prep
-              <span className="rounded-full bg-amber-100 text-amber-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
-                {counts.duePrep}
-              </span>
-            </TabsTrigger>
-            {/* Somebody said something since the last order — a note, a
-                portal message, or an inbound text/call. Read it, then pause
-                or advance; nothing here auto-advances while it's unread. */}
-            <TabsTrigger value="needsread" className="gap-1.5" title="A message since the last order is holding Confirm — read it, then pause or advance">
-              <MessageSquare className="h-3.5 w-3.5 text-sky-700" />
+        <div className="flex flex-wrap items-center gap-2">
+          <Tabs value={duePhase} onValueChange={(v) => setDuePhase(v as DuePhase)}>
+            <TabsList className="bg-card border">
+              <TabsTrigger value="prepwork" className="gap-1.5" title="Date arrived but not clear — evaluate: fix, or assign a block reason">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                Order Prep
+                <span className="rounded-full bg-amber-100 text-amber-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
+                  {counts.duePrep}
+                </span>
+              </TabsTrigger>
+              <TabsTrigger value="ready" className="gap-1.5" title="All five checks clear — send these now">
+                <Send className="h-3.5 w-3.5 text-emerald-600" />
+                Ready to Order
+                <span className="rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
+                  {counts.dueReady}
+                </span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {/* A filter on Order Prep: rows where somebody said something since
+              the last order. They are counted in Order Prep too — this
+              narrows, it doesn't add. */}
+          {duePhase === "prepwork" && (
+            <button type="button" aria-pressed={needsReviewOnly} onClick={() => setNeedsReviewOnly((v) => !v)}
+              title="Only Order Prep rows with an unread message since the last order — read it, then pause or mark reviewed"
+              className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-semibold transition-colors",
+                needsReviewOnly ? "border-sky-700 bg-sky-700 text-white" : "border-sky-200 bg-sky-50 text-sky-900 hover:bg-sky-100")}>
+              <MessageSquare className="h-3.5 w-3.5" />
               Needs Review
-              <span className="rounded-full bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
-                {counts.dueNeedsRead}
-              </span>
-            </TabsTrigger>
-            <TabsTrigger value="ready" className="gap-1.5" title="All five checks clear — send these now">
-              <Send className="h-3.5 w-3.5 text-emerald-600" />
-              Ready to Order
-              <span className="rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
-                {counts.dueReady}
-              </span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+              <span className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums", needsReviewOnly ? "bg-white/20" : "bg-sky-100 text-sky-800")}>{counts.dueNeedsRead}</span>
+            </button>
+          )}
+        </div>
       )}
 
       <>
