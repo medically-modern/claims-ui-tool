@@ -52,7 +52,7 @@ import { AdvanceDialog } from "./patient/AdvanceDialog";
 import { NewOrders } from "./NewOrders";
 import { PayerRulesTab } from "./PayerRulesTab";
 import { describeCircle } from "@/lib/subscription/circleDetail";
-import { makeStamp } from "@/lib/subscription/orderStamps";
+import { fmtStamp, makeStamp } from "@/lib/subscription/orderStamps";
 import { operatorInitials } from "./patient/PatientRail";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { setDvsTrigger } from "@/api/setDvsTrigger";
@@ -247,10 +247,10 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           message existed and somebody decided (Brandon, 2026-09-20). */}
       {!check.needsRead && check.reviewed && (
         <span
-          className="absolute -top-1.5 -right-1.5 grid h-4 w-4 place-items-center rounded-full bg-white text-emerald-700 ring-1 ring-emerald-300 shadow-sm"
+          className="absolute -top-2 -right-2 grid h-[18px] w-[18px] place-items-center rounded-full bg-emerald-100 text-emerald-800 ring-2 ring-emerald-700"
           aria-label={check.reviewed}
         >
-          <MessageSquare className="h-2.5 w-2.5" strokeWidth={2.5} />
+          <MessageSquare className="h-[11px] w-[11px]" strokeWidth={2.75} />
         </span>
       )}
       {/* The M marks a Medicaid row whose order is due with no DVS run yet —
@@ -296,7 +296,7 @@ function CircleEditPopover({
   const [advanceOpen, setAdvanceOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const { invalidate, markDvsRequested } = useInvalidateSubscription();
+  const { invalidate, markDvsRequested, markReviewed } = useInvalidateSubscription();
 
   // What the popover says is derived per circle from the live fields
   // (lib/subscription/circleDetail.ts). The button follows the verdict:
@@ -397,7 +397,11 @@ function CircleEditPopover({
                 <PauseCircle className="mr-1.5 h-3.5 w-3.5" /> Pause…
               </Button>
               <Button size="sm" className="bg-sky-700 hover:bg-sky-800" disabled={saving}
-                onClick={() => void run(() => writeOrderStamps(patient.mondayItemId, { correspondenceReviewed: makeStamp({ initials: operatorInitials(), nextOrderDate: patient.nextOrderDate }) }))}
+                onClick={() => void run(async () => {
+                  const initials = operatorInitials();
+                  await writeOrderStamps(patient.mondayItemId, { correspondenceReviewed: makeStamp({ initials, nextOrderDate: patient.nextOrderDate }) });
+                  markReviewed(patient.mondayItemId, `Reviewed by ${initials} ${fmtStamp({ at: Date.now(), iso: "", initials, forOrder: patient.nextOrderDate, reason: "" })}`);
+                })}
                 title="I read the texts, calls and notes since the last order">
                 {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />} Mark reviewed
               </Button>
