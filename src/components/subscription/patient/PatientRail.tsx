@@ -9,10 +9,11 @@
  * disabled with the reason, rather than hidden — the layout is the target.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, MessageSquare, NotebookPen, Phone, Send } from "lucide-react";
+import { Check, Loader2, MessageSquare, NotebookPen, Phone, Send } from "lucide-react";
 import { toast } from "sonner";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
-import { addSubscriptionNote } from "@/api/setSubscriptionPatient";
+import { addSubscriptionNote, writeOrderStamps } from "@/api/setSubscriptionPatient";
+import { makeStamp } from "@/lib/subscription/orderStamps";
 import { Button } from "@/components/ui/button";
 import { CallsTab } from "@/components/comms/CallsTab";
 import { TextsTab } from "@/components/comms/TextsTab";
@@ -89,6 +90,23 @@ export function PatientRail({ p, since }: { p: LiveSubscriptionPatient; since: S
   const nTexts = counts.texts ?? p.textsSinceOrder;
   const nCalls = counts.calls ?? p.callsSinceOrder;
 
+  const [reviewing, setReviewing] = useState(false);
+  const setReviewed = async (on: boolean) => {
+    if (reviewing) return;
+    setReviewing(true);
+    try {
+      await writeOrderStamps(p.mondayItemId, {
+        correspondenceReviewed: on ? makeStamp({ initials: operatorInitials(), nextOrderDate: p.nextOrderDate }) : "",
+      });
+      toast.success(on ? "Marked reviewed for this order" : "Review undone");
+      void invalidate();
+    } catch (e) {
+      toast.error("Couldn't update", { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setReviewing(false);
+    }
+  };
+
   const addNote = async () => {
     const text = note.trim();
     if (!text || saving) return;
@@ -124,6 +142,28 @@ export function PatientRail({ p, since }: { p: LiveSubscriptionPatient; since: S
           ))}
         </div>
       </div>
+      {/* Reviewing lives here, with the messages — it is a fact about the
+          communication ("I read what was said since the last order"), not a
+          verdict on the order. Marking it turns the board's blue badge green;
+          readiness follows on its own once the circles are green. */}
+      {(p.confirmation.needsRead || p.confirmation.reviewed) && (
+        <div className={cn("flex items-center gap-2 border-b px-3.5 py-2 text-[12px]",
+          p.confirmation.needsRead ? "bg-sky-50 text-sky-950" : "bg-emerald-50 text-emerald-900")}>
+          <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">
+            {p.confirmation.needsRead ? `Unread since the last order — ${p.confirmation.needsRead}` : p.confirmation.reviewed}
+          </span>
+          {p.confirmation.needsRead ? (
+            <Button size="sm" className="h-7 shrink-0 gap-1.5 bg-sky-700 px-2.5 text-[12px] hover:bg-sky-800" disabled={reviewing}
+              onClick={() => void setReviewed(true)} title="I read the texts, calls and notes since the last order">
+              {reviewing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Mark reviewed
+            </Button>
+          ) : (
+            <button type="button" className="shrink-0 text-[11px] text-emerald-800 underline-offset-2 hover:underline disabled:opacity-50" disabled={reviewing}
+              onClick={() => void setReviewed(false)}>Undo</button>
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-1.5 px-3.5 pt-2 text-[11px] text-muted-foreground">
         <Phone className="h-3 w-3" />
         <span className="font-semibold text-foreground">{phone ? fmtPhone(phone) : (p.phone || "no phone on file")}</span>
