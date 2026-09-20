@@ -31,6 +31,7 @@ const row: NewOrderRow = {
   cahOrderNumber: "1121404441", poNumber: "MM-13076160232-20260918", carrier: "FedEx",
   estShipDate: "", shipDate: "2026-09-18", deliveryDate: "2026-09-19", signedBy: "",
   trackingNumbers: ["541809550825"], confirmedAddress: "", lastCardinalSync: "9/19/2026, 20:02:52 ET",
+  preCheck: "", preCheckDetail: "", pos: "", groupId: "group_mm18v6n3", monitorAuthId: "", sensorsAuthId: "", pumpAuthId: "", infusionSetAuthId: "", cartridgesAuthId: "",
   lineItemDetail: "ORDER STATUS 9/19/2026, 20:02:06 ET\nL1 TW7876801I x6 EA @79.32 -> SHIPPED\n   SHIP FedEx 541809550825 qty 6 on 2026-09-18 from TEXAS 4 WAREHOUSE\nL2 00MMWELCOME xnull EA @0 -> SHIPPED",
 };
 const older: NewOrderRow = { ...row, id: "1", orderDate: "2026-06-18", cahOrderNumber: "", apiStatus: "", trackingNumbers: [], shipDate: "", deliveryDate: "", lineItemDetail: "", orderType: "Reorder" };
