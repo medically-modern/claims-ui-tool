@@ -112,15 +112,13 @@ export function PatientRail({ p, lastOrderDay }: { p: LiveSubscriptionPatient; l
             ["notes", "Notes", <NotebookPen key="n" className="h-3.5 w-3.5" />, notes.length],
           ] as const).map(([t, label, icon, n]) => (
             <button key={t} type="button" onClick={() => setTab(t)}
+              title={t === "notes" ? "Subscription notes and the patient's reorder-portal message" : lastOrderDay ? `Since the last order (${usDate(lastOrderDay)}); automated reorder texts left out` : "No order on the Order Board yet — everything counts"}
               className={cn("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-semibold", tab === t ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
               {icon}{label}
               {typeof n === "number" && <span className={cn("rounded-full px-1.5 text-[10px] tabular-nums", n > 0 ? "bg-sky-100 text-sky-800" : "bg-muted text-muted-foreground")}>{n}</span>}
             </button>
           ))}
         </div>
-      </div>
-      <div className="px-3.5 pt-1.5 text-[10px] text-muted-foreground" title={lastOrderDay ? "Counted since the last order; the automated reorder texts are left out" : "No order on the Order Board yet — everything counts"}>
-        Counts since {lastOrderDay ? `the last order · ${usDate(lastOrderDay)}` : "the start"} · automated reorder texts left out
       </div>
       <div className="flex flex-wrap items-center gap-1.5 px-3.5 pt-2 text-[11px] text-muted-foreground">
         <Phone className="h-3 w-3" />

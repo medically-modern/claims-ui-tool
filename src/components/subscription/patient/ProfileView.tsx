@@ -242,9 +242,9 @@ export function ProfileView({
             <EditField label="Next order date" type="date" value={draft.nextOrderDate} onChange={(v) => setField("nextOrderDate", v)} />
             <EditSelect label="Subscription" value={draft.subscriptionType} onChange={(v) => setField("subscriptionType", v)} options={SUBSCRIPTIONS} />
             <EditSelect label="Frequency" value={draft.orderFrequency} onChange={(v) => setField("orderFrequency", v)} options={FREQUENCIES} blank="—" />
-            <div className="min-w-0">
+            <div className="col-span-2 min-w-0">
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">Reorder form</div>
-              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">{reorder}</div>
+              <div className="flex items-center gap-2 whitespace-nowrap pt-0.5 text-[12px]">{reorder}</div>
             </div>
             <EditSelect label="Sensors type" value={draft.sensorsType} onChange={(v) => setField("sensorsType", v)} options={SENSORS} blank="—" />
             <EditField label="CGM qty" type="number" min={0} value={draft.cgmQty} onChange={(v) => setField("cgmQty", v)} />
@@ -316,5 +316,7 @@ export function reorderState(p: LiveSubscriptionPatient) {
     return <><Chip tone="amber">No response yet</Chip><span className="text-[11px] text-muted-foreground">texted</span>{link}</>;
   }
   const tone = /confirm/i.test(resp) ? "green" : /cancel/i.test(resp) ? "red" : "amber";
-  return <><Chip tone={tone}>{resp}</Chip>{p.patientResponseAt && <span className="text-[11px] text-muted-foreground">{p.patientResponseAt.replace(/ ET$/, "")}</span>}{link}</>;
+  // "Aug 30, 2026, 2:49 PM ET" → "Aug 30, 2:49 PM" so the line stays a line.
+  const when = (p.patientResponseAt || "").replace(/,?\s*\d{4}/, "").replace(/\s*ET$/, "").trim();
+  return <><Chip tone={tone}>{resp}</Chip>{when && <span className="whitespace-nowrap text-[11px] text-muted-foreground">{when}</span>}{link}</>;
 }
