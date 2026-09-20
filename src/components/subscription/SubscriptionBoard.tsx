@@ -246,10 +246,12 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
       {/* Read and judged: the badge stays, in green, so the row still says a
           message existed and somebody decided (Brandon, 2026-09-20). */}
       {!check.needsRead && check.reviewed && (
-        <MessageSquare
-          className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-emerald-600 p-[2px] text-white ring-1 ring-emerald-700"
+        <span
+          className="absolute -top-1.5 -right-1.5 grid h-4 w-4 place-items-center rounded-full bg-white text-emerald-700 ring-1 ring-emerald-300 shadow-sm"
           aria-label={check.reviewed}
-        />
+        >
+          <MessageSquare className="h-2.5 w-2.5" strokeWidth={2.5} />
+        </span>
       )}
       {/* The M marks a Medicaid row whose order is due with no DVS run yet —
           the same rows that get the Run DVS checkbox. It is a note about what

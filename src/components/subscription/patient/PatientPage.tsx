@@ -13,7 +13,7 @@
  * view, so nothing about the patient is more than a glance away.
  */
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CalendarClock, FileText, Loader2, Package, PauseCircle, Pencil, RotateCcw, Save, User } from "lucide-react";
+import { ArrowLeft, CalendarClock, FileText, Loader2, Package, PauseCircle, Pencil, RotateCcw, Save, User, UserX } from "lucide-react";
 import { toast } from "sonner";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { runEligibilityCheck, saveSubscriptionPatient } from "@/api/setSubscriptionPatient";
@@ -30,6 +30,7 @@ import { isBlocked, type LanePatient } from "@/lib/subscription/lanes";
 import { ProfileView } from "./ProfileView";
 import { OrdersView } from "./OrdersView";
 import { PatientRail } from "./PatientRail";
+import { InactiveDialog } from "./InactiveDialog";
 import { lastOrderDay } from "@/lib/comms/sinceOrder";
 import { draftFrom, draftPatch, isDirty, type ProfileDraft } from "./draft";
 import { usDate } from "./atoms";
@@ -141,6 +142,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
   const blocked = isBlocked(lane);
   const [blockOpen, setBlockOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
+  const [inactiveOpen, setInactiveOpen] = useState(false);
   const onBlockDone = (msg: string) => { toast.success(msg); void invalidate(); };
 
   return (
@@ -197,9 +199,15 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
                 </>
               ) : (
                 <>
-                  <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px] text-rose-700 border-rose-200 hover:bg-rose-50" onClick={() => setBlockOpen(true)}
+                  {/* Pause is yellow (temporary), Inactive is red (out of the
+                      cycle) — Brandon, 2026-09-20. */}
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5 border-amber-300 bg-amber-50 text-[12px] text-amber-900 hover:bg-amber-100" onClick={() => setBlockOpen(true)}
                     title="Pause this patient — a reason and a check-in date; the row moves to Paused">
                     <PauseCircle className="h-3.5 w-3.5" /> Pause
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5 border-rose-300 bg-rose-50 text-[12px] text-rose-800 hover:bg-rose-100" onClick={() => setInactiveOpen(true)}
+                    title="Move this patient to Not Active — out of the Order Cycle until reactivated">
+                    <UserX className="h-3.5 w-3.5" /> Inactive
                   </Button>
                 </>
               )}
@@ -261,6 +269,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
 
       <BlockDialog patient={blockOpen ? lane : null} open={blockOpen} onClose={() => setBlockOpen(false)} onDone={onBlockDone} />
       <CheckInDialog patient={checkInOpen ? lane : null} open={checkInOpen} onClose={() => setCheckInOpen(false)} onDone={onBlockDone} />
+      <InactiveDialog patient={inactiveOpen ? p : null} open={inactiveOpen} onClose={() => setInactiveOpen(false)} />
     </div>
   );
 }

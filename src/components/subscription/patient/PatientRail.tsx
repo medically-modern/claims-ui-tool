@@ -147,20 +147,19 @@ export function PatientRail({ p, since }: { p: LiveSubscriptionPatient; since: S
           verdict on the order. Marking it turns the board's blue badge green;
           readiness follows on its own once the circles are green. */}
       {(p.confirmation.needsRead || p.confirmation.reviewed) && (
-        <div className={cn("flex items-center gap-2 border-b px-3.5 py-2 text-[12px]",
-          p.confirmation.needsRead ? "bg-sky-50 text-sky-950" : "bg-emerald-50 text-emerald-900")}>
-          <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">
-            {p.confirmation.needsRead ? `Unread since the last order — ${p.confirmation.needsRead}` : p.confirmation.reviewed}
-          </span>
+        <div className="flex items-center gap-2 border-b px-3.5 py-2">
           {p.confirmation.needsRead ? (
-            <Button size="sm" className="h-7 shrink-0 gap-1.5 bg-sky-700 px-2.5 text-[12px] hover:bg-sky-800" disabled={reviewing}
-              onClick={() => void setReviewed(true)} title="I read the texts, calls and notes since the last order">
+            <Button size="sm" variant="outline" disabled={reviewing}
+              className="h-8 w-full gap-1.5 border-emerald-300 bg-emerald-50 text-[12px] font-semibold text-emerald-800 hover:bg-emerald-700 hover:text-white"
+              onClick={() => void setReviewed(true)} title={`I read what was said since the last order — ${p.confirmation.needsRead}`}>
               {reviewing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Mark reviewed
             </Button>
           ) : (
-            <button type="button" className="shrink-0 text-[11px] text-emerald-800 underline-offset-2 hover:underline disabled:opacity-50" disabled={reviewing}
-              onClick={() => void setReviewed(false)}>Undo</button>
+            <>
+              <span className="inline-flex min-w-0 items-center gap-1.5 text-[12px] font-medium text-emerald-800"><Check className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{p.confirmation.reviewed}</span></span>
+              <button type="button" className="ml-auto shrink-0 text-[11px] text-muted-foreground underline-offset-2 hover:underline disabled:opacity-50" disabled={reviewing}
+                onClick={() => void setReviewed(false)}>Undo</button>
+            </>
           )}
         </div>
       )}
