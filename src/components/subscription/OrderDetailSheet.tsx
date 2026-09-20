@@ -52,6 +52,7 @@ export function OrderDetailSheet({ row, open, onClose }: { row: NewOrderRow | nu
             {row.orderStatus && <Pill label={row.orderStatus} tone={orderStatusTone(row.orderStatus)} />}
             {row.preCheck && <Pill label={row.preCheck} tone={preCheckTone(row.preCheck)} />}
             {pos && <Pill label="Office" tone="amber" />}
+            {row.shipMethod && <Pill label={row.shipMethod} tone="slate" />}
             {row.ddpOrder && /yes|ddp/i.test(row.ddpOrder) && <Pill label="DDP" tone="purple" />}
           </div>
         </SheetHeader>
@@ -84,19 +85,22 @@ export function OrderDetailSheet({ row, open, onClose }: { row: NewOrderRow | nu
             <div className="space-y-2">
               <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Products &amp; auth</div>
               <div className="space-y-2">
-                {cats.map((c) => (
-                  <div key={c.category} className="rounded-lg border bg-muted/20 px-3 py-2">
-                    <div className="text-[12px] font-semibold text-foreground">{c.category}</div>
-                    <div className="mt-0.5 text-[13px]">
-                      {c.items.length ? c.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(" · ") : <span className="text-muted-foreground">nothing on this order</span>}
+                {cats.map((c) => {
+                  const single = c.category === "Pump" || c.category === "Monitor";
+                  const line = [
+                    c.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(" · "),
+                    !single && c.device?.on ? `+ ${c.device.label}` : "",
+                  ].filter(Boolean).join(" · ");
+                  return (
+                    <div key={c.category} className="rounded-lg border bg-muted/20 px-3 py-2">
+                      <div className="text-[12px] font-semibold text-foreground">{c.category}</div>
+                      <div className="mt-0.5 text-[13px]">{line || <span className="text-muted-foreground">{single ? `${c.category} only` : "nothing on this order"}</span>}</div>
+                      {c.auths.length > 0 && (
+                        <div className="mt-1 text-[12px] text-muted-foreground">Auth on file: {c.auths.map((a) => a.label).join(", ")}</div>
+                      )}
                     </div>
-                    {c.auths.length > 0 && (
-                      <div className="mt-1 text-[12px] text-muted-foreground">
-                        {c.auths.map((a) => `${a.label} auth ${a.id}`).join(" · ")}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

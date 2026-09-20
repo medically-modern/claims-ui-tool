@@ -27,11 +27,11 @@ export function pillClass(tone: PillTone): string { return PILL[tone]; }
 /** Order Status → tone (labels + colours verified on the board 2026-09-20). */
 export function orderStatusTone(label: string): PillTone {
   switch (label.trim()) {
-    case "Order":               return "amber";
+    case "Order":               return "green";
     case "Ordered":             return "green";
     case "Paid Cash":           return "green";
     case "Stuck":               return "red";
-    case "On Hold":             return "blue";
+    case "On Hold":             return "amber";
     case "Process Claim":       return "purple";
     case "Return in Progress":  return "blue";
     case "Return Complete":     return "slate";
@@ -44,11 +44,11 @@ export function orderStatusTone(label: string): PillTone {
  *  not a headline (Brandon, 2026-09-20). */
 export function orderStatusBorder(label: string): string {
   switch (label.trim()) {
-    case "Order":         return "border-l-amber-400";
-    case "Ordered":       return "border-l-emerald-500";
-    case "Paid Cash":     return "border-l-emerald-500";
+    case "Order":         return "border-l-[#0f5c47]";  // Medically Modern green
+    case "Ordered":       return "border-l-emerald-400";
+    case "Paid Cash":     return "border-l-emerald-400";
     case "Stuck":         return "border-l-rose-500";
-    case "On Hold":       return "border-l-sky-500";
+    case "On Hold":       return "border-l-orange-500";
     case "Process Claim": return "border-l-violet-500";
     default:              return "border-l-slate-300";
   }
@@ -72,48 +72,101 @@ export function posLabel(pos: string): string | null {
 export interface OrderItem { name: string; qty: string }
 export interface OrderAuth { label: string; id: string }
 export interface OrderCategory {
-  category: "Sensors" | "Supplies";
+  /** "Pump" / "Monitor" are single-device orders (blank subscription). */
+  category: "Sensors" | "Supplies" | "Pump" | "Monitor";
+  /** The type ×qty lines: sensor; or cartridge + infusion set(s). */
   items: OrderItem[];
+  /** The yes/no device that rides with the category. */
+  device?: { label: "Monitor" | "Pump"; on: boolean };
   auths: OrderAuth[];
+  /** A monitor-only order that should be merged into the patient's sensors
+   *  order (set on the "Monitor" category only). */
+  monitorOnly?: boolean;
 }
 
 function num(s: string): number { const n = Number(String(s).replace(/[^\d.-]/g, "")); return Number.isFinite(n) ? n : 0; }
-function has(type: string, qty: string): boolean { return !!type.trim() && !/^none$/i.test(type.trim()) || num(qty) > 0; }
-function item(name: string, qty: string): OrderItem { return { name, qty: num(qty) > 0 ? `×${num(qty)}` : "" }; }
+/** A product type counts only when it names something real — not blank, "None",
+ *  or "Not Serving" (Brandon, 2026-09-20: drop Not Serving / blank). */
+function serving(type: string): boolean {
+  const t = (type || "").trim();
+  return !!t && !/^(none|not serving)$/i.test(t);
+}
+function line(type: string, qty: string, fallback: string): OrderItem | null {
+  if (!serving(type) && num(qty) <= 0) return null;
+  return { name: serving(type) ? type : fallback, qty: num(qty) > 0 ? `×${num(qty)}` : "" };
+}
 
 /**
- * Split a row into its Sensors / Supplies lines. A category appears when it
- * has any product on the order (a type set, or a positive quantity), OR when
- * the Subscription Type names it (so an empty-but-expected line still shows).
+ * Split a row into its category lines, driven by Subscription Type
+ * (Brandon, 2026-09-20): Supplies → Supplies only; Sensors → Sensors only;
+ * Sensors & Supplies → both. Blank means a single-device order — pump-only
+ * (pumps are always their own order) or monitor-only (monitors often ride
+ * with sensors and get merged in).
  */
 export function orderCategories(row: NewOrderRow): OrderCategory[] {
   const sub = (row.subscriptionType || "").toLowerCase();
   const out: OrderCategory[] = [];
 
-  const sensorItems: OrderItem[] = [];
-  if (has(row.cgmType, row.qtyCgmSensors)) sensorItems.push(item(row.cgmType || "CGM sensors", row.qtyCgmSensors));
-  if (num(row.qtyCgmMonitor) > 0) sensorItems.push(item("Monitor", row.qtyCgmMonitor));
-  const sensorAuths = [
+  const sensorItems = [line(row.cgmType, row.qtyCgmSensors, "CGM sensors")].filter(Boolean) as OrderItem[];
+  const monitorOn = num(row.qtyCgmMonitor) > 0;
+  const sensorAuths = ([
     { label: "Sensors", id: row.sensorsAuthId },
     { label: "Monitor", id: row.monitorAuthId },
-  ].filter((a) => a.id.trim());
-  if (sensorItems.length || sensorAuths.length || sub.includes("sensor")) {
-    out.push({ category: "Sensors", items: sensorItems, auths: sensorAuths });
-  }
+  ] as OrderAuth[]).filter((a) => a.id.trim());
 
-  const supplyItems: OrderItem[] = [];
-  if (has(row.pumpType, row.qtyPump)) supplyItems.push(item(row.pumpType || "Pump", row.qtyPump));
-  if (has(row.cartridgeType, row.qtyCartridge)) supplyItems.push(item(row.cartridgeType || "Cartridges", row.qtyCartridge));
-  if (has(row.infusionSet1Type, row.qtyInfusionSet1)) supplyItems.push(item(row.infusionSet1Type || "Infusion set", row.qtyInfusionSet1));
-  if (has(row.infusionSet2Type, row.qtyInfusionSet2)) supplyItems.push(item(row.infusionSet2Type || "Infusion set 2", row.qtyInfusionSet2));
-  const supplyAuths = [
+  const supplyItems = [
+    line(row.cartridgeType, row.qtyCartridge, "Cartridge"),
+    line(row.infusionSet1Type, row.qtyInfusionSet1, "Infusion set"),
+    line(row.infusionSet2Type, row.qtyInfusionSet2, "Infusion set 2"),
+  ].filter(Boolean) as OrderItem[];
+  const pumpOn = serving(row.pumpType) || num(row.qtyPump) > 0;
+  const supplyAuths = ([
     { label: "Pump", id: row.pumpAuthId },
     { label: "Cartridges", id: row.cartridgesAuthId },
     { label: "Infusion set", id: row.infusionSetAuthId },
-  ].filter((a) => a.id.trim());
-  if (supplyItems.length || supplyAuths.length || sub.includes("suppl")) {
-    out.push({ category: "Supplies", items: supplyItems, auths: supplyAuths });
-  }
+  ] as OrderAuth[]).filter((a) => a.id.trim());
 
+  const pushSensors = () => out.push({ category: "Sensors", items: sensorItems, device: { label: "Monitor", on: monitorOn }, auths: sensorAuths });
+  const pushSupplies = () => out.push({ category: "Supplies", items: supplyItems, device: { label: "Pump", on: pumpOn }, auths: supplyAuths });
+
+  if (sub.includes("sensor")) pushSensors();
+  if (sub.includes("suppl")) pushSupplies();
+  if (!sub) {
+    // Blank subscription: a single-device order.
+    if (pumpOn && supplyItems.length === 0 && sensorItems.length === 0 && !monitorOn) {
+      out.push({ category: "Pump", items: [], device: { label: "Pump", on: true }, auths: ([{ label: "Pump", id: row.pumpAuthId }] as OrderAuth[]).filter((a) => a.id.trim()) });
+    } else if (monitorOn && sensorItems.length === 0 && supplyItems.length === 0 && !pumpOn) {
+      out.push({ category: "Monitor", items: [], device: { label: "Monitor", on: true }, auths: ([{ label: "Monitor", id: row.monitorAuthId }] as OrderAuth[]).filter((a) => a.id.trim()), monitorOnly: true });
+    } else {
+      if (sensorItems.length || monitorOn) pushSensors();
+      if (supplyItems.length || pumpOn) pushSupplies();
+    }
+  }
   return out;
+}
+
+function normName(s: string): string { return String(s || "").toLowerCase().replace(/[^a-z]/g, ""); }
+
+/** Is this row a monitor-only order (the merge candidate)? */
+export function isMonitorOnly(row: NewOrderRow): boolean {
+  return orderCategories(row).some((c) => c.monitorOnly);
+}
+
+/**
+ * The sensors order on the board this monitor-only row should merge into: the
+ * same patient (name + DOB) with a sensors line, in the Order group. Null when
+ * there is no match yet — the button stays disabled until the sensors order
+ * lands (Brandon, 2026-09-20).
+ */
+export function monitorMergeTarget(monitor: NewOrderRow, all: NewOrderRow[]): NewOrderRow | null {
+  if (!isMonitorOnly(monitor)) return null;
+  const n = normName(monitor.name);
+  const dob = monitor.dob.trim();
+  return all.find((r) =>
+    r.id !== monitor.id
+    && r.groupId === monitor.groupId
+    && normName(r.name) === n
+    && (!dob || !r.dob.trim() || r.dob.trim() === dob)
+    && orderCategories(r).some((c) => c.category === "Sensors"),
+  ) ?? null;
 }

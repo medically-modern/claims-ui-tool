@@ -22,6 +22,7 @@ const COL = {
   pre_check:            "color_mm5bh2az",
   pre_check_detail:     "long_text_mm5byhdp",
   pos:                  "color_mm3rfpkt",
+  ship_method:          "color_mm3zsyhm",
   pump_type:            "color_mm1s45wm",
   cartridge_type:       "color_mm1szdck",
   infusion_set_1_type:  "color_mm1saxyg",
@@ -81,6 +82,7 @@ export interface NewOrderRow {
   preCheck: string;
   preCheckDetail: string;
   pos: string;
+  shipMethod: string;
   groupId: string;
   monitorAuthId: string;
   sensorsAuthId: string;
@@ -157,6 +159,7 @@ function mapItem(item: MondayItem): NewOrderRow {
     preCheck:            get(item, COL.pre_check),
     preCheckDetail:      get(item, COL.pre_check_detail),
     pos:                 get(item, COL.pos),
+    shipMethod:          get(item, COL.ship_method),
     groupId:             item.group?.id ?? "",
     monitorAuthId:       get(item, COL.monitor_auth_id),
     sensorsAuthId:       get(item, COL.sensors_auth_id),
