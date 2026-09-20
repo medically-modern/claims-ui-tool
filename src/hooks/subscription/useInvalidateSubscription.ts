@@ -27,5 +27,14 @@ export function useInvalidateSubscription() {
         : p));
     void invalidate();
   };
-  return { invalidate, markDvsRequested };
+  /** Optimistic half of Mark reviewed: the badge flips now, the refetch
+   *  confirms. (Undo just refetches — the unread summary isn't kept.) */
+  const markReviewed = (itemId: string, label: string) => {
+    qc.setQueryData<LiveSubscriptionPatient[]>(SUBSCRIPTION_PATIENTS_QUERY_KEY, (rows) =>
+      rows?.map((p) => String(p.mondayItemId) === String(itemId)
+        ? { ...p, confirmation: { ...p.confirmation, needsRead: undefined, needsReadLines: undefined, reviewed: label } }
+        : p));
+    void invalidate();
+  };
+  return { invalidate, markDvsRequested, markReviewed };
 }

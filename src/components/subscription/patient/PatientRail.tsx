@@ -13,7 +13,7 @@ import { Check, Loader2, MessageSquare, NotebookPen, Phone, Send } from "lucide-
 import { toast } from "sonner";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { addSubscriptionNote, writeOrderStamps } from "@/api/setSubscriptionPatient";
-import { makeStamp } from "@/lib/subscription/orderStamps";
+import { fmtStamp, makeStamp } from "@/lib/subscription/orderStamps";
 import { Button } from "@/components/ui/button";
 import { CallsTab } from "@/components/comms/CallsTab";
 import { TextsTab } from "@/components/comms/TextsTab";
@@ -81,7 +81,7 @@ export function PatientRail({ p, since }: { p: LiveSubscriptionPatient; since: S
   const [tab, setTab] = useState<"texts" | "calls" | "notes">("texts");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
-  const { invalidate } = useInvalidateSubscription();
+  const { invalidate, markReviewed } = useInvalidateSubscription();
   const phone = useMemo(() => toE164(p.phone), [p.phone]);
   const markers = useMemo(() => markersFor(p), [p]);
   const notes = useMemo(() => allNotes(p), [p]);
@@ -95,11 +95,13 @@ export function PatientRail({ p, since }: { p: LiveSubscriptionPatient; since: S
     if (reviewing) return;
     setReviewing(true);
     try {
+      const initials = operatorInitials();
       await writeOrderStamps(p.mondayItemId, {
-        correspondenceReviewed: on ? makeStamp({ initials: operatorInitials(), nextOrderDate: p.nextOrderDate }) : "",
+        correspondenceReviewed: on ? makeStamp({ initials, nextOrderDate: p.nextOrderDate }) : "",
       });
       toast.success(on ? "Marked reviewed for this order" : "Review undone");
-      void invalidate();
+      if (on) markReviewed(p.mondayItemId, `Reviewed by ${initials} ${fmtStamp({ at: Date.now(), iso: "", initials, forOrder: p.nextOrderDate, reason: "" })}`);
+      else void invalidate();
     } catch (e) {
       toast.error("Couldn't update", { description: e instanceof Error ? e.message : String(e) });
     } finally {
