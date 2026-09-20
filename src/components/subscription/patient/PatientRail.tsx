@@ -21,7 +21,7 @@ import { getUser } from "@/lib/comms/auth";
 import { commsConfigured, toE164 } from "@/lib/comms/gateway";
 import { fmtPhone } from "@/lib/comms/format";
 import { getCalls, getConversation } from "@/lib/comms/cache";
-import { callsSince, textsSince } from "@/lib/comms/sinceOrder";
+import { callsSince, textsSince, type SincePoint } from "@/lib/comms/sinceOrder";
 import { usDate } from "./atoms";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { cn } from "@/lib/utils";
@@ -72,7 +72,11 @@ function useSinceOrderCounts(phone: string, lastOrderDay: string) {
   return { texts, calls };
 }
 
-export function PatientRail({ p, lastOrderDay }: { p: LiveSubscriptionPatient; lastOrderDay: string }) {
+export function PatientRail({ p, since }: { p: LiveSubscriptionPatient; since: SincePoint }) {
+  const lastOrderDay = since.day;
+  const sinceLabel = lastOrderDay
+    ? `Since the last order (${usDate(lastOrderDay)}${since.estimated ? ", estimated from Next Order − frequency" : ""})`
+    : "No order date to count from — everything counts";
   const [tab, setTab] = useState<"texts" | "calls" | "notes">("texts");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -112,7 +116,7 @@ export function PatientRail({ p, lastOrderDay }: { p: LiveSubscriptionPatient; l
             ["notes", "Notes", <NotebookPen key="n" className="h-3.5 w-3.5" />, notes.length],
           ] as const).map(([t, label, icon, n]) => (
             <button key={t} type="button" onClick={() => setTab(t)}
-              title={t === "notes" ? "Subscription notes and the patient's reorder-portal message" : lastOrderDay ? `Since the last order (${usDate(lastOrderDay)}); automated reorder texts left out` : "No order on the Order Board yet — everything counts"}
+              title={t === "notes" ? "Subscription notes and the patient's reorder-portal message" : t === "texts" ? `${sinceLabel}; automated reorder texts left out` : sinceLabel}
               className={cn("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-semibold", tab === t ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
               {icon}{label}
               {typeof n === "number" && <span className={cn("rounded-full px-1.5 text-[10px] tabular-nums", n > 0 ? "bg-sky-100 text-sky-800" : "bg-muted text-muted-foreground")}>{n}</span>}
@@ -137,7 +141,7 @@ export function PatientRail({ p, lastOrderDay }: { p: LiveSubscriptionPatient; l
         ) : tab === "texts" ? (
           <div className="h-full min-h-0"><TextsTab phone={phone} markers={markers} /></div>
         ) : tab === "calls" ? (
-          <div className="h-full min-h-0"><CallsTab phone={phone} /></div>
+          <div className="h-full min-h-0"><CallsTab phone={phone} sinceDay={lastOrderDay} sinceLabel={sinceLabel} /></div>
         ) : (
           <div className="h-full min-h-0 overflow-y-auto bg-muted/20 p-3">
             {notes.length ? (

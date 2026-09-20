@@ -11,6 +11,7 @@ import { AlertTriangle, Loader2, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play
 import { cn } from "@/lib/utils";
 import { fetchRecordingBlobUrl } from "@/lib/comms/gateway";
 import { fetchedAt, getCalls } from "@/lib/comms/cache";
+import { callsSince } from "@/lib/comms/sinceOrder";
 import { callOutcomeLabel, summarizeCalls, type PatientCall } from "@/lib/comms/callHistory";
 import { fmtWhenET } from "@/lib/comms/format";
 
@@ -32,8 +33,15 @@ function CallIcon({ call }: { call: PatientCall }) {
   );
 }
 
-export function CallsTab({ phone }: { phone: string }) {
+/**
+ * `sinceDay` (yyyy-mm-dd) narrows the list to calls on or after that day — the
+ * patient page passes the last order day, so the tab shows this order's
+ * conversation and not a year of history (Brandon, 2026-09-20). Older calls
+ * stay one click away. No `sinceDay` = the whole year, as in the Claims sheet.
+ */
+export function CallsTab({ phone, sinceDay = "", sinceLabel }: { phone: string; sinceDay?: string; sinceLabel?: string }) {
   const [loading, setLoading] = useState(false);
+  const [showOlder, setShowOlder] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [calls, setCalls] = useState<PatientCall[] | null>(null);
   const [at, setAt] = useState<number | null>(null);
@@ -85,7 +93,10 @@ export function CallsTab({ phone }: { phone: string }) {
     return <p className="p-4 text-sm text-muted-foreground">No usable phone number on file for this patient.</p>;
   }
 
-  const summary = summarizeCalls(calls ?? []);
+  const recent = sinceDay ? callsSince(calls ?? [], sinceDay) : (calls ?? []);
+  const olderCount = (calls?.length ?? 0) - recent.length;
+  const shown = showOlder ? (calls ?? []) : recent;
+  const summary = summarizeCalls(shown);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -99,11 +110,13 @@ export function CallsTab({ phone }: { phone: string }) {
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <div>Couldn't load the call history. {err}</div>
           </div>
-        ) : calls && calls.length === 0 ? (
-          <p className="py-12 text-center text-sm text-muted-foreground">No calls with this number in the last year.</p>
+        ) : calls && shown.length === 0 ? (
+          <p className="py-12 text-center text-sm text-muted-foreground">
+            {calls.length === 0 ? "No calls with this number in the last year." : "No calls since the last order."}
+          </p>
         ) : (
           <ul className="space-y-1.5">
-            {(calls ?? []).map((c) => {
+            {shown.map((c) => {
               const a = audio[c.id] ?? {};
               return (
                 <li key={c.id} className="rounded-lg border border-border bg-card px-3 py-2">
@@ -144,6 +157,15 @@ export function CallsTab({ phone }: { phone: string }) {
           </ul>
         )}
       </div>
+      {calls && sinceDay && olderCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowOlder((v) => !v)}
+          className="shrink-0 border-t bg-muted/30 px-4 py-1.5 text-center text-[11px] font-medium text-muted-foreground hover:text-foreground"
+        >
+          {showOlder ? "Hide calls from before the last order" : `Show ${olderCount} older ${olderCount === 1 ? "call" : "calls"} from before the last order`}
+        </button>
+      )}
       <div className="flex shrink-0 items-center justify-between border-t bg-card px-4 py-2">
         <button
           type="button"
@@ -155,8 +177,8 @@ export function CallsTab({ phone }: { phone: string }) {
         </button>
         <span className="text-[11px] text-muted-foreground">
           {calls
-            ? `${summary.total} ${summary.total === 1 ? "call" : "calls"}${summary.missedInbound ? ` · ${summary.missedInbound} missed` : ""}${summary.recorded ? ` · ${summary.recorded} recorded` : ""} · last 12 months`
-            : "Last 12 months"}
+            ? `${summary.total} ${summary.total === 1 ? "call" : "calls"}${summary.missedInbound ? ` · ${summary.missedInbound} missed` : ""}${summary.recorded ? ` · ${summary.recorded} recorded` : ""} · ${sinceDay && !showOlder ? (sinceLabel ? sinceLabel.charAt(0).toLowerCase() + sinceLabel.slice(1) : "since the last order") : "last 12 months"}`
+            : sinceDay ? (sinceLabel ?? "Since the last order") : "Last 12 months"}
           {at ? ` · pulled ${fmtWhenET(new Date(at).toISOString())}` : ""}
         </span>
       </div>
