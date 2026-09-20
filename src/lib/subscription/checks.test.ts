@@ -20,6 +20,8 @@ const CLEAN: CheckInputs = {
   lastPatientContact: "",
   oopEstimate: "$0.00",
   totalGp: "300",
+  correspondenceReviewed: "",
+  confirmOverride: "",
   active: "Active",
   runCheck: "",
   lastEligibilityError: "",
@@ -102,6 +104,24 @@ describe("Confirm — decided per patient", () => {
     const c = run({ patientOrderResponse: "No Response", coordinatorNotes: "wants 90 days", notesUpdatedAt: Date.parse("2026-09-18T12:00:00Z") }).confirmation;
     expect(c.needsRead).toBeTruthy();
     expect(c.ruleId).toBe("confirm.no-reply-ok");
+  });
+});
+
+describe("Confirm — operator decisions for this order", () => {
+  it("an override for this order turns a no into a light green with the reason; for another order it does nothing", () => {
+    const c = run({ patientOrderResponse: "No Response", oopEstimate: "$40", confirmOverride: "2026-09-20T14:05 BE for 2026-09-25 — confirmed by phone" }).confirmation;
+    expect(c).toMatchObject({ tone: "ok", light: true, ruleId: "confirm.override" });
+    expect(c.why).toContain("BE");
+    expect(c.why).toContain("confirmed by phone");
+    const stale = run({ patientOrderResponse: "No Response", oopEstimate: "$40", confirmOverride: "2026-09-20T14:05 BE for 2026-06-25 — old" }).confirmation;
+    expect(stale.tone).toBe("bad");
+  });
+  it("a review stamp clears the badge for messages before it and not after", () => {
+    const noteAt = Date.parse("2026-09-18T12:00:00");
+    const before = run({ coordinatorNotes: "wants 90 days", notesUpdatedAt: noteAt, correspondenceReviewed: "2026-09-19T09:00 BE for 2026-09-25" }).confirmation;
+    expect(before.needsRead).toBeUndefined();
+    const after = run({ coordinatorNotes: "wants 90 days", notesUpdatedAt: noteAt, correspondenceReviewed: "2026-09-17T09:00 BE for 2026-09-25" }).confirmation;
+    expect(after.needsRead).toBeTruthy();
   });
 });
 

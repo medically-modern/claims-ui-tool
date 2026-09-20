@@ -126,6 +126,10 @@ export interface ReadInputs {
   lastPatientContact?: string | null;
   /** yyyy-mm-dd — the window ends here and opens 30 days earlier. */
   orderDate?: string | null;
+  /** Epoch ms when an operator marked this order's correspondence reviewed
+   *  (Correspondence Reviewed, valid for this order only). Anything said
+   *  before it has been read; anything after it re-raises the badge. */
+  reviewedAt?: number | null;
 }
 
 /** How far before the order date a note or a text still counts. */
@@ -147,7 +151,10 @@ export function readWindowStart(orderDate: string | null | undefined, now: numbe
  * that came due last Thursday is the most urgent case there is.
  */
 export function readSignal(p: ReadInputs, now: number = Date.now()): ReadSignal {
-  const since = readWindowStart(p.orderDate, now);
+  // The window floor, raised to the review stamp when there is one: read
+  // messages do not badge; a newer one does.
+  const reviewed = typeof p.reviewedAt === "number" ? p.reviewedAt : null;
+  const since = Math.max(readWindowStart(p.orderDate, now), reviewed ?? 0);
   const sources: string[] = [];
   const lines: string[] = [];
 

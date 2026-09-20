@@ -119,6 +119,7 @@ export type RuleId =
   | "confirm.fill-loses-money"
   | "confirm.oop-unknown"
   | "confirm.gp-unknown"
+  | "confirm.override"
   | "elig.hospice-medicare"
   | "elig.hospice-other"
   | "elig.medicare-freshness"
@@ -213,6 +214,14 @@ export const RULES: readonly RuleDef[] = [
     verdict: "block",
     flag: "gp-unknown",
     source: "Brandon, 2026-09-20 — a blank margin can't pass; fix the financials on the board.",
+  },
+  {
+    id: "confirm.override",
+    check: "confirmation",
+    applies: "Any payer",
+    when: "An operator advanced this order from the patient page with a reason (Confirm Override, valid for this order only)",
+    verdict: "pass",
+    source: "Brandon, 2026-09-20 — overrides are per order, made from the profile after reading the messages, and always carry a reason.",
   },
   {
     id: "elig.hospice-medicare",

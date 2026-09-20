@@ -18,7 +18,7 @@
 
 import { forwardRef, useMemo, useState } from "react";
 import {
-  AlertTriangle, Bell, Building2, CalendarClock, Check, ClipboardCheck,
+  AlertTriangle, ArrowRight, Bell, Building2, CalendarClock, Check, ClipboardCheck,
   Clock, DollarSign, ExternalLink, Heart, Loader2,
   MessageSquare, PauseCircle, Pencil, Phone, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
   Server, Shield, Stethoscope, UserCog, Unlock, UserCircle, UserX, X,
@@ -48,6 +48,7 @@ import { cn } from "@/lib/utils";
 import { PatientProfile } from "./PatientProfile";
 import { CommsSheet } from "@/components/comms/CommsSheet";
 import { useOpenPatient } from "./patient/openPatient";
+import { AdvanceDialog } from "./patient/AdvanceDialog";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
 import { NewOrders } from "./NewOrders";
@@ -55,7 +56,7 @@ import { PayerRulesTab } from "./PayerRulesTab";
 import { DvsQueue } from "./DvsQueue";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
-import { markConfirmedByOperator, runEligibilityCheck, saveSubscriptionPatient, sendToOrder } from "@/api/setSubscriptionPatient";
+import { runEligibilityCheck, saveSubscriptionPatient, sendToOrder } from "@/api/setSubscriptionPatient";
 import { bulkTriggerDvs } from "@/api/setDvsTrigger";
 import { canRunDvs } from "@/lib/subscription/dvs";
 import {
@@ -295,30 +296,16 @@ function CircleEditPopover({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const [note, setNote] = useState("");
+  const [advanceOpen, setAdvanceOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const { invalidate } = useInvalidateSubscription();
 
-  const confirmable = kind === "confirmation" && check.tone !== "ok";
+  // The Confirm circle offers the two decisions (Brandon, 2026-09-20): hold
+  // the patient (Pause) or move them on (Advance — marks the messages
+  // reviewed, overrides Confirm with a reason if it isn't green).
+  const decisions = kind === "confirmation";
   const runnable    = kind === "benefits" && check.tone !== "ok";
-
-  const markConfirmed = async () => {
-    setSaving(true); setErr(null);
-    try {
-      await markConfirmedByOperator(
-        patient.mondayItemId,
-        note.trim(),
-        (patient as unknown as { subscriptionNotes?: string }).subscriptionNotes,
-      );
-      invalidate();
-      setOpen(false); setNote("");
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const runElig = async () => {
     setSaving(true); setErr(null);
@@ -350,33 +337,30 @@ function CircleEditPopover({
                 Changes: {check.changes.join(" • ")}
               </div>
             )}
-            {check.patientMessage && (
+            {check.light && check.why && (
+              <div className="mt-1 text-[11px] text-muted-foreground">Rule: {check.why}</div>
+            )}
+            {check.needsRead && (
+              <div className="mt-1.5 rounded-md border border-sky-200 bg-sky-50/70 px-2 py-1.5 text-[11px] text-sky-950">
+                <div className="mb-0.5 font-semibold text-sky-900">Read before ordering</div>
+                {(check.needsReadLines?.length ? check.needsReadLines : [check.needsRead]).map((l, i) => <div key={i}>{l}</div>)}
+              </div>
+            )}
+            {!check.needsRead && check.patientMessage && (
               <div className="mt-1 text-[11px] text-sky-700">
                 Patient message: {check.patientMessage}
               </div>
             )}
           </div>
 
-          {confirmable && (
-            <div className="space-y-2 rounded-md border border-emerald-200 bg-emerald-50/60 p-2.5">
-              <div className="text-[11px] font-semibold text-emerald-800">
-                Confirm on the patient's behalf — e.g. they confirmed by text/call,
-                or you've decided it's safe to proceed.
-              </div>
-              <Textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="How did they confirm / why is it OK? (logged to patient notes)"
-                className="min-h-[54px] text-[12px] bg-white"
-              />
-              <Button
-                size="sm"
-                className="w-full bg-emerald-700 hover:bg-emerald-800"
-                disabled={saving}
-                onClick={() => void markConfirmed()}
-              >
-                {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />}
-                Mark Confirmed — operator
+          {decisions && (
+            <div className="grid grid-cols-2 gap-2">
+              <Button size="sm" variant="outline" className="text-rose-700 border-rose-200 hover:bg-rose-50"
+                onClick={() => { setOpen(false); onBlockRequest?.(patient); }} disabled={!onBlockRequest}>
+                <PauseCircle className="mr-1.5 h-3.5 w-3.5" /> Pause…
+              </Button>
+              <Button size="sm" className="bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}>
+                <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Advance…
               </Button>
             </div>
           )}
@@ -394,7 +378,7 @@ function CircleEditPopover({
             </Button>
           )}
 
-          {onBlockRequest && (
+          {!decisions && onBlockRequest && (
             <Button
               size="sm"
               variant="outline"
@@ -402,7 +386,7 @@ function CircleEditPopover({
               onClick={() => { setOpen(false); onBlockRequest(patient); }}
             >
               <PauseCircle className="mr-1.5 h-3.5 w-3.5" />
-              Block order…
+              Pause…
             </Button>
           )}
 
@@ -411,6 +395,7 @@ function CircleEditPopover({
           )}
         </div>
       </PopoverContent>
+      {decisions && <AdvanceDialog patient={advanceOpen ? patient : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />}
     </Popover>
   );
 }

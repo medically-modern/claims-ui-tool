@@ -13,7 +13,7 @@
  * view, so nothing about the patient is more than a glance away.
  */
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CalendarClock, FileText, Loader2, Package, PauseCircle, Pencil, RotateCcw, Save, User } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarClock, FileText, Loader2, Package, PauseCircle, Pencil, RotateCcw, Save, User } from "lucide-react";
 import { toast } from "sonner";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { runEligibilityCheck, saveSubscriptionPatient } from "@/api/setSubscriptionPatient";
@@ -26,6 +26,7 @@ import { ordersForPatient } from "@/lib/subscription/orderHistory";
 import { cn } from "@/lib/utils";
 import { ClaimHistoryCard } from "../ClaimHistoryCard";
 import { BlockDialog, CheckInDialog } from "../SubscriptionBoard";
+import { AdvanceDialog } from "./AdvanceDialog";
 import { isBlocked, type LanePatient } from "@/lib/subscription/lanes";
 import { ProfileView } from "./ProfileView";
 import { OrdersView } from "./OrdersView";
@@ -140,6 +141,9 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
   const blocked = isBlocked(lane);
   const [blockOpen, setBlockOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
+  const [advanceOpen, setAdvanceOpen] = useState(false);
+  const readyNow = (p.orderingCycle || "") === "Ready to Order" && !p.confirmation.needsRead
+    && [p.confirmation, p.benefits, p.auth, p.lastPaid].every((c) => c.tone === "ok");
   const onBlockDone = (msg: string) => { toast.success(msg); void invalidate(); };
 
   return (
@@ -184,7 +188,8 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
                 {p.email && <><span aria-hidden>·</span><a href={`mailto:${p.email}`} className="max-w-[260px] truncate text-primary hover:underline" title={p.email}>{p.email}</a></>}
               </div>
             </div>
-            {/* The one decision that belongs to the whole patient, not to a tab. */}
+            {/* The two decisions that belong to the whole patient, not to a
+                tab: hold them (Pause) or move them on (Advance). */}
             <div className="flex shrink-0 items-center gap-1.5 self-center">
               {blocked ? (
                 <>
@@ -192,10 +197,18 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
                   <Button variant="ghost" size="sm" className="h-8 text-[12px] text-muted-foreground" onClick={() => setBlockOpen(true)} title="Change the block reason or check-in date">Edit pause</Button>
                 </>
               ) : (
-                <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-[12px] text-muted-foreground hover:text-rose-700" onClick={() => setBlockOpen(true)}
-                  title="Pause this patient — a reason and a check-in date; the row moves to Blocked">
-                  <PauseCircle className="h-3.5 w-3.5" /> Pause
-                </Button>
+                <>
+                  <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-[12px] text-muted-foreground hover:text-rose-700" onClick={() => setBlockOpen(true)}
+                    title="Pause this patient — a reason and a check-in date; the row moves to Blocked">
+                    <PauseCircle className="h-3.5 w-3.5" /> Pause
+                  </Button>
+                  {!readyNow && (
+                    <Button variant="outline" size="sm" className="h-8 gap-1.5 border-emerald-200 text-[12px] text-emerald-800 hover:bg-emerald-50" onClick={() => setAdvanceOpen(true)}
+                      title="Mark this order's messages reviewed (and override Confirm with a reason if it isn't green); moves to Ready to Order when the five circles are green">
+                      <ArrowRight className="h-3.5 w-3.5" /> Advance
+                    </Button>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -256,6 +269,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
 
       <BlockDialog patient={blockOpen ? lane : null} open={blockOpen} onClose={() => setBlockOpen(false)} onDone={onBlockDone} />
       <CheckInDialog patient={checkInOpen ? lane : null} open={checkInOpen} onClose={() => setCheckInOpen(false)} onDone={onBlockDone} />
+      <AdvanceDialog patient={advanceOpen ? p : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />
     </div>
   );
 }

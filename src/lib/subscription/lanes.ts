@@ -248,6 +248,9 @@ export function allChecksGreen(p: LanePatient): boolean {
  */
 export function isReady(p: LanePatient): boolean {
   if (isBlocked(p)) return false;
+  // Unread correspondence holds the row in Order Prep whatever the marks say
+  // (Brandon, 2026-09-20): read it from the profile, then advance.
+  if (p.confirmation.needsRead) return false;
   return allChecksGreen(p);
 }
 

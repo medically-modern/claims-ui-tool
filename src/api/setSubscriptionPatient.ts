@@ -218,3 +218,16 @@ export async function addSubscriptionNote(
   await writeSimple(mondayItemId, SUB_COL.subscription_notes, merged);
   return merged;
 }
+
+/**
+ * The two per-order decisions from the patient page (lib/subscription/
+ * orderStamps.ts builds the text). Reviewed = "I read the messages for this
+ * order"; override = "advance although Confirm is not green", with a reason.
+ */
+export async function writeOrderStamps(
+  mondayItemId: string,
+  stamps: { correspondenceReviewed?: string; confirmOverride?: string },
+): Promise<void> {
+  if (stamps.correspondenceReviewed != null) await writeSimple(mondayItemId, SUB_COL.correspondence_reviewed, stamps.correspondenceReviewed);
+  if (stamps.confirmOverride != null) await writeSimple(mondayItemId, SUB_COL.confirm_override, stamps.confirmOverride);
+}

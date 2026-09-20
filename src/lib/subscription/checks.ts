@@ -29,6 +29,7 @@ import {
   payerGroupFor,
   type PatientFlag, type PayerGroup, type PayerGroupId, type RuleId,
 } from "./payerRules";
+import { fmtStamp, stampFor } from "./orderStamps";
 
 // ─── Inputs ─────────────────────────────────────────────────────────────────
 
@@ -51,6 +52,9 @@ export interface CheckInputs {
   oopEstimate: string;
   /** Total GP as raw text — blank must stay distinguishable from 0. */
   totalGp: string;
+  /** Correspondence Reviewed / Confirm Override cells (lib/subscription/orderStamps). */
+  correspondenceReviewed: string;
+  confirmOverride: string;
   // Eligibility
   active: string;
   runCheck: string;
@@ -152,12 +156,14 @@ export function parseLatestChangeLines(summary: string): string[] {
 
 export function deriveConfirmation(i: CheckInputs, firstOrder: boolean): { check: Checkpoint; flags: PatientFlag[] } {
   const por = i.patientOrderResponse;
+  const reviewed = stampFor(i.correspondenceReviewed, i.orderDate);
   const signal = readSignal({
     helpMessage:        i.patientHelpMessage,
     coordinatorNotes:   i.coordinatorNotes,
     notesUpdatedAt:     i.notesUpdatedAt,
     lastPatientContact: i.lastPatientContact,
     orderDate:          i.orderDate,
+    reviewedAt:         reviewed?.at ?? null,
   });
   // What the patient changed: the parsed change summary (address, order date,
   // CGM/pump type, infusion sets, insurance); the standalone Patient Insurance
@@ -215,6 +221,22 @@ export function deriveConfirmation(i: CheckInputs, firstOrder: boolean): { check
     orderDate: i.orderDate, today: i.today, firstOrder,
   });
   if (firstOrder) return { check: firstOrderPass(baseline), flags: policy.flags };
+
+  // An operator's override for THIS order: they looked, decided, and said
+  // why. It turns a no into a yes and is shown as such (light, with the
+  // reason) — never silently (Brandon, 2026-09-20).
+  const override = stampFor(i.confirmOverride, i.orderDate);
+  if (override && baseline.tone !== "ok") {
+    return {
+      check: {
+        ...baseline, tone: "ok", light: true, ruleId: "confirm.override",
+        why: `Overridden by ${override.initials} ${fmtStamp(override)}${override.reason ? ` — ${override.reason}` : ""}`,
+        overrideReason: override.reason || `Overridden by ${override.initials}`,
+        unknown: undefined, awaiting: undefined,
+      },
+      flags: policy.flags,
+    };
+  }
   if (baseline.tone !== "pending") return { check: baseline, flags: policy.flags };
 
   const check = ruled(baseline, policy.ruleId, policy.affirmativeOnly
