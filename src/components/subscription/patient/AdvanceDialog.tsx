@@ -1,18 +1,19 @@
 /**
- * AdvanceDialog — the operator's other decision (the first being Pause):
- * "I've looked at this patient; move them on to Ready to Order."
+ * AdvanceDialog — "Order anyway" for the Confirm circle: the rule says don't
+ * order (no reply with an OOP over $5, a negative-GP fill, a declined
+ * response…) and the operator says order, with a reason.
  *
  * What it writes, for THIS order only (lib/subscription/orderStamps.ts):
- *   - Correspondence Reviewed — always: the messages for this order are read,
- *     so the badge drops and stops holding the row in Order Prep.
- *   - Confirm Override — when the Confirm circle is not green: turns it into a
- *     light green with the reason on the hover. A reason is required.
- *   - Ordering Cycle = Ready to Order — when, after that, all five circles are
- *     green. If another circle is still red or amber the row stays in Order
- *     Prep and the dialog says which one; nothing here overrides those.
+ *   - Confirm Override — turns the circle light green with the reason on it.
+ *     A reason is always required.
+ *   - Correspondence Reviewed — overriding implies the messages were read.
+ *   - Ordering Cycle = Ready to Order — only when, after that, all five
+ *     circles are green; otherwise the row stays in Order Prep and the dialog
+ *     says which circle is still holding it. Nothing here overrides those:
+ *     overrides are one circle at a time, each with its own reason
+ *     (Brandon, 2026-09-20).
  *
- * Opened from the patient header (next to Pause) and from the Confirm circle
- * on the Order Prep board (Brandon, 2026-09-20).
+ * Opened from the Confirm circle's popover when Confirm is not green.
  */
 import { useMemo, useState } from "react";
 import { ArrowRight, Check, Loader2, MessageSquare, X } from "lucide-react";
@@ -57,10 +58,8 @@ export function AdvanceDialog({ patient, open, onClose }: {
 
   const willOverride = !view.confirmOk;
   const canAdvance = view.others.length === 0;
-  const needReason = willOverride && reason.trim().length < 3;
-  const primaryLabel = canAdvance
-    ? (willOverride ? "Override Confirm & advance to Ready to Order" : view.needsRead ? "Mark reviewed & advance to Ready to Order" : "Advance to Ready to Order")
-    : (willOverride ? "Override Confirm (stays in Order Prep)" : "Mark messages reviewed");
+  const needReason = reason.trim().length < 3;
+  const primaryLabel = canAdvance ? "Order anyway — Ready to Order" : "Order anyway (stays in Order Prep)";
 
   const go = async () => {
     if (needReason || saving) return;
@@ -70,14 +69,14 @@ export function AdvanceDialog({ patient, open, onClose }: {
       const stamps: { correspondenceReviewed?: string; confirmOverride?: string } = {
         correspondenceReviewed: makeStamp({ initials, nextOrderDate: p.nextOrderDate }),
       };
-      if (willOverride) stamps.confirmOverride = makeStamp({ initials, nextOrderDate: p.nextOrderDate, reason: reason.trim() });
+      stamps.confirmOverride = makeStamp({ initials, nextOrderDate: p.nextOrderDate, reason: reason.trim() });
       await writeOrderStamps(p.mondayItemId, stamps);
       if (canAdvance) {
         const r = await saveSubscriptionPatient(p.mondayItemId, { orderingCycle: "Ready to Order" });
         if (r.failed.length) throw new Error(r.failed[0].error);
         toast.success(`${p.name} is Ready to Order`);
       } else {
-        toast.success(willOverride ? `Confirm overridden for ${p.name}` : `Messages marked reviewed for ${p.name}`, {
+        toast.success(`Confirm overridden for ${p.name}`, {
           description: `Still in Order Prep: ${view.others.map(([k, c]) => `${NAMES[k]} — ${c.label}`).join(" · ")}`,
         });
       }
@@ -95,9 +94,9 @@ export function AdvanceDialog({ patient, open, onClose }: {
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle className="text-[16px]">Advance {p.name} to Ready to Order</DialogTitle>
+          <DialogTitle className="text-[16px]">Order anyway — Confirm for {p.name}</DialogTitle>
           <DialogDescription className="text-[12px]">
-            For the order due {p.nextOrderDate || "—"}. This decision is per order; it clears when the order goes out.
+            Overrides the Confirm circle for the order due {p.nextOrderDate || "—"}, with your reason on it. Per order; it clears when the order goes out.
           </DialogDescription>
         </DialogHeader>
 
@@ -105,7 +104,7 @@ export function AdvanceDialog({ patient, open, onClose }: {
           <div className="rounded-lg border border-sky-200 bg-sky-50/70 px-3 py-2">
             <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-sky-900"><MessageSquare className="h-3.5 w-3.5" /> Read before ordering</div>
             <ul className="space-y-1 text-[12px] text-sky-950">{view.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
-            <div className="mt-1.5 text-[11px] text-sky-800">Advancing marks these as reviewed for this order. A newer message raises the badge again.</div>
+            <div className="mt-1.5 text-[11px] text-sky-800">Ordering anyway marks these as reviewed for this order. A newer message raises the badge again.</div>
           </div>
         )}
 
@@ -124,9 +123,9 @@ export function AdvanceDialog({ patient, open, onClose }: {
           })}
         </div>
 
-        {willOverride && (
+        {(
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-            <div className="text-[12px] font-semibold text-amber-900">Confirm is not green — say why it's OK to order</div>
+            <div className="text-[12px] font-semibold text-amber-900">Why is it OK to order?</div>
             <div className="text-[11px] text-amber-800">Goes on the circle's hover as "Overridden by {operatorInitials()} — your reason", for this order only.</div>
             <Textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. confirmed by phone today, same address; or OOP is $0 on their plan" className="mt-2 min-h-[64px] bg-white text-[12px]" />
           </div>
@@ -134,13 +133,13 @@ export function AdvanceDialog({ patient, open, onClose }: {
 
         {!canAdvance && (
           <div className="rounded-lg bg-muted px-3 py-2 text-[12px] text-muted-foreground">
-            The row stays in Order Prep: {view.others.map(([k, c]) => `${NAMES[k]} is ${c.label}`).join("; ")}. Those are not overridden here.
+            The row stays in Order Prep: {view.others.map(([k, c]) => `${NAMES[k]} is ${c.label}`).join("; ")}. Each of those is its own decision, from its own circle.
           </div>
         )}
 
         <DialogFooter className="gap-2 sm:gap-2">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button size="sm" className="gap-1.5" onClick={() => void go()} disabled={saving || needReason} title={needReason ? "A reason is required to override Confirm" : undefined}>
+          <Button size="sm" className="gap-1.5" onClick={() => void go()} disabled={saving || needReason} title={needReason ? "A reason is required" : undefined}>
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />} {primaryLabel}
           </Button>
         </DialogFooter>

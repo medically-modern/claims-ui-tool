@@ -52,12 +52,14 @@ import { AdvanceDialog } from "./patient/AdvanceDialog";
 import { NewOrders } from "./NewOrders";
 import { PayerRulesTab } from "./PayerRulesTab";
 import { describeCircle } from "@/lib/subscription/circleDetail";
+import { makeStamp } from "@/lib/subscription/orderStamps";
+import { operatorInitials } from "./patient/PatientRail";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { setDvsTrigger } from "@/api/setDvsTrigger";
 import { DvsQueue } from "./DvsQueue";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
-import { runEligibilityCheck, saveSubscriptionPatient, sendToOrder } from "@/api/setSubscriptionPatient";
+import { runEligibilityCheck, saveSubscriptionPatient, sendToOrder, writeOrderStamps } from "@/api/setSubscriptionPatient";
 import { bulkTriggerDvs } from "@/api/setDvsTrigger";
 import { canRunDvs } from "@/lib/subscription/dvs";
 import {
@@ -392,8 +394,10 @@ function CircleEditPopover({
                 onClick={() => { setOpen(false); onBlockRequest?.(patient); }} disabled={!onBlockRequest}>
                 <PauseCircle className="mr-1.5 h-3.5 w-3.5" /> Pause…
               </Button>
-              <Button size="sm" className="bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}>
-                <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Advance…
+              <Button size="sm" className="bg-sky-700 hover:bg-sky-800" disabled={saving}
+                onClick={() => void run(() => writeOrderStamps(patient.mondayItemId, { correspondenceReviewed: makeStamp({ initials: operatorInitials(), nextOrderDate: patient.nextOrderDate }) }))}
+                title="I read the texts, calls and notes since the last order">
+                {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />} Mark reviewed
               </Button>
             </div>
           ) : d.action === "pause" && onBlockRequest ? (
@@ -403,8 +407,9 @@ function CircleEditPopover({
             </Button>
           ) : null}
           {d.action === "advance" && (
-            <Button size="sm" className="w-full bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}>
-              <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Advance…
+            <Button size="sm" className="w-full bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}
+              title="Override this circle for this order, with a reason">
+              <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Order anyway…
             </Button>
           )}
           {d.action === "run-eligibility" && (
@@ -2002,7 +2007,7 @@ function OrderCycleWorkflow() {
                 or advance; nothing here auto-advances while it's unread. */}
             <TabsTrigger value="needsread" className="gap-1.5" title="A message since the last order is holding Confirm — read it, then pause or advance">
               <MessageSquare className="h-3.5 w-3.5 text-sky-700" />
-              Evaluate Confirmation
+              Needs Review
               <span className="rounded-full bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
                 {counts.dueNeedsRead}
               </span>
