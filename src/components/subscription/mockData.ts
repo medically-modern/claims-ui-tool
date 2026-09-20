@@ -126,7 +126,8 @@ export type SubscriptionPatient = {
   /** Which payer-rule group decided the light marks on this row. */
   payerGroup?: PayerGroupId;
   /** Row badges for money figures that should exist and don't: OOP unknown
-   *  inside 20 days of the order, GP unknown. See payerRules.confirmPolicy. */
+   *  from 18 days before the order (it is written at 19), GP unknown. See
+   *  payerRules.confirmPolicy. */
   flags?: PatientFlag[];
   // Order Cycle v2 block tracking (live columns; optional so mock rows
   // and older cached data still typecheck). See lanes.ts BlockFields.

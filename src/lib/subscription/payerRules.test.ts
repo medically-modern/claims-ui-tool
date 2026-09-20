@@ -61,7 +61,7 @@ describe("confirmPolicy", () => {
     expect(p.ruleId).toBe("confirm.fill-loses-money");
     expect(p.why).toContain("−$57.32");
   });
-  it("blank OOP inside 20 days: unknown, blocks, and raises the OOP-unknown badge", () => {
+  it("blank OOP inside 18 days: unknown, blocks, and raises the OOP-unknown badge", () => {
     const p = confirmPolicy({ ...base, oopEstimate: "", totalGp: "300" });
     expect(p.affirmativeOnly).toBe(true);
     expect(p.ruleId).toBe("confirm.oop-unknown");
@@ -72,8 +72,8 @@ describe("confirmPolicy", () => {
     expect(p.ruleId).toBe("confirm.oop-unknown");
     expect(p.flags[0].detail).toContain("Incomplete benefits data");
   });
-  it("blank OOP more than 20 days out: still unknown (blocks), but no badge — the estimate isn't due yet", () => {
-    const p = confirmPolicy({ ...base, orderDate: "2026-11-01", oopEstimate: "", totalGp: "300" });
+  it("blank OOP at 19–20 days out: still unknown (blocks), but no badge — the estimate is written at 19 days", () => {
+    const p = confirmPolicy({ ...base, orderDate: "2026-10-10", oopEstimate: "", totalGp: "300" });
     expect(p.affirmativeOnly).toBe(true);
     expect(p.ruleId).toBe("confirm.oop-unknown");
     expect(p.flags).toEqual([]);
