@@ -48,6 +48,14 @@ function daysAgo(iso: string, today: string): number | null {
   return Number.isFinite(a) && Number.isFinite(b) ? Math.round((b - a) / 86_400_000) : null;
 }
 
+/** "Aug 2, 2026, 2:23 PM ET" on/after (Next Order − 30 days)? Unparseable → show it. */
+export function answeredForThisOrder(stamp: string, nextOrderDate: string | null | undefined): boolean {
+  const t = new Date(String(stamp).replace(/\s+(ET|EST|EDT)\b/i, "")).getTime();
+  const o = new Date(String(nextOrderDate ?? "").slice(0, 10) + "T00:00:00").getTime();
+  if (!Number.isFinite(t) || !Number.isFinite(o)) return true;
+  return t >= o - 30 * 86_400_000;
+}
+
 function normPayer(s: string | null | undefined): string {
   return String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -83,7 +91,12 @@ export function describeCircle(kind: CheckpointKind, c: Checkpoint, p: P, today:
       const oop = parseMoney(p.oopEstimate ?? "");
       const gp = p.financials?.totalGP;
       const facts: CircleFact[] = [];
-      if (p.patientResponseAt) facts.push({ label: "Answered", value: p.patientResponseAt });
+      // Patient Response Timestamp is not cleared between orders, so a reply
+      // only counts here when it falls in this order's window (the reorder
+      // text goes out ~20 days ahead; 30 is a safe fence).
+      if (p.patientResponseAt && answeredForThisOrder(p.patientResponseAt, p.nextOrderDate)) {
+        facts.push({ label: "Answered", value: p.patientResponseAt });
+      }
       facts.push({ label: "OOP Estimate", value: oop == null ? "not populated yet" : fmtUsd(oop), tone: oop == null ? "muted" : undefined });
       facts.push({ label: "GP on this fill", value: typeof gp === "number" && Number.isFinite(gp) ? fmtUsd(gp) : "not calculated", tone: typeof gp === "number" && gp < 0 ? "bad" : undefined });
       // The no-reply rule reads best as the two numbers it looked at.
