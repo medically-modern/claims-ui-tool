@@ -61,6 +61,11 @@ export type Checkpoint = {
   /** The hover behind that badge: one line per thing to read, with the
    *  message text, e.g. "Subscription note: wants 90 days". */
   needsReadLines?: string[];
+  /** An operator read this order's messages and advanced anyway —
+   *  "Reviewed by BE 9/20 2:05 PM". The badge turns green instead of
+   *  disappearing, so the row still shows a message existed and was judged
+   *  (Brandon, 2026-09-20). */
+  reviewed?: string;
   /** An answer is already on its way — the DVS bot is running, or the claim
    *  it raised is still out. Renders "…" instead of a verdict: expect a check
    *  or an X shortly, and don't act in the meantime. */
