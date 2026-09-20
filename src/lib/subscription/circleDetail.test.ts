@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { describeCircle, suggestedMatches } from "./circleDetail";
+import { answeredForThisOrder, describeCircle, suggestedMatches } from "./circleDetail";
 import type { Checkpoint } from "@/components/subscription/mockData";
 
 const TODAY = "2026-09-20";
 
 // Tara Pratt, 2026-09-20: Medicaid, Supplies, no reply, DVS not run, MR expired.
+type P = Parameters<typeof describeCircle>[2];
 const tara = {
   name: "Tara Pratt", primaryPayer: "Medicaid", subscriptionType: "Supplies",
   oopEstimate: "$0", financials: { totalGP: 271.89 },
@@ -12,7 +13,7 @@ const tara = {
   triggerDvs: "", claimsStatusCol: "",
   primaryClaimPaid: "Fully Paid", secondaryClaimPaid: "",
   mnExpiry: "2026-01-08", mrStatus: "MR Expired", referralSource: "Other",
-} as unknown as Parameters<typeof describeCircle>[2];
+} as unknown as P;
 
 describe("describeCircle", () => {
   it("Confirm — no reply, advanced by rules, Pause only", () => {
@@ -46,7 +47,7 @@ describe("describeCircle", () => {
     expect(d.action).toBe("run-dvs");
   });
   it("Auth — non-DVS shows the served categories with dates", () => {
-    const p = { ...tara, primaryPayer: "Aetna", subscriptionType: "Sensors & Supplies", sensorsAuthStatus: "Auth Valid", sensorsAuthStart: "2026-06-01", sensorsAuthEnd: "2026-11-30", suppliesAuthStatus: "No Auth Needed" };
+    const p = { ...tara, primaryPayer: "Aetna", subscriptionType: "Sensors & Supplies", sensorsAuthStatus: "Auth Valid", sensorsAuthStart: "2026-06-01", sensorsAuthEnd: "2026-11-30", suppliesAuthStatus: "No Auth Needed" } as unknown as P;
     const d = describeCircle("auth", { tone: "ok", label: "Auth Valid / No Auth Needed" }, p, TODAY);
     expect(d.facts.map((f) => `${f.label}: ${f.value}`)).toEqual([
       "Sensors: Auth Valid · Jun 1, 2026 → Nov 30, 2026",
@@ -72,5 +73,13 @@ describe("suggestedMatches", () => {
     expect(suggestedMatches("Medicare", "Medicaid")).toBe(false);
     expect(suggestedMatches("Unknown", "Medicaid")).toBeNull();
     expect(suggestedMatches("", "Medicaid")).toBeNull();
+  });
+});
+
+describe("answeredForThisOrder", () => {
+  it("drops a reply from the previous cycle, keeps this one", () => {
+    expect(answeredForThisOrder("Aug 2, 2026, 2:23 PM ET", "2026-09-19")).toBe(false);
+    expect(answeredForThisOrder("Sep 3, 2026, 9:10 AM ET", "2026-09-19")).toBe(true);
+    expect(answeredForThisOrder("garbage", "2026-09-19")).toBe(true);
   });
 });
