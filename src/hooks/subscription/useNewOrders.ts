@@ -3,13 +3,14 @@ import { hasMondayToken } from "@/api/monday";
 import { fetchNewOrders, NewOrderRow } from "@/api/queries/newOrders";
 
 export const NEW_ORDERS_QUERY_KEY = ["subscription", "newOrders"] as const;
+export const NEW_ORDERS_STALE_MS = 30 * 1000;
 
 export function useNewOrders() {
   const q = useQuery<NewOrderRow[]>({
     queryKey: NEW_ORDERS_QUERY_KEY,
     queryFn: fetchNewOrders,
     enabled: hasMondayToken(),
-    staleTime:         30 * 1000,
+    staleTime:         NEW_ORDERS_STALE_MS,
     gcTime:            24 * 60 * 60 * 1000,
     refetchInterval:        30 * 1000,
     refetchIntervalInBackground: false,

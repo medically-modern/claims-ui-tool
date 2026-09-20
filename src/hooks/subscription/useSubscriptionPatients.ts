@@ -22,6 +22,8 @@ import { hasMondayToken } from "@/api/monday";
 import { ORDER_PREP_PATIENTS } from "@/components/subscription/mockData";
 
 export const SUBSCRIPTION_PATIENTS_QUERY_KEY = ["subscription", "patients"] as const;
+/** Shared with usePrefetchSubscription so the prefetch and the hook agree on "fresh". */
+export const SUBSCRIPTION_PATIENTS_STALE_MS = 90 * 1000;
 
 export function useSubscriptionPatients() {
   const q = useQuery<LiveSubscriptionPatient[]>({
@@ -32,7 +34,7 @@ export function useSubscriptionPatients() {
     // OR component remount sees a refetch fire, while the cached data
     // renders instantly during the round-trip. Operators no longer
     // hit "soft refresh did nothing because cache wasn\'t stale yet".
-    staleTime:         90 * 1000,
+    staleTime:         SUBSCRIPTION_PATIENTS_STALE_MS,
     gcTime:            24 * 60 * 60 * 1000,
     // Silent poll every 30s while the tab is open — picks up Monday-
     // side edits within ~30s automatically (mirrors Josh\'s pattern
