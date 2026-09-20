@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fulfillmentOf } from "./orderFulfillment";
+import { fulfillmentOf, orderProgress } from "./orderFulfillment";
 
 describe("orderFulfillment", () => {
   it("Hermy Sep 8: backordered line dropped + substituted, substitution shipped → Fully shipped", () => {
@@ -46,5 +46,40 @@ describe("orderFulfillment", () => {
 
   it("empty detail → unknown", () => {
     expect(fulfillmentOf("").status).toBe("unknown");
+  });
+});
+
+describe("orderProgress (one-glance lifecycle)", () => {
+  const shippedDetail = [
+    "L1 TN1013310I x3 BX @30.95 -> SHIPPED",
+    "   SHIP FedEx 537924437056 qty 3 on 2026-09-08 from NJ",
+    "SUBSTITUTED (dropped by Cardinal): TN1002817I",
+    "SUBSTITUTION ORDER 1121071396",
+    "L1 TN1001680I x3 BX @71.94 -> SHIPPED",
+    "   SHIP FedEx 537926241582 qty 3 on 2026-09-10 from NJ",
+  ].join("\n");
+
+  it("Hermy: fully shipped + delivery date + a stale hold message → Delivered", () => {
+    const p = orderProgress(shippedDetail, "Delivered", "2026-09-11");
+    expect(p.stage).toBe("delivered");
+    expect(p.substituted).toBe(true);
+  });
+  it("shipped, no delivery date → in transit", () => {
+    expect(orderProgress(shippedDetail, "Partially Shipped", "").stage).toBe("shipped");
+  });
+  it("nothing shipped + error API status → error", () => {
+    expect(orderProgress("", "Error", "").stage).toBe("error");
+  });
+  it("nothing shipped + accepted → accepted, awaiting ship", () => {
+    const detail = "L1 TW7874701I x6 EA @79.32 -> Accepted";
+    expect(orderProgress(detail, "Accepted", "").stage).toBe("accepted");
+  });
+  it("one shipped, one backordered → partial", () => {
+    const detail = [
+      "L2 TN1002817I x3 BX @71.94 -> Backordered (BO: 3)",
+      "L1 TN1013310I x3 BX @30.95 -> SHIPPED",
+      "   SHIP FedEx 526812700947 qty 3 on 2026-08-18 from NJ",
+    ].join("\n");
+    expect(orderProgress(detail, "Partially Shipped", "").stage).toBe("partial");
   });
 });

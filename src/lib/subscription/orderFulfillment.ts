@@ -121,3 +121,45 @@ export const SHIP_STATUS_LABEL: Record<ShipStatus, string> = {
   pending: "Pending",
   unknown: "No detail yet",
 };
+
+/**
+ * The one-glance lifecycle stage that answers: was there a booking error / is it
+ * on Cardinal's side; did it ship (full/partial, backorder?); did it deliver;
+ * still on backorder or substituted-and-shipped (Brandon, 2026-09-20).
+ *
+ * Reads the current API Status column for the booking stage (the row's hold
+ * MESSAGE is often stale — Hermy still says "Credit Check Failure" though it
+ * delivered — so a shipment/delivery always overrides an error), then the
+ * derived shipment status for the rest.
+ */
+export type OrderStage = "error" | "accepted" | "backordered" | "partial" | "shipped" | "delivered" | "sent";
+export interface OrderProgress { stage: OrderStage; label: string; detail?: string; substituted: boolean }
+
+export function orderProgress(detail: string, apiStatus: string, deliveryDate: string): OrderProgress {
+  const parsed = parseFulfillment(detail);
+  const f = summarize(parsed);
+  const substituted = parsed.substitutedSkus.length > 0;
+  const api = apiStatus.trim().toLowerCase();
+  const anyShipped = f.shipments.length > 0;
+  const delivered = !!deliveryDate.trim();
+  const looksError = /error|cannot|deleted|fail|reject|denied|put on hold/.test(api);
+
+  // A booking error only stands while nothing has shipped — once a box is out,
+  // any lingering hold text is history.
+  if (!anyShipped && looksError) return { stage: "error", label: "Error sending to Cardinal", detail: apiStatus.trim() || undefined, substituted };
+
+  if (f.status === "shipped") {
+    return delivered
+      ? { stage: "delivered", label: "Delivered", substituted }
+      : { stage: "shipped", label: "Shipped — in transit", substituted };
+  }
+  if (f.status === "partial") {
+    return { stage: "partial", label: "Partially shipped", detail: f.backorderedSkus.length ? "rest backordered" : "rest pending", substituted };
+  }
+  if (f.status === "backordered") return { stage: "backordered", label: "Backordered — nothing shipped", substituted };
+  // Nothing shipped, no error: Cardinal has accepted it and it's awaiting ship.
+  if (/accept|working|success|book/.test(api) || f.status === "pending") {
+    return { stage: "accepted", label: "Accepted — awaiting ship", substituted };
+  }
+  return { stage: "sent", label: apiStatus.trim() || "Sent to Cardinal", substituted };
+}
