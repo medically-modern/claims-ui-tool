@@ -77,6 +77,7 @@ import type { ServiceLine } from "@/lib/claims/types";
 import { DenialAnalysisTable } from "@/components/claims/DenialAnalysisTable";
 import { EftEnrollmentTable } from "@/components/claims/EftEnrollmentTable";
 import { SubscriptionBoard } from "@/components/subscription/SubscriptionBoard";
+import type { HeaderNavItem } from "@/components/claims/AppHeader";
 import { usePrefetchSubscription } from "@/hooks/subscription/usePrefetchSubscription";
 import { OpenPatientProvider, useOpenPatient } from "@/components/subscription/patient/openPatient";
 import { OpenPatientScreen } from "@/components/subscription/patient/OpenPatientScreen";
@@ -483,9 +484,27 @@ function compareRows(a: Claim, b: Claim, col: ColumnKey, dir: "asc" | "desc"): n
 }
 
 
+// ─── The three tools the banner switches between ────────────────────────────
+type TopLevel = "claims" | "subscription" | "financials";
+const TOP_LEVEL_NAV: HeaderNavItem<TopLevel>[] = [
+  { value: "claims",       label: "Claims" },
+  { value: "subscription", label: "Ordering" },
+  { value: "financials",   label: "Financials" },
+];
+const TOP_LEVEL_SUBTITLE: Record<TopLevel, string> = {
+  claims:       "Review ERAs, check unpaid claims, and resolve claim issues.",
+  subscription: "Tonight's orders — what's due, what's holding each one, and who's paused.",
+  financials:   "Revenue, cost and margin across the boards.",
+};
+const TOP_LEVEL_BOARD_URL: Record<TopLevel, string> = {
+  claims:       "https://medicallymodern-force.monday.com/boards/18245429780",
+  subscription: "https://medicallymodern-force.monday.com/boards/18407459988",
+  financials:   "https://medicallymodern-force.monday.com/boards/18245429780",
+};
+
 const Claims = () => {
   const { id: openPatientId } = useOpenPatient();
-  const [topLevel, setTopLevel] = useState<"claims" | "subscription" | "financials">("claims");
+  const [topLevel, setTopLevel] = useState<TopLevel>("claims");
   const [board, setBoard] = useState<BoardKey>("primary");
   const [mode, setMode] = useState<ModeKey>("review");
   const [category, setCategory] = useState<CategoryKey>("era");
@@ -1206,9 +1225,13 @@ const Claims = () => {
   return (
     <div className="min-h-screen bg-background">
       {showInitialLoading && <LoadingOverlay />}
-      <AppHeader
-        title="Claims Command Center"
-        subtitle="Review ERAs, check unpaid claims, and resolve claim issues."
+      {/* The banner switches tools — Claims · Ordering · Financials — like
+          the Command Center's own top nav (Brandon, 2026-09-20). */}
+      <AppHeader<TopLevel>
+        title="Command Center"
+        subtitle={TOP_LEVEL_SUBTITLE[topLevel]}
+        nav={{ items: TOP_LEVEL_NAV, value: topLevel, onChange: setTopLevel }}
+        mondayBoardUrl={TOP_LEVEL_BOARD_URL[topLevel]}
       />
 
       <main className="mx-auto max-w-[1920px] space-y-4 px-3 py-4 sm:space-y-6 sm:px-6 sm:py-6">
@@ -1216,20 +1239,6 @@ const Claims = () => {
             board tabs, no workflow tabs — only Profile | Orders | Claims for
             that patient; Back returns to the Order Cycle (Brandon, 2026-09-20). */}
         {openPatientId ? <OpenPatientScreen /> : (<>
-        {/* Top-level: Claims Board (the original product) vs Subscription Board.
-            Phone: shorter labels so all three tabs fit on one row. */}
-        <Tabs value={topLevel} onValueChange={(v) => setTopLevel(v as "claims" | "subscription" | "financials")}>
-          <TabsList className="bg-card border h-10 max-w-full">
-            <TabsTrigger value="claims" className="text-sm font-semibold">
-              <span className="sm:hidden">Claims</span><span className="hidden sm:inline">Claims Board</span>
-            </TabsTrigger>
-            <TabsTrigger value="subscription" className="text-sm font-semibold">
-              <span className="sm:hidden">Subscriptions</span><span className="hidden sm:inline">Subscription Board</span>
-            </TabsTrigger>
-            <TabsTrigger value="financials" className="text-sm font-semibold">Financials</TabsTrigger>
-          </TabsList>
-        </Tabs>
-
         {topLevel === "subscription" && <SubscriptionBoard />}
         {topLevel === "financials" && <FinancialsHub />}
         {topLevel === "claims" && (

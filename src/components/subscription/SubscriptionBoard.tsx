@@ -21,7 +21,7 @@ import {
   AlertTriangle, ArrowRight, Bell, Building2, CalendarClock, Check, ClipboardCheck,
   Clock, DollarSign, ExternalLink, Heart, Loader2,
   MessageSquare, PauseCircle, Pencil, Phone, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
-  Server, Shield, Stethoscope, UserCog, Unlock, UserCircle, UserX, X,
+  Server, Shield, Stethoscope, UserCog, Unlock, UserX, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -45,12 +45,9 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-import { PatientProfile } from "./PatientProfile";
 import { CommsSheet } from "@/components/comms/CommsSheet";
 import { useOpenPatient } from "./patient/openPatient";
 import { AdvanceDialog } from "./patient/AdvanceDialog";
-import { Authorizations } from "./Authorizations";
-import { MedicalRecords } from "./MedicalRecords";
 import { NewOrders } from "./NewOrders";
 import { PayerRulesTab } from "./PayerRulesTab";
 import { DvsQueue } from "./DvsQueue";
@@ -1738,50 +1735,61 @@ function OrderCycleWorkflow() {
   );
 
   // The primary nav, once. Rendered by the main board and by the two
-  // stand-alone tabs (Order, Rules) so the row of tabs is identical wherever
-  // the operator is.
+  // stand-alone tabs (Order, Rules) so the row is identical wherever the
+  // operator is. Due and Order are the work; Paused is the parked set,
+  // behind a divider. Overview and Rules are reference, not work — they sit
+  // to the right, out of the flow (Brandon, 2026-09-20).
   const primaryNav = (
     <Tabs value={primary} onValueChange={(v) => setPrimary(v as PrimaryTab)}>
       <TabsList className="bg-card border h-11 p-1">
         <TabsTrigger value="due" className="text-[15px] font-semibold gap-2 px-4"
-          title="Order date arrived, nothing blocking — tonight's worklist">
+          title="Order date arrived, nothing pausing it — tonight's worklist">
           Due
           <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.due}</span>
         </TabsTrigger>
-        <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4"
-          title="Order date in the future — the 4 checkpoint buckets prep the next 21 days">
-          Scheduled
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.scheduled}</span>
+        <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4"
+          title="Orders on the Order Board — placed, shipping, delivered">
+          Order
         </TabsTrigger>
+        <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
         <TabsTrigger value="blocked" className="text-[15px] font-semibold gap-2 px-4"
-          title="Actively blocked with a reason — watchers flag when the blocker resolves">
+          title="Paused with a reason — watchers flag when the reason resolves">
           <PauseCircle className="h-4 w-4 text-rose-600" />
-          Blocked
+          Paused
           <span className="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.paused}</span>
           {counts.possiblyResolved > 0 && (
             <span
               className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums"
-              title={`${counts.possiblyResolved} block${counts.possiblyResolved === 1 ? " looks" : "s look"} resolved — review`}
+              title={`${counts.possiblyResolved} pause${counts.possiblyResolved === 1 ? " looks" : "s look"} resolved — review`}
             >
               <Bell className="h-3 w-3" />{counts.possiblyResolved}
             </span>
           )}
         </TabsTrigger>
-        <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
-        <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4">
-          Order
-        </TabsTrigger>
-        <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
-        <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
-          Overview
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.overview}</span>
-        </TabsTrigger>
-        <TabsTrigger value="rules" className="text-[15px] font-semibold gap-2 px-4"
-          title="The payer rules behind the light marks — rendered from the same table the circles use">
-          Rules
-        </TabsTrigger>
       </TabsList>
     </Tabs>
+  );
+
+  // Reference views, to the right of the work nav. A pressed look when open;
+  // pressing again returns to Due.
+  const referenceNav = (
+    <div className="inline-flex items-center rounded-lg border bg-card p-0.5 text-[12px] font-semibold">
+      {([
+        ["overview", "Overview", counts.overview, "Every active patient with all five circles"],
+        ["rules", "Rules", null, "The payer rules behind the light marks — rendered from the same table the circles use"],
+      ] as const).map(([v, label, n, title]) => {
+        const on = primary === v;
+        return (
+          <button key={v} type="button" title={title} aria-pressed={on}
+            onClick={() => setPrimary(on ? "due" : v)}
+            className={cn("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 transition-colors",
+              on ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+            {label}
+            {n != null && <span className={cn("rounded-full px-1.5 text-[10px] tabular-nums", on ? "bg-background/20" : "bg-muted")}>{n}</span>}
+          </button>
+        );
+      })}
+    </div>
   );
 
   // New 'Order' tab — independent view rendered from the New Order
@@ -1790,7 +1798,7 @@ function OrderCycleWorkflow() {
   if (primary === "neworder") {
     return (
       <div className="space-y-4">
-        {primaryNav}
+        <div className="flex flex-wrap items-center justify-between gap-3">{primaryNav}{referenceNav}</div>
         <NewOrders />
       </div>
     );
@@ -1801,7 +1809,7 @@ function OrderCycleWorkflow() {
   if (primary === "rules") {
     return (
       <div className="space-y-4">
-        {primaryNav}
+        <div className="flex flex-wrap items-center justify-between gap-3">{primaryNav}{referenceNav}</div>
         <PayerRulesTab patients={all} />
       </div>
     );
@@ -1841,10 +1849,11 @@ function OrderCycleWorkflow() {
         <MarkLegend onRules={() => setPrimary("rules")} />
       </div>
 
-      {/* Primary nav: Due | Scheduled | Blocked | Order | Overview | Rules */}
+      {/* Primary nav: Due · Order | Paused — Overview / Rules off to the right */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         {primaryNav}
         <div className="flex items-center gap-2">
+          {referenceNav}
           {/* Send Reorder Text is auto-fired by Josh's backend automation
               when status hits 20-days and reorder link is empty — no
               manual button needed. */}
@@ -2080,7 +2089,7 @@ function OrderCycleWorkflow() {
           <div className="px-4 py-12 text-center text-sm text-muted-foreground">
             {phase === "ready" ? "Nothing ready to submit yet."
              : primary === "due" ? "Nothing due — every arrived order is either handled or blocked."
-             : primary === "blocked" ? "Nothing blocked. 🎉"
+             : primary === "blocked" ? "Nothing paused. 🎉"
              : "No patients in this phase right now."}
           </div>
         )}
@@ -2541,7 +2550,6 @@ function PhaseTable({
 
 
 // ─── Top-level SubscriptionBoard: 5 workflow tabs ────────────────────────────
-type WorkflowTab = "order-cycle" | "patient-profile" | "authorizations" | "medical-records" | "financials";
 
 /**
  * OrderCycleFreshness — inline pill mirroring PatientProfile's
@@ -2575,37 +2583,12 @@ function OrderCycleFreshness({ isFetching, dataUpdatedAt, onRefresh }: {
   );
 }
 
-const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof RefreshCw }[] = [
-  { id: "order-cycle",     label: "Order Cycle",     icon: RefreshCw },
-  { id: "patient-profile", label: "Patient Profile", icon: UserCircle },
-  { id: "authorizations",  label: "Authorizations",  icon: Shield },
-  { id: "medical-records", label: "Medical Records", icon: ClipboardCheck },
-];
-
+/**
+ * The Ordering tool. Only the Order Cycle is in use right now — the Patient
+ * Profile list, Authorizations and Medical Records workflows stay in the
+ * codebase but are off the nav (Brandon, 2026-09-20: "the only one we're
+ * using right now is for order cycle"). The profile opens from a row click.
+ */
 export function SubscriptionBoard() {
-  const [workflow, setWorkflow] = useState<WorkflowTab>("order-cycle");
-
-  return (
-    <div className="space-y-4">
-      {/* Workflow tab nav — sits above the Order Cycle\'s own Overview/Prep/Order nav */}
-      <Tabs value={workflow} onValueChange={(v) => setWorkflow(v as WorkflowTab)}>
-        <TabsList className="bg-card border h-12 p-1">
-          {WORKFLOW_TABS.map((t) => {
-            const Icon = t.icon;
-            return (
-              <TabsTrigger key={t.id} value={t.id} className="text-[15px] font-semibold gap-2 px-4">
-                <Icon className="h-4 w-4" />
-                {t.label}
-              </TabsTrigger>
-            );
-          })}
-        </TabsList>
-      </Tabs>
-
-      {workflow === "order-cycle"     && <OrderCycleWorkflow />}
-      {workflow === "patient-profile" && <PatientProfile />}
-      {workflow === "authorizations"  && <Authorizations />}
-      {workflow === "medical-records" && <MedicalRecords />}
-    </div>
-  );
+  return <OrderCycleWorkflow />;
 }
