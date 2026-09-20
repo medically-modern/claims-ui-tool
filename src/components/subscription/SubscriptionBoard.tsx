@@ -59,6 +59,8 @@ import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients
 import { setDvsTrigger } from "@/api/setDvsTrigger";
 import { DvsQueue } from "./DvsQueue";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
+import { useNewOrders } from "@/hooks/subscription/useNewOrders";
+import { ORDER_GROUP_ID } from "@/api/queries/newOrders";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { useOrderingCycleSync } from "@/hooks/subscription/useOrderingCycleSync";
 import { describeSync } from "@/lib/subscription/orderingCycleSync";
@@ -1415,6 +1417,11 @@ function OrderCycleWorkflow() {
     data: liveAll, loading, isFetching, error, usingMock, refetch, dataUpdatedAt,
   } = useSubscriptionPatients();
   const all: SubscriptionPatient[] = liveAll ?? [];
+  // Order-group count for the top-level "Order" tab pill — same shared
+  // React-Query cache the Order tab reads, so no extra fetch (Brandon,
+  // 2026-09-20: "a pill on Order tab to show how many i have in there").
+  const { data: newOrderData } = useNewOrders();
+  const orderCount = useMemo(() => newOrderData.filter((r) => r.groupId === ORDER_GROUP_ID).length, [newOrderData]);
   // Monday's Ordering Cycle follows the tool's readiness (Order Prep ↔ Ready
   // to Order) after every fresh read — see hooks/subscription/useOrderingCycleSync.
   const sync = useOrderingCycleSync();
@@ -1865,6 +1872,9 @@ function OrderCycleWorkflow() {
         <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4"
           title="Orders on the Order Board — placed, shipping, delivered">
           Order
+          {orderCount > 0 && (
+            <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-bold tabular-nums">{orderCount}</span>
+          )}
         </TabsTrigger>
         <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
         <TabsTrigger value="blocked" className="text-[15px] font-semibold gap-2 px-4"

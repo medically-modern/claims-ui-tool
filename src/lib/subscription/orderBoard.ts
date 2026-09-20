@@ -119,30 +119,37 @@ export function orderCategories(row: NewOrderRow): OrderCategory[] {
     { label: "Monitor", id: row.monitorAuthId },
   ] as OrderAuth[]).filter((a) => a.id.trim());
 
-  const supplyItems = [
+  // Supplies = cartridge + infusion sets; the pump is ALWAYS its own order and
+  // reads "Pump", never "Supplies" (Brandon, 2026-09-20).
+  const suppliesItems = [
     line(row.cartridgeType, row.qtyCartridge, "Cartridges", " Cartridges"),
     line(row.infusionSet1Type, row.qtyInfusionSet1, "Infusion set"),
     line(row.infusionSet2Type, row.qtyInfusionSet2, "Infusion set 2"),
-    line(row.pumpType, row.qtyPump, "Pump"),
   ].filter(Boolean) as OrderItem[];
-  const supplyAuths = ([
-    { label: "Pump", id: row.pumpAuthId },
+  const suppliesAuths = ([
     { label: "Cartridges", id: row.cartridgesAuthId },
     { label: "Infusion set", id: row.infusionSetAuthId },
   ] as OrderAuth[]).filter((a) => a.id.trim());
-  const cartridgeInfusion = supplyItems.filter((i) => !/pump/i.test(i.name)).length > 0;
+  const pumpItem = line(row.pumpType, row.qtyPump, "Pump");
+  const pumpAuths = ([{ label: "Pump", id: row.pumpAuthId }] as OrderAuth[]).filter((a) => a.id.trim());
 
-  if (sub.includes("sensor")) out.push({ category: "Sensors", items: sensorItems, auths: sensorAuths });
-  if (sub.includes("suppl")) out.push({ category: "Supplies", items: supplyItems, auths: supplyAuths });
+  const pushSensors = () => { if (sensorItems.length) out.push({ category: "Sensors", items: sensorItems, auths: sensorAuths }); };
+  const pushSupplies = () => {
+    if (pumpItem) out.push({ category: "Pump", items: [pumpItem], auths: pumpAuths });
+    if (suppliesItems.length) out.push({ category: "Supplies", items: suppliesItems, auths: suppliesAuths });
+  };
+
+  if (sub.includes("sensor")) pushSensors();
+  if (sub.includes("suppl")) pushSupplies();
   if (!sub) {
-    if (serving(row.pumpType) && !cartridgeInfusion && sensorQty === 0 && monitorQty === 0) {
+    if (serving(row.pumpType) && suppliesItems.length === 0 && sensorQty === 0 && monitorQty === 0) {
       // Pump-only order — qty is often blank on the board, so default to ×1.
-      out.push({ category: "Pump", items: [{ name: row.pumpType, qty: `×${num(row.qtyPump) || 1}` }], auths: ([{ label: "Pump", id: row.pumpAuthId }] as OrderAuth[]).filter((a) => a.id.trim()) });
-    } else if (monitorQty > 0 && sensorQty === 0 && !cartridgeInfusion && !serving(row.pumpType)) {
+      out.push({ category: "Pump", items: [{ name: row.pumpType, qty: `×${num(row.qtyPump) || 1}` }], auths: pumpAuths });
+    } else if (monitorQty > 0 && sensorQty === 0 && suppliesItems.length === 0 && !serving(row.pumpType)) {
       out.push({ category: "Monitor", items: [{ name: "Monitor", qty: `×${monitorQty}` }], auths: ([{ label: "Monitor", id: row.monitorAuthId }] as OrderAuth[]).filter((a) => a.id.trim()), monitorOnly: true });
     } else {
-      if (sensorItems.length) out.push({ category: "Sensors", items: sensorItems, auths: sensorAuths });
-      if (supplyItems.length) out.push({ category: "Supplies", items: supplyItems, auths: supplyAuths });
+      pushSensors();
+      pushSupplies();
     }
   }
   return out;

@@ -35,3 +35,14 @@ export async function mergeMonitorIntoSensors(opts: {
   // 2) delete the now-redundant monitor-only order
   await mondayQuery(DELETE_ITEM, { item: opts.monitorItemId });
 }
+
+const SET_STATUS = `
+  mutation SetOrderStatus($board: ID!, $item: ID!, $val: String!) {
+    change_simple_column_value(board_id: $board, item_id: $item, column_id: "status", value: $val) { id }
+  }
+`;
+
+/** Flip a New Order Board row's Order Status → "Ordered". */
+export async function markOrdered(itemId: string): Promise<void> {
+  await mondayQuery(SET_STATUS, { board: NEW_ORDER_BOARD_ID, item: itemId, val: "Ordered" });
+}

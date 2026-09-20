@@ -20,11 +20,25 @@ describe("orderCategories", () => {
     expect(cats[0].items.map((i) => `${i.name} ${i.qty}`.trim())).toEqual(["FreeStyle Libre 3 Plus ×6", "Monitor ×1"]);
     expect(cats[0].auths).toEqual([{ label: "Sensors", id: "S1" }, { label: "Monitor", id: "M1" }]);
   });
-  it("supplies-only order: one line, pump/cartridge/infusion", () => {
-    const cats = orderCategories(row({ subscriptionType: "Supplies", cartridgeType: "t:slim", qtyCartridge: "3", infusionSet1Type: "AutoSoft 90", qtyInfusionSet1: "3", pumpAuthId: "P1", cartridgesAuthId: "C1", infusionSetAuthId: "I1" }));
+  it("supplies-only order (no pump): one Supplies line, cartridge/infusion only", () => {
+    const cats = orderCategories(row({ subscriptionType: "Supplies", cartridgeType: "t:slim", qtyCartridge: "3", infusionSet1Type: "AutoSoft 90", qtyInfusionSet1: "3", cartridgesAuthId: "C1", infusionSetAuthId: "I1" }));
     expect(cats.map((c) => c.category)).toEqual(["Supplies"]);
     expect(cats[0].items.map((i) => `${i.name} ${i.qty}`.trim())).toEqual(["t:slim Cartridges ×3", "AutoSoft 90 ×3"]);
-    expect(cats[0].auths.map((a) => a.label)).toEqual(["Pump", "Cartridges", "Infusion set"]);
+    expect(cats[0].auths.map((a) => a.label)).toEqual(["Cartridges", "Infusion set"]);
+  });
+  it("a pump is always its own Pump line, never Supplies", () => {
+    // Supplies subscription that includes a pump → Pump split out from Supplies.
+    const cats = orderCategories(row({ subscriptionType: "Supplies", pumpType: "t:slim", qtyPump: "1", cartridgeType: "Cartridge", qtyCartridge: "3", pumpAuthId: "P1", cartridgesAuthId: "C1" }));
+    expect(cats.map((c) => c.category)).toEqual(["Pump", "Supplies"]);
+    expect(cats[0].items.map((i) => `${i.name} ${i.qty}`.trim())).toEqual(["t:slim ×1"]);
+    expect(cats[0].auths).toEqual([{ label: "Pump", id: "P1" }]);
+  });
+  it("pump-only under a Supplies subscription reads Pump, not Supplies", () => {
+    // James Simiele shape: subscription drives Supplies, but only a pump is on
+    // the order (Brandon, 2026-09-20: "this should say pump, not supplies").
+    const cats = orderCategories(row({ subscriptionType: "Supplies", pumpType: "t:slim", qtyPump: "1" }));
+    expect(cats.map((c) => c.category)).toEqual(["Pump"]);
+    expect(cats[0].items.map((i) => `${i.name} ${i.qty}`.trim())).toEqual(["t:slim ×1"]);
   });
   it("both: two lines", () => {
     const cats = orderCategories(row({ subscriptionType: "Sensors & Supplies", cgmType: "Dexcom G7", qtyCgmSensors: "3", cartridgeType: "Cartridge", qtyCartridge: "3" }));
