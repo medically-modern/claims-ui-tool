@@ -216,8 +216,8 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
           <nav className="mt-3 flex gap-1 border-t px-5" aria-label="Patient views">
             {([
               ["profile", "Profile", <User key="u" className="h-3.5 w-3.5" />, null],
-              ["orders", "Orders", <Package key="p" className="h-3.5 w-3.5" />, orders.loading && !orders.data.length ? "…" : String(myOrders.length)],
               ["claims", "Claims", <FileText key="f" className="h-3.5 w-3.5" />, claims.loading ? "…" : String(claims.claims.length)],
+              ["orders", "Orders", <Package key="p" className="h-3.5 w-3.5" />, orders.loading && !orders.data.length ? "…" : String(myOrders.length)],
             ] as const).map(([k, label, icon, n]) => (
               <button key={k} type="button" onClick={() => setView(k)} aria-current={view === k ? "page" : undefined}
                 className={cn("-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-[13px] font-semibold transition-colors",
@@ -244,7 +244,6 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
           <div className="space-y-3">
             <div>
               <h2 className="text-[16px] font-semibold">Claims</h2>
-              <div className="text-[11px] text-muted-foreground">Every claim raised from this subscription, joined on the Subscription Item ID · latest on top, click a row to show it above{p.nextOrderDate ? ` · next order ${usDate(p.nextOrderDate)}` : ""}</div>
             </div>
             <ClaimHistoryCard mondayItemId={p.mondayItemId} currentPayer={p.primaryPayer} />
           </div>
