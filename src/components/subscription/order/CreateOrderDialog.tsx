@@ -16,9 +16,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { NewOrderRow } from "@/api/queries/newOrders";
-import { createOrderFromLast, type OrderProducts } from "@/api/setNewOrder";
+import { createDuplicateOrder, type OrderProducts } from "@/api/setNewOrder";
 import {
-  CARTRIDGE_TYPES, CGM_TYPES, INFUSION_SET_1_TYPES, INFUSION_SET_2_TYPES, PUMP_TYPES,
+  CARTRIDGE_TYPES, CGM_TYPES, INFUSION_SET_1_TYPES, INFUSION_SET_2_TYPES, PUMP_TYPES, SUBSCRIPTION_TYPES,
 } from "@/lib/subscription/orderProductOptions";
 
 const normNm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
@@ -94,6 +94,8 @@ export function CreateOrderDialog({ open, onClose, rows, onCreated }: {
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<PatientEntry | null>(null);
   const [prod, setProd] = useState<OrderProducts | null>(null);
+  const [subType, setSubType] = useState("");
+  const [orderDate, setOrderDate] = useState(todayIso());
   const [creating, setCreating] = useState(false);
 
   const patients = useMemo(() => patientsFromRows(rows), [rows]);
@@ -103,17 +105,17 @@ export function CreateOrderDialog({ open, onClose, rows, onCreated }: {
     return patients.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 20);
   }, [patients, query]);
 
-  const reset = () => { setQuery(""); setPicked(null); setProd(null); setCreating(false); };
+  const reset = () => { setQuery(""); setPicked(null); setProd(null); setSubType(""); setOrderDate(todayIso()); setCreating(false); };
   const close = () => { reset(); onClose(); };
-  const pick = (p: PatientEntry) => { setPicked(p); setProd(productsFromRow(p.source)); };
+  const pick = (p: PatientEntry) => { setPicked(p); setProd(productsFromRow(p.source)); setSubType(p.source.subscriptionType || ""); setOrderDate(todayIso()); };
   const setField = (k: keyof OrderProducts, v: string) => setProd((p) => (p ? { ...p, [k]: v } : p));
 
   const create = async () => {
     if (!picked || !prod) return;
     setCreating(true);
     try {
-      await createOrderFromLast(picked.source, prod, todayIso());
-      toast.success(`New order created for ${picked.name}`, { description: "Landed in the Order group — pre-check will run." });
+      await createDuplicateOrder(picked.source, { products: prod, orderDateIso: orderDate, subscriptionType: subType, note: "One-off order creation" });
+      toast.success(`Order created for ${picked.name}`, { description: "Landed in the Order group — pre-check will run." });
       onCreated?.();
       close();
     } catch (e) {
@@ -167,7 +169,24 @@ export function CreateOrderDialog({ open, onClose, rows, onCreated }: {
                   {s?.pos && <div>POS {s.pos}</div>}
                 </div>
                 {s?.patientAddress && <div className="mt-1 text-[12px]">{s.patientAddress}</div>}
-                <div className="mt-1 text-[11px] text-muted-foreground">Copied from the order dated {s?.orderDate || "—"}. New order date: today.</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">Copied from the order dated {s?.orderDate || "—"} — everything except the products, subscription and date below carries over.</div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-[11px] font-medium text-muted-foreground">Subscription type</div>
+                  <Select value={subType || "—"} onValueChange={(v) => setSubType(v === "—" ? "" : v)}>
+                    <SelectTrigger className="mt-0.5 h-9 text-[13px]"><SelectValue placeholder="—" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="—" className="text-[13px]">—</SelectItem>
+                      {SUBSCRIPTION_TYPES.map((t) => <SelectItem key={t} value={t} className="text-[13px]">{t}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <div className="text-[11px] font-medium text-muted-foreground">Order date</div>
+                  <Input type="date" value={orderDate} onChange={(e) => setOrderDate(e.target.value)} className="mt-0.5 h-9 text-[13px]" />
+                </div>
               </div>
 
               {prod && (

@@ -43,6 +43,16 @@ export const INFUSION_SET_1_TYPES = [
   "Contact 6 mm 23\"", "Inset 6 mm 23\"", "Mio Advance Clear 9 mm 23\"", "QuickSet 18\"",
 ] as const;
 
+/** Ship Method status labels, verbatim from the board (color_mm3zsyhm). */
+export const SHIP_METHODS = [
+  "GND - Ground", "GNDSR - Ground Sig Req", "NEXTDAY - Next Day Air",
+  "NDSR - Next Day Sig Req", "2NDDAY - Second Day Air", "2NDDAYSR - 2nd Day Sig Req",
+  "TDS - Three Day Select",
+] as const;
+
+/** Subscription Type status labels (color_mm18h05q). */
+export const SUBSCRIPTION_TYPES = ["Sensors", "Supplies", "Sensors & Supplies"] as const;
+
 export const INFUSION_SET_2_TYPES = [
   "Not Serving",
   "AutoSoft XC 6 mm 5\"", "AutoSoft XC 6 mm 23\"", "AutoSoft XC 6 mm 32\"", "AutoSoft XC 6 mm 43\"",

@@ -82,7 +82,7 @@ function FreshnessPill({ isFetching, dataUpdatedAt, onRefresh }: {
   );
 }
 
-const ORDER_GRID = "grid grid-cols-[36px_minmax(190px,1fr)_140px_120px_minmax(160px,0.9fr)_minmax(170px,0.9fr)_minmax(300px,1.7fr)_120px] gap-4";
+const ORDER_GRID = "grid grid-cols-[36px_minmax(190px,1fr)_120px_140px_minmax(160px,0.9fr)_minmax(170px,0.9fr)_minmax(300px,1.7fr)_120px] gap-4";
 
 const CAT_TAG: Record<string, string> = {
   Sensors:  "bg-sky-100 text-sky-800",
@@ -120,8 +120,8 @@ function OrderList({ rows, onOpen, onOpenProfile, onMerge, mergingId, selected, 
       <div className={cn(ORDER_GRID, "sticky top-0 z-10 rounded-t-lg border-b border-l-4 border-l-transparent bg-slate-100 px-4 py-3 text-[15px] font-bold tracking-normal text-slate-700 items-end")}>
         <div className="flex items-center"><Checkbox checked={allSelectableChecked} onCheckedChange={onToggleAll} aria-label="Select all orderable" /></div>
         <div>Patient</div>
-        <div>Pre-Check</div>
         <div>Order Date</div>
+        <div>Pre-Check</div>
         <div>Subscription</div>
         <div>Insurance</div>
         <div>Order</div>
@@ -153,21 +153,23 @@ function OrderList({ rows, onOpen, onOpenProfile, onMerge, mergingId, selected, 
               <div className="font-semibold truncate hover:underline">{r.name}</div>
               {r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}
             </button>
+            <div className="tabular-nums">{fmtDate(r.orderDate)}</div>
             <div>{r.preCheck
               ? <span title={r.preCheckDetail || undefined}><Pill label={r.preCheck} tone={preCheckTone(r.preCheck)} /></span>
               : <span className="text-[12px] text-muted-foreground">—</span>}</div>
-            <div className="tabular-nums">{fmtDate(r.orderDate)}</div>
             <div className="min-w-0 font-medium truncate">{r.subscriptionType || "—"}</div>
             <div className="min-w-0">
               <div className="truncate">{r.primaryInsurance || "—"}</div>
               {pos && <Pill label="Office" tone="amber" />}
             </div>
             <button type="button" onClick={() => onOpen(r)} className="flex items-start gap-2 text-left">
-              {/* GNDSR flag in a left gutter so it sits to the left of ALL the
-                  category lines and the Pump/Supplies pills stay aligned. */}
-              {isGndsr(r.shipMethod) && (
-                <span className="mt-0.5 inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[11px] font-semibold bg-slate-200 text-slate-600" title={r.shipMethod}>GNDSR</span>
-              )}
+              {/* Fixed-width GNDSR gutter: always reserved so the category pills
+                  line up across every row, GNDSR or not (Brandon, 2026-09-20). */}
+              <div className="w-[52px] shrink-0 pt-0.5">
+                {isGndsr(r.shipMethod) && (
+                  <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-semibold bg-slate-200 text-slate-600" title={r.shipMethod}>GNDSR</span>
+                )}
+              </div>
               <div className="min-w-0 space-y-1">
               {cats.length ? cats.map((c) => <CategoryLine key={c.category} cat={c} />)
                 : <span className="text-[12px] text-muted-foreground">No products on the order</span>}
@@ -214,103 +216,96 @@ function productsLine(r: NewOrderRow): string {
     return items ? `${c.category}: ${items}` : c.category;
   }).join(" · ");
 }
-/** API status → tone. Anything that reads like an error is rose; accepted/ok green. */
-function apiStatusTone(s: string): string {
+/** API Status → a pill tone (same vocabulary as the Pre-Check pill). */
+function apiTone(s: string): Parameters<typeof pillClass>[0] {
   const l = s.trim().toLowerCase();
-  if (!l) return "text-muted-foreground";
-  if (/error|fail|reject|denied|invalid|stuck/.test(l)) return "text-rose-700 font-semibold";
-  if (/accept|success|ok|complete|sent|submitted/.test(l)) return "text-emerald-700 font-medium";
-  return "text-amber-700 font-medium";
+  if (!l) return "slate";
+  if (/error|hold|cannot|fail|reject|denied|deleted/.test(l)) return "red";
+  if (/deliver|success|accepted/.test(l)) return "green";
+  if (/ship/.test(l)) return "blue";
+  if (/warning|review|substitution needed|backorder|partial/.test(l)) return "amber";
+  return "slate";
 }
 const numOf = (s: string) => { const n = Number(String(s).replace(/[^\d.-]/g, "")); return Number.isFinite(n) ? n : 0; };
-/** Something on this order needs a human: API error, a hold, or a backorder. */
-function orderIssue(r: NewOrderRow): string | null {
-  if (r.holdReason.trim()) return `Hold: ${r.holdReason}`;
-  if (/error|fail|reject|denied|invalid|stuck/i.test(r.apiStatus)) return r.apiMessage || `API: ${r.apiStatus}`;
-  if (numOf(r.backorderedQty) > 0 || /yes|backorder/i.test(r.backordered)) return `Backordered${r.backorderedQty ? ` ×${numOf(r.backorderedQty)}` : ""}`;
-  if (/partial/i.test(r.substitutionStatus) || r.substituteSet.trim()) return `Substitution: ${r.substituteSet || r.substitutionStatus}`;
-  return null;
+/** Backordered products on this order (the daily Cardinal availability check). */
+function backorderList(r: NewOrderRow): string[] {
+  return r.backordered.split(",").map((s) => s.trim()).filter(Boolean);
+}
+/** Full vs Partial shipment — partial when anything is backordered / partially shipped. */
+function shipKind(r: NewOrderRow): "Full" | "Partial" {
+  if (/partial/i.test(r.apiStatus) || backorderList(r).length > 0 || numOf(r.backorderedQty) > 0) return "Partial";
+  return "Full";
 }
 
-/** Accepted / Partial — did Cardinal take it, and is anything stuck? */
+const OVERVIEW_HEADER = "sticky top-0 z-10 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[15px] font-bold tracking-normal text-slate-700 items-end";
+const ACCEPTED_GRID = "grid grid-cols-[minmax(180px,1fr)_110px_minmax(240px,1.4fr)_minmax(150px,150px)_minmax(180px,1fr)_130px] gap-4";
+const SHIPPED_GRID = "grid grid-cols-[minmax(180px,1fr)_110px_minmax(240px,1.3fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)] gap-4";
+
+/** Accepted / Partial — did Cardinal take it, and is anything backordered? */
 function AcceptedTable({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
   return (
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Patient</TableHead>
-            <TableHead>Order Date</TableHead>
-            <TableHead>Products</TableHead>
-            <TableHead>CAH #</TableHead>
-            <TableHead>API Status</TableHead>
-            <TableHead>Issue</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((r) => {
-            const issue = orderIssue(r);
-            return (
-              <TableRow key={r.id} className={cn("cursor-pointer", issue && "border-l-2 border-l-rose-400")} onClick={() => onOpen(r)}>
-                <TableCell className="align-top">
-                  <div className="font-semibold">{r.name}</div>
-                  {r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}
-                </TableCell>
-                <TableCell className="align-top tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</TableCell>
-                <TableCell className="align-top text-[12px] max-w-[320px]"><span className="line-clamp-2">{productsLine(r)}</span></TableCell>
-                <TableCell className="align-top text-[12px] tabular-nums whitespace-nowrap">{r.cahOrderNumber || "—"}</TableCell>
-                <TableCell className={cn("align-top text-[12px]", apiStatusTone(r.apiStatus))} title={r.apiMessage || undefined}>{r.apiStatus || "—"}</TableCell>
-                <TableCell className="align-top text-[12px]">
-                  {issue ? <span className="inline-flex items-center gap-1 rounded bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700">{issue}</span>
-                    : <span className="text-muted-foreground">—</span>}
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
+    <div className="text-[13px] overflow-x-auto">
+      <div className={cn(ACCEPTED_GRID, OVERVIEW_HEADER)}>
+        <div>Patient</div><div>Order Date</div><div>Products</div><div>API Status</div><div>Backordered</div><div>CAH #</div>
+      </div>
+      {rows.map((r) => {
+        const bo = backorderList(r);
+        return (
+          <div key={r.id} className={cn(ACCEPTED_GRID, "cursor-pointer border-b px-4 py-3 items-start hover:bg-muted/40")} onClick={() => onOpen(r)}>
+            <div className="min-w-0"><div className="font-semibold truncate">{r.name}</div>{r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}</div>
+            <div className="tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</div>
+            <div className="text-[12px]"><span className="line-clamp-2">{productsLine(r)}</span></div>
+            <div>{r.apiStatus ? <span title={r.apiMessage || undefined}><Pill label={r.apiStatus} tone={apiTone(r.apiStatus)} /></span> : <span className="text-muted-foreground">—</span>}</div>
+            <div className="min-w-0">{bo.length
+              ? <div className="flex flex-col gap-1">{bo.map((b, i) => <span key={i} className="inline-flex w-fit items-center rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-800" title={b}><span className="max-w-[200px] truncate">{b}</span></span>)}</div>
+              : <span className="text-muted-foreground">—</span>}</div>
+            <div className="text-[12px] tabular-nums whitespace-nowrap">{r.cahOrderNumber || "—"}</div>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-/** Shipped / Delivered — where is the package. */
+/** Shipped / Delivered — tracking (one box per row), full/partial, dates. */
 function ShippedTable({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
   return (
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Patient</TableHead>
-            <TableHead>Order Date</TableHead>
-            <TableHead>Carrier</TableHead>
-            <TableHead>Tracking</TableHead>
-            <TableHead>Shipped</TableHead>
-            <TableHead>Delivered</TableHead>
-            <TableHead>Signed by</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((r) => (
-            <TableRow key={r.id} className="cursor-pointer" onClick={() => onOpen(r)}>
-              <TableCell className="align-top">
-                <div className="font-semibold">{r.name}</div>
-                {r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}
-              </TableCell>
-              <TableCell className="align-top tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</TableCell>
-              <TableCell className="align-top text-[12px]">{r.carrier || "—"}</TableCell>
-              <TableCell className="align-top text-[12px] font-mono">
-                {r.trackingNumbers.length ? r.trackingNumbers.map((t) => (
-                  <a key={t} href={`https://www.google.com/search?q=${encodeURIComponent(t)}`} target="_blank" rel="noreferrer"
-                    onClick={(e) => e.stopPropagation()} className="block text-primary hover:underline">{t}</a>
-                )) : <span className="text-muted-foreground">—</span>}
-              </TableCell>
-              <TableCell className="align-top tabular-nums whitespace-nowrap">{r.shipDate ? fmtDate(r.shipDate) : (r.estShipDate ? `est ${fmtDate(r.estShipDate)}` : "—")}</TableCell>
-              <TableCell className="align-top tabular-nums whitespace-nowrap">{r.deliveryDate ? fmtDate(r.deliveryDate) : "—"}</TableCell>
-              <TableCell className="align-top text-[12px]">{r.signedBy || "—"}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+    <div className="text-[13px] overflow-x-auto">
+      <div className={cn(SHIPPED_GRID, OVERVIEW_HEADER)}>
+        <div>Patient</div><div>Order Date</div><div>Tracking</div><div>Shipped</div><div>Delivered</div>
+      </div>
+      {rows.map((r) => {
+        const kind = shipKind(r);
+        const boxes = r.trackingNumbers.length ? r.trackingNumbers : [""];
+        return (
+          <div key={r.id} className={cn(SHIPPED_GRID, "cursor-pointer border-b px-4 py-3 items-start hover:bg-muted/40")} onClick={() => onOpen(r)}>
+            <div className="min-w-0"><div className="font-semibold truncate">{r.name}</div>{r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}</div>
+            <div className="tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</div>
+            {/* One box per row across the last three columns. */}
+            <div className="space-y-1">
+              {boxes.map((t, i) => (
+                <div key={i} className="rounded border bg-muted/20 px-2 py-1 text-[12px] font-mono">
+                  <span className="mr-1 text-[10px] font-sans text-muted-foreground">Box {i + 1}</span>
+                  {t ? <a href={`https://www.google.com/search?q=${encodeURIComponent(t)}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-primary hover:underline">{t}</a> : <span className="text-muted-foreground">—</span>}
+                </div>
+              ))}
+            </div>
+            <div className="space-y-1">
+              {boxes.map((_, i) => (
+                <div key={i} className="flex items-center gap-1.5 py-1 text-[12px]">
+                  <span className={cn("inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1", pillClass(kind === "Partial" ? "amber" : "green"))}>{kind}</span>
+                  <span className="tabular-nums">{r.shipDate ? fmtDate(r.shipDate) : (r.estShipDate ? `est ${fmtDate(r.estShipDate)}` : "—")}</span>
+                </div>
+              ))}
+            </div>
+            <div className="space-y-1">
+              {boxes.map((_, i) => (
+                <div key={i} className="py-1 text-[12px] tabular-nums whitespace-nowrap">{r.deliveryDate ? fmtDate(r.deliveryDate) : "—"}</div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -592,7 +587,8 @@ export function NewOrders() {
       </Card>
 
       <OrderDetailSheet row={detail} open={!!detail} onClose={() => setDetail(null)} onChanged={() => void refetch()} />
-      <CreateOrderDialog open={createOpen} onClose={() => setCreateOpen(false)} rows={data} onCreated={() => void refetch()} />
+      <CreateOrderDialog open={createOpen} onClose={() => setCreateOpen(false)} rows={data}
+        onCreated={() => { setView("order"); void refetch(); }} />
     </div>
   );
 }

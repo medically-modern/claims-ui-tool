@@ -1,13 +1,13 @@
 /**
  * OrderDetailSheet — the "click in" view for a New Order Board row. Patient-level
  * facts live on the full profile (opened from the patient name); this panel is
- * for the order-board-specific fields and the edits that belong to THIS order:
- * POS (Office/Home), DDP, and — rarely — the product types/quantities. The rest
- * (Cardinal fulfilment, tracking, holds, substitutions) stays read-only; the
- * board and Cardinal own those.
+ * for the order-board-specific fields and edits that belong to THIS order: POS
+ * (Office/Home), Ship Method, DDP, and the product types/quantities. Nothing is
+ * written to Monday until "Save changes" is pressed (Brandon, 2026-09-20). The
+ * rest (Cardinal fulfilment, tracking, holds) stays read-only.
  */
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, Loader2, Truck } from "lucide-react";
+import { ExternalLink, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -17,10 +17,10 @@ import { cn } from "@/lib/utils";
 import type { NewOrderRow } from "@/api/queries/newOrders";
 import { orderCategories, orderStatusTone, pillClass, posLabel, preCheckTone } from "@/lib/subscription/orderBoard";
 import {
-  setOrderPos, setOrderDdp, updateOrderProducts, type OrderProducts,
+  setOrderPos, setOrderShipMethod, setOrderDdp, updateOrderProducts, type OrderProducts,
 } from "@/api/setNewOrder";
 import {
-  CARTRIDGE_TYPES, CGM_TYPES, INFUSION_SET_1_TYPES, INFUSION_SET_2_TYPES, PUMP_TYPES,
+  CARTRIDGE_TYPES, CGM_TYPES, INFUSION_SET_1_TYPES, INFUSION_SET_2_TYPES, PUMP_TYPES, SHIP_METHODS,
 } from "@/lib/subscription/orderProductOptions";
 
 const NEW_ORDER_BOARD = "18405457690";
@@ -62,14 +62,13 @@ function productsFromRow(r: NewOrderRow): OrderProducts {
   };
 }
 
-/** One editable product line: a type dropdown + one or two qty inputs. */
 function ProductRow({ label, type, options, onType, qty, onQty, qty2Label, qty2, onQty2 }: {
   label: string; type: string; options: readonly string[]; onType: (v: string) => void;
   qty: string; onQty: (v: string) => void;
   qty2Label?: string; qty2?: string; onQty2?: (v: string) => void;
 }) {
   return (
-    <div className="grid grid-cols-[1fr_84px] items-center gap-2">
+    <div className="grid grid-cols-[1fr_84px] items-start gap-2">
       <div>
         <div className="text-[11px] font-medium text-muted-foreground">{label}</div>
         <Select value={type || "Not Serving"} onValueChange={onType}>
@@ -95,47 +94,50 @@ export function OrderDetailSheet({ row, open, onClose, onChanged }: {
   row: NewOrderRow | null; open: boolean; onClose: () => void; onChanged?: () => void;
 }) {
   const [pos, setPos] = useState("");
+  const [shipMethod, setShipMethod] = useState("");
   const [ddp, setDdp] = useState(false);
-  const [savingPos, setSavingPos] = useState<"Office" | "Home" | null>(null);
-  const [savingDdp, setSavingDdp] = useState(false);
-  const [editProducts, setEditProducts] = useState(false);
   const [prod, setProd] = useState<OrderProducts>(() => productsFromRow(row ?? ({} as NewOrderRow)));
-  const [savingProd, setSavingProd] = useState(false);
+  const [saving, setSaving] = useState(false);
   const seedId = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!row) return;
-    if (seedId.current === row.id) return;
+    if (!row || seedId.current === row.id) return;
     seedId.current = row.id;
     setPos(row.pos || "");
+    setShipMethod(row.shipMethod || "");
     setDdp(/ddp/i.test(row.ddpOrder));
     setProd(productsFromRow(row));
-    setEditProducts(false);
   }, [row]);
 
   if (!row) return null;
   const cats = orderCategories(row);
   const setProdField = (k: keyof OrderProducts, v: string) => setProd((p) => ({ ...p, [k]: v }));
 
-  const changePos = async (next: "Office" | "Home") => {
-    if (next === pos || savingPos) return;
-    setSavingPos(next);
-    try { await setOrderPos(row.id, next); setPos(next); toast.success(`POS set to ${next}`); onChanged?.(); }
-    catch (e) { toast.error("Couldn't change POS", { description: e instanceof Error ? e.message : String(e) }); }
-    finally { setSavingPos(null); }
+  const origProd = productsFromRow(row);
+  const posDirty = pos !== (row.pos || "");
+  const shipDirty = shipMethod !== (row.shipMethod || "");
+  const ddpDirty = ddp !== /ddp/i.test(row.ddpOrder);
+  const prodDirty = JSON.stringify(prod) !== JSON.stringify(origProd);
+  const dirty = posDirty || shipDirty || ddpDirty || prodDirty;
+
+  const reset = () => {
+    setPos(row.pos || ""); setShipMethod(row.shipMethod || "");
+    setDdp(/ddp/i.test(row.ddpOrder)); setProd(productsFromRow(row));
   };
-  const toggleDdp = async () => {
-    const next = !ddp;
-    setSavingDdp(true);
-    try { await setOrderDdp(row.id, next); setDdp(next); toast.success(next ? "Marked DDP — pressing Order will set Process Claim" : "DDP removed"); onChanged?.(); }
-    catch (e) { toast.error("Couldn't change DDP", { description: e instanceof Error ? e.message : String(e) }); }
-    finally { setSavingDdp(false); }
-  };
-  const saveProducts = async () => {
-    setSavingProd(true);
-    try { await updateOrderProducts(row.id, prod); toast.success("Products updated"); setEditProducts(false); onChanged?.(); }
-    catch (e) { toast.error("Couldn't update products", { description: e instanceof Error ? e.message : String(e) }); }
-    finally { setSavingProd(false); }
+  const save = async () => {
+    setSaving(true);
+    try {
+      if (posDirty && (pos === "Office" || pos === "Home")) await setOrderPos(row.id, pos);
+      if (shipDirty) await setOrderShipMethod(row.id, shipMethod);
+      if (ddpDirty) await setOrderDdp(row.id, ddp);
+      if (prodDirty) await updateOrderProducts(row.id, prod);
+      toast.success("Order updated");
+      onChanged?.();
+    } catch (e) {
+      toast.error("Couldn't save the order", { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -147,7 +149,7 @@ export function OrderDetailSheet({ row, open, onClose, onChanged }: {
             {row.orderStatus && <Pill label={row.orderStatus} tone={orderStatusTone(row.orderStatus)} />}
             {row.preCheck && <Pill label={row.preCheck} tone={preCheckTone(row.preCheck)} />}
             {posLabel(pos) && <Pill label="Office" tone="amber" />}
-            {row.shipMethod && <Pill label={row.shipMethod} tone="slate" />}
+            {shipMethod && <Pill label={shipMethod} tone="slate" />}
             {ddp && <Pill label="DDP" tone="purple" />}
           </div>
         </SheetHeader>
@@ -164,33 +166,64 @@ export function OrderDetailSheet({ row, open, onClose, onChanged }: {
             </div>
           )}
 
-          {/* ── Order-board-specific edits (Brandon, 2026-09-20) ── */}
-          <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Order settings</div>
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[12px] font-medium text-muted-foreground">POS</span>
-                <div className="inline-flex rounded-md border bg-card p-0.5">
-                  {(["Office", "Home"] as const).map((v) => (
-                    <button key={v} type="button" disabled={!!savingPos} onClick={() => void changePos(v)}
-                      className={cn("inline-flex items-center gap-1 rounded px-2.5 py-1 text-[12px] font-semibold transition-colors",
-                        pos === v ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted")}>
-                      {savingPos === v && <Loader2 className="h-3 w-3 animate-spin" />}{v}
-                    </button>
-                  ))}
-                </div>
+          {/* ── Editable, order-board-specific fields — one Save (Brandon, 2026-09-20) ── */}
+          <div className="space-y-4 rounded-lg border bg-muted/20 p-3">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Order settings</div>
+              {dirty && <span className="text-[11px] font-medium text-amber-700">Unsaved changes</span>}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-[11px] font-medium text-muted-foreground">POS</div>
+                <Select value={pos || "—"} onValueChange={(v) => setPos(v === "—" ? "" : v)}>
+                  <SelectTrigger className="mt-0.5 h-8 text-[12px]"><SelectValue placeholder="—" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="—" className="text-[12px]">—</SelectItem>
+                    <SelectItem value="Office" className="text-[12px]">Office</SelectItem>
+                    <SelectItem value="Home" className="text-[12px]">Home</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[12px] font-medium text-muted-foreground">DDP</span>
-                <Button size="sm" variant={ddp ? "default" : "outline"} disabled={savingDdp} onClick={() => void toggleDdp()}
-                  className={cn("h-8 gap-1.5 text-[12px]", ddp && "bg-violet-600 hover:bg-violet-700")}
-                  title="DDP orders go out manually; pressing Order sets Process Claim, not Ordered">
-                  {savingDdp ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Truck className="h-3.5 w-3.5" />}
-                  {ddp ? "DDP — on" : "Send via DDP"}
-                </Button>
+              <div>
+                <div className="text-[11px] font-medium text-muted-foreground">Ship method</div>
+                <Select value={shipMethod || "—"} onValueChange={(v) => setShipMethod(v === "—" ? "" : v)}>
+                  <SelectTrigger className="mt-0.5 h-8 text-[12px]"><SelectValue placeholder="—" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="—" className="text-[12px]">—</SelectItem>
+                    {SHIP_METHODS.map((s) => <SelectItem key={s} value={s} className="text-[12px]">{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
-            {ddp && <div className="text-[11px] text-violet-800">Pressing <b>Order</b> on this row will set <b>Process Claim</b> (submit manually through DDP).</div>}
+
+            <label className="flex items-start gap-2 text-[12px]">
+              <input type="checkbox" checked={ddp} onChange={(e) => setDdp(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-slate-300" />
+              <span><span className="font-medium">Send via DDP</span> <span className="text-muted-foreground">— pressing Order sets Process Claim (submit manually), not Ordered</span></span>
+            </label>
+
+            <div className="space-y-3 border-t pt-3">
+              <div className="text-[11px] font-medium text-muted-foreground">Products</div>
+              <ProductRow label="CGM / sensors" type={prod.cgmType} options={CGM_TYPES} onType={(v) => setProdField("cgmType", v)}
+                qty={prod.qtyCgmSensors} onQty={(v) => setProdField("qtyCgmSensors", v)}
+                qty2Label="Monitor qty" qty2={prod.qtyCgmMonitor} onQty2={(v) => setProdField("qtyCgmMonitor", v)} />
+              <ProductRow label="Pump" type={prod.pumpType} options={PUMP_TYPES} onType={(v) => setProdField("pumpType", v)}
+                qty={prod.qtyPump} onQty={(v) => setProdField("qtyPump", v)} />
+              <ProductRow label="Cartridge" type={prod.cartridgeType} options={CARTRIDGE_TYPES} onType={(v) => setProdField("cartridgeType", v)}
+                qty={prod.qtyCartridge} onQty={(v) => setProdField("qtyCartridge", v)} />
+              <ProductRow label="Infusion set 1" type={prod.infusionSet1Type} options={INFUSION_SET_1_TYPES} onType={(v) => setProdField("infusionSet1Type", v)}
+                qty={prod.qtyInfusionSet1} onQty={(v) => setProdField("qtyInfusionSet1", v)} />
+              <ProductRow label="Infusion set 2" type={prod.infusionSet2Type} options={INFUSION_SET_2_TYPES} onType={(v) => setProdField("infusionSet2Type", v)}
+                qty={prod.qtyInfusionSet2} onQty={(v) => setProdField("qtyInfusionSet2", v)} />
+              <div className="text-[11px] text-muted-foreground">Set a type to <b>Not Serving</b> and qty to <b>0</b> to drop a line.</div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t pt-3">
+              <Button size="sm" variant="outline" className="h-8 text-[12px]" disabled={!dirty || saving} onClick={reset}>Discard</Button>
+              <Button size="sm" className="h-8 gap-1.5 text-[12px]" disabled={!dirty || saving} onClick={() => void save()}>
+                {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save changes
+              </Button>
+            </div>
           </div>
 
           <Section title="Order">
@@ -204,52 +237,24 @@ export function OrderDetailSheet({ row, open, onClose, onChanged }: {
             <Field label="Address" value={row.patientAddress} wide />
           </Section>
 
-          {/* Products — read-only summary, with an inline editor for the rare edit. */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Products &amp; auth</div>
-              <Button size="sm" variant="ghost" className="h-7 px-2 text-[12px]" onClick={() => setEditProducts((v) => !v)}>
-                {editProducts ? "Cancel" : "Edit products"}
-              </Button>
-            </div>
-
-            {!editProducts ? (
+          {cats.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">On the order now</div>
               <div className="space-y-2">
-                {cats.length > 0 ? cats.map((c) => {
+                {cats.map((c) => {
                   const single = c.category === "Pump" || c.category === "Monitor";
                   const line = c.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(" · ");
                   return (
-                    <div key={c.category} className="rounded-lg border bg-muted/20 px-3 py-2">
+                    <div key={c.category} className="rounded-lg border bg-card px-3 py-2">
                       <div className="text-[12px] font-semibold text-foreground">{c.category}</div>
                       <div className="mt-0.5 text-[13px]">{line || <span className="text-muted-foreground">{single ? `${c.category} only` : "nothing on this order"}</span>}</div>
                       {c.auths.length > 0 && <div className="mt-1 text-[12px] text-muted-foreground">Auth on file: {c.auths.map((a) => a.label).join(", ")}</div>}
                     </div>
                   );
-                }) : <div className="text-[13px] text-muted-foreground">No products on this order.</div>}
+                })}
               </div>
-            ) : (
-              <div className="space-y-3 rounded-lg border bg-card p-3">
-                <ProductRow label="CGM / sensors" type={prod.cgmType} options={CGM_TYPES} onType={(v) => setProdField("cgmType", v)}
-                  qty={prod.qtyCgmSensors} onQty={(v) => setProdField("qtyCgmSensors", v)}
-                  qty2Label="Monitor qty" qty2={prod.qtyCgmMonitor} onQty2={(v) => setProdField("qtyCgmMonitor", v)} />
-                <ProductRow label="Pump" type={prod.pumpType} options={PUMP_TYPES} onType={(v) => setProdField("pumpType", v)}
-                  qty={prod.qtyPump} onQty={(v) => setProdField("qtyPump", v)} />
-                <ProductRow label="Cartridge" type={prod.cartridgeType} options={CARTRIDGE_TYPES} onType={(v) => setProdField("cartridgeType", v)}
-                  qty={prod.qtyCartridge} onQty={(v) => setProdField("qtyCartridge", v)} />
-                <ProductRow label="Infusion set 1" type={prod.infusionSet1Type} options={INFUSION_SET_1_TYPES} onType={(v) => setProdField("infusionSet1Type", v)}
-                  qty={prod.qtyInfusionSet1} onQty={(v) => setProdField("qtyInfusionSet1", v)} />
-                <ProductRow label="Infusion set 2" type={prod.infusionSet2Type} options={INFUSION_SET_2_TYPES} onType={(v) => setProdField("infusionSet2Type", v)}
-                  qty={prod.qtyInfusionSet2} onQty={(v) => setProdField("qtyInfusionSet2", v)} />
-                <div className="flex justify-end gap-2 pt-1">
-                  <Button size="sm" variant="outline" className="h-8 text-[12px]" onClick={() => { setProd(productsFromRow(row)); setEditProducts(false); }}>Cancel</Button>
-                  <Button size="sm" className="h-8 gap-1.5 text-[12px]" disabled={savingProd} onClick={() => void saveProducts()}>
-                    {savingProd && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save products
-                  </Button>
-                </div>
-                <div className="text-[11px] text-muted-foreground">Set a type to <b>Not Serving</b> and qty to <b>0</b> to drop a line.</div>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {(row.cahOrderNumber || row.poNumber || row.carrier || row.estShipDate || row.shipDate || row.deliveryDate || row.trackingNumbers.length || row.signedBy || row.lastCardinalSync) && (
             <Section title="Fulfilment">

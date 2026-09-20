@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { useNewOrders } from "@/hooks/subscription/useNewOrders";
 import { ORDER_GROUP_ID } from "@/api/queries/newOrders";
-import { fixOrderAddressAndRecheck } from "@/api/setNewOrder";
+import { syncOrderAddresses } from "@/api/setNewOrder";
 import { useClaimHistory } from "@/hooks/subscription/useClaimHistory";
 import { usePatientFiles } from "@/hooks/subscription/usePatientFiles";
 import { ordersForPatient } from "@/lib/subscription/orderHistory";
@@ -102,13 +102,17 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
       setSavedBase({ ...(landed as unknown as ProfileDraft), visitDate: "" });
       setDraft((d) => ({ ...d, visitDate: "" }));
       setEditPhone(false);
-      // Address fixed on the profile (Subscription Board) → also push it to the
-      // patient's open Order-group row and re-trigger its pre-check: write the
-      // address, blank the status, set it back to "Order" (Brandon, 2026-09-20).
-      if (r.ok.includes("address") && openOrder) {
+      // Address fixed on the profile (Subscription Board) → also push whichever
+      // address(es) changed onto the patient's open Order-group row and re-trigger
+      // its pre-check: write the address, blank the status, set it back to
+      // "Order" (Brandon, 2026-09-20). Patient and/or doctor.
+      const addr: { patient?: string; doctor?: string } = {};
+      if (r.ok.includes("address")) addr.patient = draft.address;
+      if (r.ok.includes("doctorAddress")) addr.doctor = draft.doctorAddress;
+      if ((addr.patient != null || addr.doctor != null) && openOrder) {
         try {
-          await fixOrderAddressAndRecheck(openOrder.id, draft.address);
-          toast.success("Order address updated — pre-check re-running", { description: `${p.name}'s open order on the Order board` });
+          await syncOrderAddresses(openOrder.id, addr);
+          toast.success("Order updated — pre-check re-running", { description: `${p.name}'s open order on the Order board` });
         } catch (e) {
           toast.error("Saved to the profile, but couldn't update the order", { description: e instanceof Error ? e.message : String(e) });
         }
