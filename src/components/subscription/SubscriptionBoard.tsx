@@ -48,8 +48,7 @@ import { cn } from "@/lib/utils";
 import { PatientProfile } from "./PatientProfile";
 import { CommsIcons } from "@/components/comms/CommsIcons";
 import { CommsSheet } from "@/components/comms/CommsSheet";
-import { PatientPage } from "./patient/PatientPage";
-import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
+import { useOpenPatient } from "./patient/openPatient";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
 import { NewOrders } from "./NewOrders";
@@ -1316,9 +1315,8 @@ function OrderCycleWorkflow() {
   const [pauseReason, setPauseReason] = useState<string>("Any pause reason");
   const [activePatient, setActivePatient] = useState<SubscriptionPatient | null>(null);
   const [activeKind, setActiveKind] = useState<CheckpointKind | null>(null);
-  // A row click opens the patient full-page (PatientPage). Held by Monday id
-  // so a refetch keeps the page on the fresh row rather than a stale copy.
-  const [openPatientId, setOpenPatientId] = useState<string | null>(null);
+  // A row click opens the patient full-page, app-wide (see patient/openPatient).
+  const { open: openPatientPage } = useOpenPatient();
 
   // ── Sort state ──
   // Default sort: nextOrderDate ascending (soonest order first). Operators
@@ -1411,7 +1409,7 @@ function OrderCycleWorkflow() {
   }, [all, todayStr]);
 
   const openCell = (p: SubscriptionPatient, kind: CheckpointKind) => { setActivePatient(p); setActiveKind(kind); };
-  const openPatient = (p: SubscriptionPatient) => { setOpenPatientId(p.mondayItemId); };
+  const openPatient = (p: SubscriptionPatient) => { openPatientPage(p.mondayItemId); };
   const closeDrawer = () => { setActivePatient(null); setActiveKind(null); };
   // Flips Ordering Cycle -> 'Order' on the Subscription Board row.
   // Brandon's existing Monday automation listens on that column-value
@@ -1768,20 +1766,6 @@ function OrderCycleWorkflow() {
       </TabsList>
     </Tabs>
   );
-
-  // A patient is open: the whole board area is their page (Profile | Orders |
-  // Claims, with comms and notes in the rail). Back returns to the same tab.
-  const openPatientRow = openPatientId ? all.find((p) => p.mondayItemId === openPatientId) : null;
-  if (openPatientId) {
-    return openPatientRow ? (
-      <PatientPage patient={openPatientRow as LiveSubscriptionPatient} onBack={() => setOpenPatientId(null)} />
-    ) : (
-      <div className="space-y-3">
-        <button type="button" onClick={() => setOpenPatientId(null)} className="text-[12px] text-muted-foreground hover:text-foreground">← Back to the board</button>
-        <Card className="p-6 text-[13px] text-muted-foreground">{loading ? "Loading the patient…" : "That patient is no longer on the board."}</Card>
-      </div>
-    );
-  }
 
   // New 'Order' tab — independent view rendered from the New Order
   // Board (18405457690). Skip all of the Order Prep / Ready-to-Order
