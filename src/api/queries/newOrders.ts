@@ -134,31 +134,15 @@ interface MondayItem {
   group?: { id: string } | null;
   column_values: CV[];
 }
-interface PageResp {
-  boards: Array<{ items_page: { cursor: string | null; items: MondayItem[] } }>;
-}
-interface NextResp {
-  next_items_page: { cursor: string | null; items: MondayItem[] };
-}
-
-const PAGE_QUERY = `
-  query NewOrderPage($boardId: ID!, $cols: [String!]!) {
-    boards(ids: [$boardId]) {
-      items_page(limit: 500) {
-        cursor
-        items { id name group { id } column_values(ids: $cols) { id text } }
-      }
-    }
-  }
-`;
-const NEXT_QUERY = `
-  query NewOrderNext($cursor: String!, $cols: [String!]!) {
-    next_items_page(cursor: $cursor, limit: 500) {
-      cursor
-      items { id name group { id } column_values(ids: $cols) { id text } }
-    }
-  }
-`;
+// Two-step read (2026-09-20), same shape as subscriptionPatients: the id list
+// is cheap, and items(ids:) takes 100 per call with no cursor, so the row
+// reads run in parallel instead of paging ~80 columns sequentially.
+// ⚠️ items(ids:) silently caps at 25 without an explicit limit.
+const IDS_FIRST = `query NoIdsFirst($boardId: ID!) { boards(ids: [$boardId]) { items_page(limit: 500) { cursor items { id } } } }`;
+const IDS_NEXT = `query NoIdsNext($cursor: String!) { next_items_page(cursor: $cursor, limit: 500) { cursor items { id } } }`;
+const ITEMS_QUERY = `query NoItems($ids: [ID!], $cols: [String!]!) { items(ids: $ids, limit: 100) { id name group { id } column_values(ids: $cols) { id text } } }`;
+const ITEMS_CHUNK = 100;
+const ITEMS_CONCURRENCY = 8;
 
 function get(item: MondayItem, colId: string): string {
   return (item.column_values.find((c) => c.id === colId)?.text ?? "").trim();
@@ -222,19 +206,29 @@ function mapItem(item: MondayItem): NewOrderRow {
 
 export async function fetchNewOrders(): Promise<NewOrderRow[]> {
   if (!hasMondayToken()) return [];
-  const out: NewOrderRow[] = [];
-  const first = await mondayQuery<PageResp>(PAGE_QUERY, {
-    boardId: NEW_ORDER_BOARD_ID, cols: COL_IDS,
-  });
-  const firstPage = first?.boards?.[0]?.items_page;
-  let cursor = firstPage?.cursor ?? null;
-  for (const it of firstPage?.items ?? []) out.push(mapItem(it));
-  while (cursor) {
-    const next = await mondayQuery<NextResp>(NEXT_QUERY, {
-      cursor, cols: COL_IDS,
-    });
-    cursor = next?.next_items_page?.cursor ?? null;
-    for (const it of next?.next_items_page?.items ?? []) out.push(mapItem(it));
+  const ids: string[] = [];
+  const first = await mondayQuery<{ boards: Array<{ items_page: { cursor: string | null; items: Array<{ id: string }> } }> }>(IDS_FIRST, { boardId: NEW_ORDER_BOARD_ID });
+  let page = first?.boards?.[0]?.items_page ?? null;
+  while (page) {
+    for (const it of page.items ?? []) ids.push(it.id);
+    const cursor: string | null = page.cursor;
+    if (!cursor) break;
+    const next = await mondayQuery<{ next_items_page: { cursor: string | null; items: Array<{ id: string }> } }>(IDS_NEXT, { cursor });
+    page = next?.next_items_page ?? null;
   }
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += ITEMS_CHUNK) chunks.push(ids.slice(i, i + ITEMS_CHUNK));
+  const out: NewOrderRow[] = new Array(chunks.length ? 0 : 0);
+  const pages: NewOrderRow[][] = new Array(chunks.length);
+  let nextChunk = 0;
+  const worker = async () => {
+    while (nextChunk < chunks.length) {
+      const idx = nextChunk++;
+      const r = await mondayQuery<{ items: MondayItem[] }>(ITEMS_QUERY, { ids: chunks[idx], cols: COL_IDS });
+      pages[idx] = (r.items ?? []).map(mapItem);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(ITEMS_CONCURRENCY, chunks.length) }, worker));
+  for (const pg of pages) if (pg) out.push(...pg);
   return out;
 }
