@@ -223,6 +223,10 @@ export const SUB_COL = {
   // backend ships them. Fill the real IDs in when the columns are created.
   calls_since_order:    "numeric_calls_since_order__TODO",
   texts_since_order:    "numeric_texts_since_order__TODO",
+  // Per-code results the DVS bot writes: "Paid: $456.00" / "Denied: <reason>".
+  // A4230 = infusion sets, A4232 = cartridges.
+  a4230_claim:          "text_mm2nfyyw",
+  a4232_claim:          "text_mm2nmrjt",
   claims_paid_date:     "date_mm2nr2vz",
   claims_paid_amount:   "text_mm2nxwze",
   partial_approval_date:"date_mm2na60z",
@@ -281,6 +285,7 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   financials: PatientFinancials;
   calculateFinancials: string;
   claimsStatusCol: string;
+  a4230Claim: string; a4232Claim: string;
   claimsPaidDate: string;
   claimsPaidAmount: string;
   partialApprovalDate: string;
@@ -441,6 +446,7 @@ function mapItem(
     oopEstimate:              get(item, SUB_COL.oop_estimate),
     totalGp:                  get(item, SUB_COL.total_gp),
     correspondenceReviewed:   get(item, SUB_COL.correspondence_reviewed),
+    orderFrequency:           get(item, SUB_COL.order_frequency),
     confirmOverride:          get(item, SUB_COL.confirm_override),
     active:                   get(item, SUB_COL.active),
     runCheck:                 get(item, SUB_COL.run_check),
@@ -564,6 +570,8 @@ function mapItem(
     },
     calculateFinancials: get(item, SUB_COL.calculate_financials),
     claimsStatusCol:     get(item, SUB_COL.claims_status_col),
+    a4230Claim:          get(item, SUB_COL.a4230_claim),
+    a4232Claim:          get(item, SUB_COL.a4232_claim),
     claimsPaidDate:      get(item, SUB_COL.claims_paid_date),
     claimsPaidAmount:    get(item, SUB_COL.claims_paid_amount),
     partialApprovalDate: get(item, SUB_COL.partial_approval_date),

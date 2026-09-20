@@ -47,6 +47,7 @@ import { cn } from "@/lib/utils";
 
 import { CommsSheet } from "@/components/comms/CommsSheet";
 import { useOpenPatient } from "./patient/openPatient";
+import { lastOrderDay } from "@/lib/comms/sinceOrder";
 import { AdvanceDialog } from "./patient/AdvanceDialog";
 import { NewOrders } from "./NewOrders";
 import { PayerRulesTab } from "./PayerRulesTab";
@@ -286,6 +287,10 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
  *  - Eligibility (not green): "Run Eligibility Now" fires the real check.
  *  - Any: "Block order…" opens the Block dialog.
  */
+/** Set when a popover closes from an outside click; the row under the
+ *  pointer ignores the click that follows so it can't open a profile. */
+let swallowRowClicksUntil = 0;
+
 function CircleEditPopover({
   check, kind, patient, onBlockRequest, children,
 }: {
@@ -299,13 +304,14 @@ function CircleEditPopover({
   const [advanceOpen, setAdvanceOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const { invalidate } = useInvalidateSubscription();
+  const { invalidate, markDvsRequested } = useInvalidateSubscription();
 
   // What the popover says is derived per circle from the live fields
   // (lib/subscription/circleDetail.ts). The button follows the verdict:
   // green → Pause (the default is already "advance"); not green → the one
   // action that moves it (Brandon, 2026-09-20).
-  const d = describeCircle(kind, check, patient as SubscriptionPatient & Partial<LiveSubscriptionPatient>, todayIso());
+  const live = patient as SubscriptionPatient & Partial<LiveSubscriptionPatient>;
+  const d = describeCircle(kind, check, live, todayIso(), lastOrderDay({ nextOrderDate: live.nextOrderDate, orderFrequency: live.orderFrequency }).day);
 
   const run = async (fn: () => Promise<unknown>) => {
     setSaving(true); setErr(null);
@@ -329,9 +335,16 @@ function CircleEditPopover({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent align="start" className="w-[340px] p-4">
+      <PopoverContent align="start" className="w-[340px] p-4"
+        // Clicking outside closes the popover — and must NOT also land on the
+        // row underneath and open somebody's profile (Brandon, 2026-09-20).
+        onPointerDownOutside={() => { swallowRowClicksUntil = Date.now() + 400; }}>
+        <button type="button" onClick={() => setOpen(false)} aria-label="Close"
+          className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">
+          <X className="h-3.5 w-3.5" />
+        </button>
         <div className="space-y-3">
-          <div>
+          <div className="pr-6">
             <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
               {PHASE_LABELS[kind]} — {patient.name}
             </div>
@@ -343,8 +356,12 @@ function CircleEditPopover({
               {d.facts.map((f) => (
                 <Fragment key={f.label}>
                   <dt className="text-muted-foreground">{f.label}</dt>
-                  <dd className={cn("min-w-0 break-words font-medium",
-                    f.tone === "ok" ? "text-emerald-700" : f.tone === "bad" ? "text-rose-700" : f.tone === "muted" ? "text-muted-foreground font-normal" : "")}>{f.value}</dd>
+                  <dd className={cn("flex min-w-0 items-start gap-1.5 break-words font-medium",
+                    f.tone === "ok" ? "text-emerald-700" : f.tone === "bad" ? "text-rose-700" : f.tone === "muted" ? "text-muted-foreground font-normal" : "")}>
+                    {f.mark === "ok" && <span className="mt-[1px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-emerald-600 text-white"><Check className="h-2.5 w-2.5" strokeWidth={3} /></span>}
+                    {f.mark === "bad" && <span className="mt-[1px] grid h-4 w-4 shrink-0 place-items-center rounded-full bg-rose-600 text-white"><X className="h-2.5 w-2.5" strokeWidth={3} /></span>}
+                    <span>{f.value}</span>
+                  </dd>
                 </Fragment>
               ))}
             </dl>
@@ -356,9 +373,7 @@ function CircleEditPopover({
             </div>
           )}
 
-          {check.changes && check.changes.length > 0 && (
-            <div className="text-[11px] text-orange-700">Changes: {check.changes.join(" • ")}</div>
-          )}
+          {/* The patient's words first; what changed on the form second. */}
           {check.needsRead && (
             <div className="rounded-md border border-sky-200 bg-sky-50/70 px-2 py-1.5 text-[11px] text-sky-950">
               <div className="mb-0.5 font-semibold text-sky-900">Read before ordering</div>
@@ -366,7 +381,13 @@ function CircleEditPopover({
             </div>
           )}
           {!check.needsRead && check.patientMessage && (
-            <div className="text-[11px] text-sky-700">Patient message: {check.patientMessage}</div>
+            <div className="rounded-md border border-sky-200 bg-sky-50/70 px-2 py-1.5 text-[11px] text-sky-950">
+              <div className="mb-0.5 font-semibold text-sky-900">Patient message</div>
+              {check.patientMessage}
+            </div>
+          )}
+          {check.changes && check.changes.length > 0 && (
+            <div className="text-[11px] text-orange-700">Changes: {check.changes.join(" • ")}</div>
           )}
 
           {d.action === "pause" && onBlockRequest && (
@@ -389,7 +410,7 @@ function CircleEditPopover({
           )}
           {d.action === "run-dvs" && (
             <Button size="sm" className="w-full bg-sky-700 hover:bg-sky-800" disabled={saving}
-              onClick={() => void run(() => setDvsTrigger(patient.mondayItemId))}
+              onClick={() => void run(async () => { await setDvsTrigger(patient.mondayItemId); markDvsRequested([patient.mondayItemId]); })}
               title="Writes Trigger DVS on the board; the ePACES bot picks it up and writes the result back">
               {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Shield className="mr-1.5 h-3.5 w-3.5" />}
               Run DVS
@@ -933,6 +954,7 @@ export function BlockDialog({
   const [note, setNote] = useState("");
   const [checkIn, setCheckIn] = useState<string>(addDaysIso(DEFAULT_CHECK_IN_DAYS));
   const [saving, setSaving] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   // Re-seed local state each time a new patient opens the dialog.
@@ -941,6 +963,7 @@ export function BlockDialog({
     setSeedId(patient.mondayItemId);
     setReasons(new Set(blockReasons(patient)));
     setNote("");
+    setConfirming(false);
     setCheckIn(patient.checkInDate || addDaysIso(DEFAULT_CHECK_IN_DAYS));
     setErr(null);
   }
@@ -1054,14 +1077,27 @@ export function BlockDialog({
         </div>
 
         <SheetFooter className="mt-6">
-          <Button
-            className="w-full bg-rose-700 hover:bg-rose-800"
-            disabled={!canSave}
-            onClick={() => void save()}
-          >
-            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PauseCircle className="mr-2 h-4 w-4" />}
-            Block order
-          </Button>
+          {/* Two clicks to pause (Brandon, 2026-09-20): the first shows what
+              is about to happen, the second does it. */}
+          {confirming ? (
+            <div className="w-full space-y-2 rounded-lg border border-rose-200 bg-rose-50 p-3">
+              <div className="text-[13px] font-semibold text-rose-900">Pause {patient?.name}?</div>
+              <div className="text-[12px] text-rose-800">
+                {[...reasons].join(", ")}{checkIn ? ` · check in ${fmtDate(checkIn)}` : ""}. Leaves tonight's list until unpaused.
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="outline" size="sm" onClick={() => setConfirming(false)} disabled={saving}>Back</Button>
+                <Button size="sm" className="bg-rose-700 hover:bg-rose-800" disabled={!canSave} onClick={() => void save()}>
+                  {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PauseCircle className="mr-2 h-4 w-4" />}
+                  Yes, pause
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button className="w-full bg-rose-700 hover:bg-rose-800" disabled={!canSave} onClick={() => setConfirming(true)}>
+              <PauseCircle className="mr-2 h-4 w-4" /> Pause patient…
+            </Button>
+          )}
         </SheetFooter>
       </SheetContent>
     </Sheet>
@@ -1467,7 +1503,7 @@ function OrderCycleWorkflow() {
   };
 
   // ── Batch action state ──
-  const { invalidate: invalidateSubscription } = useInvalidateSubscription();
+  const { invalidate: invalidateSubscription, markDvsRequested } = useInvalidateSubscription();
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchMsg, setBatchMsg] = useState<string | null>(null);
   // Per-row Send Order feedback: the header batchMsg pill is invisible
@@ -1716,6 +1752,8 @@ function OrderCycleWorkflow() {
       const res = await bulkTriggerDvs(ids, (done, total) =>
         setBatchMsg(`Triggering DVS… ${done}/${total}`),
       );
+      // Flip the circles to "…" now; the refetch confirms it in a few seconds.
+      markDvsRequested(res.successIds);
       setDvsSelected((prev) => {
         // Keep whatever failed selected so a retry is one click, not a re-tick.
         const failed = new Set(res.failures.map((f) => f.id));
@@ -2130,8 +2168,8 @@ function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
   const first = /first/i.test(t);
   return (
     <span className={cn(
-      "inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
-      first ? "bg-orange-100 text-orange-700" : "bg-sky-100 text-sky-700",
+      "inline-flex items-center whitespace-nowrap rounded-full px-3 py-1 text-[12px] font-semibold",
+      first ? "bg-fuchsia-100 text-fuchsia-700" : "bg-slate-200 text-slate-700",
     )}>
       {first ? "First Order" : "Reorder"}
     </span>
@@ -2162,9 +2200,9 @@ function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
 // Laptop-sized (Brandon, 2026-09-20 — 13"/14" screens): the fixed tracks add
 // up to ~1,210px with gaps, so the table fits a 1,280 viewport without
 // clipping the button; above that the five circle tracks share the surplus.
-const OVERVIEW_GRID = "grid grid-cols-[190px_92px_150px_170px_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_150px] gap-3";
+const OVERVIEW_GRID = "grid grid-cols-[180px_84px_160px_minmax(180px,1.4fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_140px] gap-2";
 // Ready-to-Order variant adds a Type (First Order / Reorder) column.
-const OVERVIEW_GRID_TYPE = "grid grid-cols-[200px_96px_130px_90px_150px_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_150px] gap-3";
+const OVERVIEW_GRID_TYPE = "grid grid-cols-[180px_84px_160px_112px_minmax(170px,1.3fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_140px] gap-2";
 
 type OverviewSortKey =
   | "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer"
@@ -2274,7 +2312,9 @@ function OverviewTable({
         <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Order"          k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Subscription"   k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
-        {showOrderType && <div>Type</div>}
+        {/* Buttons reset text-transform, so the sortable headings render in
+            Title case; match them here rather than shouting TYPE / ACTIONS. */}
+        {showOrderType && <div className="normal-case">Type</div>}
         <div><SortableLabel label="Primary Payer"  k="primaryPayer"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         {/* The five checks, named in full. The abbreviations (Conf / Elig /
             Auth / Paid / MR) saved a few pixels and cost every new reader a
@@ -2284,7 +2324,7 @@ function OverviewTable({
         <div className="text-center"><SortableLabel label="Authorization"   k="auth"         sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-center"><SortableLabel label="Last Claim Paid" k="lastPaid"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-center"><SortableLabel label="Medical Records" k="mr"           sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
-        <div className="text-right pr-2">Actions</div>
+        <div className="text-right pr-2 normal-case">Actions</div>
       </div>
       {/* The whole row opens the profile — there is no Review button any
           more, because a button that does what clicking the row does is a
@@ -2295,7 +2335,7 @@ function OverviewTable({
           key={p.id}
           role="button"
           tabIndex={0}
-          onClick={() => onPatientClick(p)}
+          onClick={() => { if (Date.now() < swallowRowClicksUntil) return; onPatientClick(p); }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPatientClick(p); }
           }}

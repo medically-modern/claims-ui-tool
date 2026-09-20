@@ -40,7 +40,11 @@ export function useSubscriptionPatients() {
     // side edits within ~30s automatically (mirrors Josh\'s pattern
     // in command-center). React Query throttles this to "while
     // mounted" so closed tabs don\'t hammer Monday.
-    refetchInterval:        false,
+    // Poll while the board is on screen: a DVS result or a paid claim should
+    // turn its circle without anyone clicking Refresh (Brandon, 2026-09-20 —
+    // Tara Pratt sat on "…" after Monday already said Claims Paid). 60 s:
+    // a full read is ~10 s and ~2 MB, so 30 s would be half the time loading.
+    refetchInterval:        60 * 1000,
     refetchIntervalInBackground: false,
     refetchOnMount:       true,
     refetchOnWindowFocus: true,
