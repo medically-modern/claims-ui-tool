@@ -266,8 +266,8 @@ export function NewOrders() {
         <div className="ml-auto inline-flex items-center rounded-lg border bg-card p-0.5 text-[12px] font-semibold">
           {([
             ["order", "Order"],
-            ["returns", `Returns${returnsCount ? ` (${returnsCount})` : ""}`],
             ["overview", "Overview"],
+            ["returns", `Returns${returnsCount ? ` (${returnsCount})` : ""}`],
           ] as const).map(([v, label]) => {
             const on = view === v;
             return (
