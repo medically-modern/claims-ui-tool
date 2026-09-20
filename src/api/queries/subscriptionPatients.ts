@@ -339,8 +339,8 @@ const NOT_ACTIVE_GROUP_ID = "group_mkp19fyp";
 // construction — each page's cursor comes back with the previous page).
 // Reading the id list alone is cheap, and `items(ids:)` takes up to 100 ids
 // per call with no cursor, so the row reads can run side by side: measured
-// 5.5 s for the ids + 2.5 s for nine parallel chunks = 8 s for the same data,
-// at a quarter of the Monday complexity (9 × 3.3k vs 66k + 49k).
+// 5.5 s for the ids + 4.6 s for nine parallel chunks ≈ 10 s for the same
+// data, at similar Monday complexity (9 × 13.3k vs 66k + 49k).
 // The id pages are pipelined too: chunks for page 1 start while page 2 loads.
 const IDS_FIRST_QUERY = `
   query SubIdsFirst($boardId: ID!) {
@@ -352,20 +352,24 @@ const IDS_NEXT_QUERY = `
     next_items_page(cursor: $cursor, limit: 500) { cursor items { id } }
   }
 `;
+/** Monday's ceiling for `items(ids:)`; also the `limit` in ITEMS_QUERY. */
+const ITEMS_CHUNK = 100;
+/** Parallel row reads in flight. Nine chunks at 8-wide finished in 4.6 s,
+ *  comfortably under Monday's per-token concurrency. */
+const ITEMS_CONCURRENCY = 8;
+// ⚠️ `items(ids:)` returns at most 25 rows unless `limit` is passed, however
+// many ids you send — and it does so silently. Shipped without it on
+// 2026-09-20 (PR #29): 225 of 868 patients loaded and the board looked
+// plausible. `limit` must match ITEMS_CHUNK, and fetchRows checks the count.
 const ITEMS_QUERY = `
   query SubItems($ids: [ID!], $cols: [String!]!) {
-    items(ids: $ids) {
+    items(ids: $ids, limit: ${ITEMS_CHUNK}) {
       id name
       group { id title }
       column_values(ids: $cols) { id text }
     }
   }
 `;
-/** Monday's ceiling for `items(ids:)`. */
-const ITEMS_CHUNK = 100;
-/** Parallel row reads in flight. Nine chunks at 10-wide finished in 2.5 s;
- *  8 keeps a comfortable margin under Monday's per-token concurrency. */
-const ITEMS_CONCURRENCY = 8;
 
 // ─── Cell helpers ───────────────────────────────────────────────────────────
 function get(item: MondayItem, col: string): string {
@@ -622,14 +626,25 @@ async function mapLimited<T, R>(chunks: T[], width: number, fn: (c: T) => Promis
   return out;
 }
 
-/** Fetch the full rows for a page of ids, `ITEMS_CHUNK` at a time in parallel. */
-function fetchRows(ids: string[]): Promise<MondayItem[]> {
+/**
+ * Fetch the full rows for a page of ids, `ITEMS_CHUNK` at a time in parallel.
+ * Every id came from items_page a moment ago, so every id must come back;
+ * a short chunk is retried once and then treated as a failed load — a board
+ * missing rows is worse than a board that says it couldn't load.
+ */
+async function fetchRows(ids: string[]): Promise<MondayItem[]> {
   const chunks: string[][] = [];
   for (let i = 0; i < ids.length; i += ITEMS_CHUNK) chunks.push(ids.slice(i, i + ITEMS_CHUNK));
-  return mapLimited(chunks, ITEMS_CONCURRENCY, async (chunk) => {
-    const r = await mondayQuery<ItemsResponse>(ITEMS_QUERY, { ids: chunk, cols: READ_IDS });
-    return r.items ?? [];
-  }).then((pages) => pages.flat());
+  const pages = await mapLimited(chunks, ITEMS_CONCURRENCY, async (chunk) => {
+    const read = async () => (await mondayQuery<ItemsResponse>(ITEMS_QUERY, { ids: chunk, cols: READ_IDS })).items ?? [];
+    let items = await read();
+    if (items.length < chunk.length) items = await read();
+    if (items.length < chunk.length) {
+      throw new Error(`Monday returned ${items.length} of ${chunk.length} Subscription rows asked for — not showing a partial board.`);
+    }
+    return items;
+  });
+  return pages.flat();
 }
 
 /** The two note columns whose last-written time decides the row's badge. */
