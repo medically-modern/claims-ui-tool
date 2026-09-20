@@ -175,7 +175,7 @@ export function describeCircle(kind: CheckpointKind, c: Checkpoint, p: P, today:
       if (c.medicaidDvs) {
         const t = p.triggerDvs || "";
         if (c.dvsNeeded) {
-          facts.push({ label: "DVS for this order", value: "not run yet", tone: "muted" });
+          // The headline says it all; no fact line (Brandon, 2026-09-20).
         } else if (c.tone === "ok") {
           // Cleared: what each code paid, with a check when it's the full amount.
           for (const r of [parseCodeResult("A4230", p.a4230Claim, p.infusionSet1Qty), parseCodeResult("A4232", p.a4232Claim, p.cartridgeQty)]) {

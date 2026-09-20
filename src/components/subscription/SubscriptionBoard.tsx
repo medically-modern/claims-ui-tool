@@ -218,28 +218,9 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
       type="button"
       ref={ref}
       {...rest}
-      title={
-        title ?? [
-          `${check.label}${check.detail ? " — " + check.detail : ""}`,
-          // Light marks say why: the rule that changed the column's answer,
-          // with the numbers. Dark marks have nothing to add — the column
-          // decided (Brandon, 2026-09-20: "add a hover to the light so it
-          // says why").
-          check.light && check.why ? `Rule: ${check.why}` : null,
-          check.changes?.length ? `Changes: ${check.changes.join(" • ")}` : null,
-          check.patientMessage ? `Patient message: ${check.patientMessage}` : null,
-          // The badge's own hover: what was actually said, one line each
-          // ("Subscription note: …" / "Patient portal: …"). Brandon,
-          // 2026-09-19 — hovering has to answer "what's the message?"
-          // without a click. Falls back to the recency summary when the
-          // lines are missing (mock rows, older cached payloads).
-          check.needsRead
-            ? ["Read before ordering:", ...(check.needsReadLines?.length
-                ? check.needsReadLines
-                : [check.needsRead])].join("\n  ")
-            : null,
-        ].filter(Boolean).join("\n")
-      }
+      // No hover text: the click-in popover is the explanation (Brandon,
+      // 2026-09-20 — "the click-ins are way better than the hovers").
+      title={title}
       className={cn("relative inline-flex items-center justify-center", className)}
       style={{ ...sizeStyle, ...style }}
     >
@@ -268,8 +249,7 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
         <span
           className="absolute -bottom-1 -right-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-[9px] font-bold leading-none text-sky-700 ring-1 ring-sky-300"
           aria-label="Medicaid — needs a DVS for this order"
-          title="Medicaid re-verifies per order. Tick the box and Run DVS."
-        >M</span>
+                  >M</span>
       )}
     </button>
   );
@@ -530,7 +510,7 @@ function MarkLegend({ onRules }: { onRules?: () => void }) {
       <span className="inline-flex items-center gap-1.5">
         {dot("bg-emerald-50 ring-emerald-600", <Check className="h-2.5 w-2.5 text-emerald-600" strokeWidth={3} />)}
         {dot("bg-rose-50 ring-rose-600", <X className="h-2.5 w-2.5 text-rose-600" strokeWidth={3} />)}
-        <span><span className="font-semibold text-foreground">Light</span> — a payer rule decided, hover for why</span>
+        <span><span className="font-semibold text-foreground">Light</span> — a payer rule decided, click for why</span>
       </span>
       <span className="inline-flex items-center gap-1.5">
         {dot("bg-amber-400 ring-amber-400", <span className="text-[9px] font-bold leading-none text-white">!</span>)}
