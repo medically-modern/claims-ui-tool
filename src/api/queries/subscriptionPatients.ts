@@ -8,37 +8,28 @@
  * shape compatible with the existing mock-data shape so tab consumers
  * can swap in live data without changing render code.
  *
- * Checkpoint derivation (Order Cycle):
- *   Confirmation  -> color_mm3kjykc 'Patient Order Response'
- *                   (Confirmed / Delay / No Response / Cancel / Pause)
- *                   + color_mm3k4z79 'Patient
- *                    Insurance Response' for the change-detected flag
- *   Benefits      -> color_mm2nzm33 'Active?'
- *                    Active                    -> ok
- *                    Inactive / MA             -> bad
- *                    blank / Failed Check      -> pending
- *   Auth          -> color_mm25t997 'Sensors Auth Status' +
- *                    color_mm27snkq 'Supplies Auth Status'
- *                    Both must be one of 'Auth Valid' | 'Not Serving' |
- *                    'No Auth Needed' for ok. Sensors-only subscriptions
- *                    ignore Supplies; Supplies-only subscriptions ignore
- *                    Sensors.
- *   Last Paid     -> color_mm33spks 'Primary Claim Paid?' +
- *                    color_mm3aa9bx 'Secondary Claim Paid?'
- *   MR (5th)      -> date_mkp09gra 'MN Expiry' + color_mm6thrwv 'Referral
- *                    Source' (District Endochrine = hard stop). See
- *                    lib/subscription/mrCheck.ts + REORDER_PROCESS.md.
+ * Checkpoint derivation (Order Cycle) lives in lib/subscription/checks.ts,
+ * which reads the payer-rule table in lib/subscription/payerRules.ts. This
+ * file only maps Monday cells into CheckInputs. Columns read for the checks:
+ *   Confirm       -> color_mm3kjykc 'Patient Order Response' + text_mm404p7d
+ *                    'OOP Estimate' + numeric_mm2xvjc1 'Total GP'
+ *   Eligibility   -> color_mm2nzm33 'Active?' + dropdown_mm3gkcmc facility
+ *                    flags + date_mm43n083 'Last Eligibility Check' +
+ *                    color_mm6vpy5a 'COB Check' + dropdown_mm5yx3sm
+ *                    'Suggested Primary'
+ *   Auth          -> color_mm25t997 / color_mm27snkq + Trigger DVS + Claims
+ *                    Status (Medicaid ladder) + color_mm2p8v3m 'Insurance
+ *                    Change?' (Fidelis plan-change rule)
+ *   Last Paid     -> color_mm33spks + color_mm3aa9bx
+ *   MR (5th)      -> date_mkp09gra 'MN Expiry' + color_mm6thrwv 'Referral Source'
+ *   Order Type    -> color_mm2w6kd — a First Order has no blockers
  */
 
 import { mondayQuery } from "../monday";
 import type {
-  Checkpoint, CheckpointTone, SubscriptionPatient, SubscriptionType,
-  PatientStatus, PatientFinancials,
+  SubscriptionPatient, SubscriptionType, PatientStatus, PatientFinancials,
 } from "@/components/subscription/mockData";
-import { deriveMr } from "@/lib/subscription/mrCheck";
-import { readSignal } from "@/lib/subscription/confirmationSignals";
-import { dvsState } from "@/lib/subscription/dvs";
-import { renderAuth } from "@/lib/subscription/authStatus";
+import { deriveChecks } from "@/lib/subscription/checks";
 import { todayIso } from "@/lib/subscription/lanes";
 import { fetchNoteActivity } from "./noteActivity";
 
@@ -79,6 +70,15 @@ export const SUB_COL = {
   member_id_2:         "text_mm25cpx6",
   insurance_card:      "file_mm3knk5q",
   active:              "color_mm2nzm33",
+  // Eligibility conditions the payer rules read (lib/subscription/payerRules.ts):
+  //   Last Eligibility Check — Medicare's 7-day / same-month freshness rule
+  //   COB Check              — "Other Primary Reported" blocks (not Medicaid)
+  //   Suggested Primary      — must match Primary Insurance (not Medicaid)
+  //   Insurance Change?      — Fidelis Low-Cost re-checks the sensor auth
+  last_eligibility_check: "date_mm43n083",
+  cob_check:              "color_mm6vpy5a",
+  suggested_primary:      "dropdown_mm5yx3sm",
+  insurance_change:       "color_mm2p8v3m",
   patient_insurance_response: "color_mm3k4z79",
   patient_order_response:     "color_mm3kjykc",
   patient_help_message:       "long_text_mm3xnb6k",
@@ -162,14 +162,10 @@ export const SUB_COL = {
   // (STC 45) or Hospital/SNF admission (STC 48/AH), or a subscriber
   // date of death (DTP*442). "Deceased" also settable by ops and sticky
   // across re-checks (backend carries it forward; consolidated
-  // 2026-07-27, replacing the standalone Deceased? column). Used by
-  // deriveBenefits to override the Eligibility tone:
-  //   contains 'Deceased'              -> red  (stop everything —
-  //                                       claims unsubmittable)
-  //   contains 'Hospital/SNF' or 'SNF' -> red  (can't bill DME at all)
-  //   contains 'Hospice'               -> yellow (billable with GW
-  //                                       on Medicare A&B; warn for
-  //                                       all other payers)
+  // 2026-07-27, replacing the standalone Deceased? column). Read by
+  // deriveEligibility (lib/subscription/checks.ts): Deceased and
+  // Hospital/SNF are dark red for everyone; Hospice is a payer rule —
+  // light green on Medicare A&B (GW modifier), light red elsewhere.
   facility_flags:       "dropdown_mm3gkcmc",
   qmb:                  "text_mm3gr7rh",
   // Claims
@@ -345,293 +341,6 @@ function countOrUndef(raw: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-// ─── Checkpoint derivation ──────────────────────────────────────────────────
-/**
- * Extract change-list items from the latest Patient Change Summary entry.
- *
- * Josh's reorder backend appends a new block to this column on every
- * patient submission. Blocks are separated by a blank line; the first
- * line of each block is a `[timestamp] Patient ACTION:` header and the
- * remaining lines are the human-readable change list.
- *
- * We surface only the LATEST block's lines — older blocks are history
- * and stay in the column for the operator to read via Review Profile.
- * Boilerplate lines ("no changes" / "Cancelled order") are filtered so
- * the popover only shows real material changes.
- */
-function parseLatestChangeLines(summary: string): string[] {
-  if (!summary) return [];
-  const entries = summary.split(/\n\s*\n/).map((e) => e.trim()).filter(Boolean);
-  if (entries.length === 0) return [];
-  const lastEntry = entries[entries.length - 1];
-  const lines = lastEntry.split("\n").map((l) => l.trim()).filter(Boolean);
-  // First line is the [timestamp] Patient ACTION: header — drop it.
-  const changeLines = lines.slice(1);
-  return changeLines.filter(
-    (line) => !/no changes|no detail changes|cancelled order/i.test(line),
-  );
-}
-
-function deriveConfirmation(item: MondayItem, notesUpdatedAt: number | null): Checkpoint {
-  const por = get(item, SUB_COL.patient_order_response);
-  const pir = get(item, SUB_COL.patient_insurance_response);
-  const msg = get(item, SUB_COL.patient_help_message);
-  const summary = get(item, SUB_COL.patient_change_summary);
-  const reorderTextSent = get(item, SUB_COL.reorder_text_sent);
-  // The row's one badge: is there anything to read before ordering?
-  // Our note + the patient's portal message + an inbound text/call, scoped
-  // to 30 days before the order date. See lib/subscription/confirmationSignals.ts.
-  const signal = readSignal({
-    helpMessage:      msg,
-    coordinatorNotes: get(item, SUB_COL.subscription_notes),
-    notesUpdatedAt,
-    lastPatientContact: get(item, SUB_COL.last_patient_contact),
-    orderDate:        get(item, SUB_COL.next_order),
-  });
-  // Source of truth for what the patient changed = the parsed change
-  // summary written by Josh's reorder backend (covers address, order
-  // date, CGM/pump type, infusion sets, insurance). The standalone
-  // Patient Insurance Response column is a fallback for older patients
-  // whose change summary is empty.
-  const changes: string[] = parseLatestChangeLines(summary);
-  let detail: string | undefined;
-  if (changes.length === 0 && pir === "Changed") {
-    changes.push(`Insurance: ${pir}`);
-  }
-
-  let tone: CheckpointTone = "pending";
-  // Reorder text fired? "Awaiting" → gray pending circle (we asked, waiting).
-  // No text yet? "Not sent" → outline circle (it's not our turn yet, the
-  // reorder cron will fire at 20-days; nothing for ops to do until then).
-  let label = reorderTextSent ? "Awaiting" : "Not sent";
-  // Monday's actual status label is "Delay" (verified on the board
-  // 2026-07-28 — Brian Gillen sat gray/pending because this compared
-  // against "Delayed"). Prefix-match so both spellings count.
-  // Delaying pushes the order date automatically, so against the date the
-  // row is showing, a delayed patient HAS answered. Plain green check, same
-  // as any other confirmation — the fact that they delayed is in the detail
-  // and the profile, not in a second visual state (Brandon, 2026-09-19).
-  const delayed = /^delay/i.test(por);
-  if (por === "Confirmed") { tone = "ok"; label = "Confirmed"; }
-  else if (delayed) {
-    tone = "ok";
-    label = "Confirmed";
-    detail = "Patient chose to delay — the order date has already moved";
-  }
-  // ── The three labels this used to ignore (added 2026-09-14) ─────────────
-  // The column carries five labels; only two were handled, so 65 rows
-  // reading "No Response" rendered as an indistinguishable gray "Awaiting"
-  // — the tool could not tell "we asked and they went quiet" from "we
-  // asked an hour ago". "No Response" is now its own state, and an
-  // explicit no is red rather than silently neutral.
-  else if (/^no response/i.test(por)) { tone = "pending"; label = "No reply"; }
-  else if (/^(cancel|pause)$/i.test(por)) {
-    tone = "bad";
-    label = "Patient said no";
-    // Which one matters: Cancel is permanent (-> Inactive), Pause is
-    // temporary (-> Paused + a reason). The operator decides; the circle
-    // just stops it being read as "nothing happened".
-    detail = por === "Cancel"
-      ? "Patient cancelled - move to Inactive with a dead reason"
-      : "Patient asked to pause - set Paused with a pause reason";
-  }
-  return {
-    tone,
-    label,
-    detail,
-    needsRead: signal.needsRead ? signal.summary : undefined,
-    needsReadLines: signal.lines.length ? signal.lines : undefined,
-    changes: changes.length ? changes : undefined,
-    delayed: delayed || undefined,
-    patientMessage: msg || undefined,
-  };
-}
-
-function deriveBenefits(item: MondayItem): Checkpoint {
-  const active = get(item, SUB_COL.active);
-  const runCheck = get(item, SUB_COL.run_check);
-  const lastError = get(item, SUB_COL.last_eligibility_error);
-  const facilityFlags = get(item, SUB_COL.facility_flags);
-  // Facility-flag overrides win before any Active value because they
-  // describe billing-impact states that hold regardless of the
-  // policy's eligibility verdict:
-  //   Deceased     -> red (stop the cycle entirely — never ship, never
-  //                    claim. Allan Blaer 2026-07-22: flag was on the
-  //                    board but nothing surfaced it, an order shipped,
-  //                    and the claim is now unsubmittable)
-  //   Hospital/SNF -> red (DME can't be separately billed)
-  //   Hospice      -> yellow (billable on Medicare A&B with GW; warn
-  //                    on every other payer so ops verify the path)
-  const ff = facilityFlags.toLowerCase();
-  if (ff.includes("deceased")) {
-    return {
-      tone: "bad",
-      label: "Deceased",
-      detail: "Payer reported a date of death (or flag set by ops). Do not ship or bill.",
-    };
-  }
-  if (ff.includes("hospital") || /\bsnf\b/.test(ff)) {
-    return {
-      tone: "bad",
-      label: "Hospital/SNF",
-      detail: "Active admission — DME can't be separately billed during the stay.",
-    };
-  }
-  if (ff.includes("hospice")) {
-    return {
-      tone: "warn",
-      label: "Hospice",
-      detail: "Active hospice election — Medicare A&B bills with GW modifier; non-Medicare may deny.",
-    };
-  }
-  // Active populated with a real verdict beats anything else.
-  if (active === "Active") return { tone: "ok", label: "Active" };
-  if (active === "Inactive" || active === "Medicare Advantage") {
-    return { tone: "bad", label: active };
-  }
-  if (active) return { tone: "warn", label: active };
-  // Active is blank — distinguish the three pending sub-states so the
-  // operator knows what (if anything) to do about each:
-  //   Failed   → tone:'warn', label:'Failed Check'  → YELLOW circle
-  //   Batch    → tone:'pending', label:'In Batch'   → gray pending
-  //   anything → tone:'pending', label:'Not run'    → outline (never tried)
-  if (runCheck === "Failed") {
-    return {
-      tone: "warn",
-      label: "Failed Check",
-      detail: lastError || "Stedi rejected the request; no reason recorded.",
-    };
-  }
-  // Run Check = "Batch" means the row is currently in flight inside
-  // a Stedi batch (either still being processed or in Stedi's internal
-  // RETRYING loop). Operator can't do anything until the poller writes
-  // a verdict back. Label is NOT in NOT_YET_LABELS so the circle renders
-  // gray, not outline.
-  if (runCheck === "Batch") {
-    return { tone: "pending", label: "In Batch", detail: "Awaiting Stedi batch result" };
-  }
-  // Run Check = "Run" means a real-time check is firing right now — same
-  // gray pending state, slightly different label so ops can tell.
-  if (runCheck === "Run") {
-    return { tone: "pending", label: "Checking…", detail: "Real-time check in flight" };
-  }
-  return { tone: "pending", label: "Not run" };
-}
-
-/**
- * Authorization = what Supplies/Sensors Auth Status say, for the categories
- * this patient is actually served for.
- *
- * Medicaid used to be special-cased here — the circle was forced to an open
- * "DVS needed" state off the Trigger DVS column while Monday sat there saying
- * "Auth Valid". That was the tool disagreeing with the board, and it has been
- * removed. The board now handles it itself: ordering a Medicaid patient sets
- * Supplies Auth Status back to "Required" and clears the auth window, so by
- * the time the next order comes due the board already says an auth is needed.
- *
- * What survives of the DVS logic is the ACTION, not the verdict: dvsNeeded
- * marks the rows the Run DVS button can fire for. It decides which checkbox
- * appears, never what colour the circle is. See lib/subscription/dvs.ts.
- */
-function deriveAuth(item: MondayItem, subType: string, today: string): Checkpoint {
-  // Sensors-only and Supplies-only patients are not waiting on the auth they
-  // aren't served for. (Medicaid is Supplies-only on 258 of 264 active rows.)
-  const labels = [
-    subType !== "Supplies" ? get(item, SUB_COL.sensors_auth_status)  : "",
-    subType !== "Sensors"  ? get(item, SUB_COL.supplies_auth_status) : "",
-  ].filter(Boolean);
-
-  // ── Medicaid, order due: the circle follows the DVS → claim ladder ──
-  // Still mirroring Monday, just across three of its columns instead of one.
-  // Supplies Auth Status alone can't answer "clear to order?" for Medicaid,
-  // because it flips to Auth Valid the moment DVS succeeds — before the claim
-  // has paid, and Brandon's sequence is DVS, get paid, THEN order. So the
-  // ladder reads Trigger DVS and Claims Status too, and every state below is
-  // a value some Monday column is actually holding (Brandon, 2026-09-19).
-  const dvs = dvsState({
-    payer:        get(item, SUB_COL.primary_insurance),
-    orderDate:    get(item, SUB_COL.next_order),
-    triggerDvs:   get(item, SUB_COL.trigger_dvs),
-    claimsStatus: get(item, SUB_COL.claims_status_col),
-    today,
-  });
-  switch (dvs.kind) {
-    case "needed":
-      // Amber, and the only state that offers the Run DVS checkbox.
-      return { ...renderAuth(labels), dvsNeeded: true, medicaidDvs: true };
-    case "running":
-      // "…" — an answer is coming from the bot or the payer. Don't act.
-      return { tone: "pending", awaiting: true, label: dvs.label, medicaidDvs: true };
-    case "cleared":
-      return { tone: "ok", label: dvs.label, medicaidDvs: true };
-    case "failed":
-      return { tone: "bad", label: dvs.label, medicaidDvs: true };
-  }
-
-  // Everyone else: the circle is Supplies/Sensors Auth Status, nothing more.
-  return renderAuth(labels);
-}
-
-function fmtMoney(raw: string): string | null {
-  if (!raw) return null;
-  const n = Number(raw);
-  if (Number.isNaN(n)) return null;
-  // 2 decimals when there's a fractional component, none otherwise — so
-  // $250 stays $250 and $250.50 stays $250.50.
-  return `$${n.toLocaleString(undefined, {
-    minimumFractionDigits: n % 1 === 0 ? 0 : 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function deriveLastPaid(item: MondayItem): Checkpoint {
-  const pri    = get(item, SUB_COL.primary_claim_paid);
-  const sec    = get(item, SUB_COL.secondary_claim_paid);
-  const secAmt = get(item, SUB_COL.secondary_amount);
-  // Verified Monday labels 2026-06-07:
-  //   Primary Claim Paid?:   Denied / Fully Paid / Partial
-  //   Secondary Claim Paid?: Fully Paid / None / Outstanding
-  // 'None' on Secondary = patient has no secondary insurance, which is
-  // a fully-resolved state — green, not yellow. Treat it the same as
-  // a blank cell.
-  function statusToTone(v: string): CheckpointTone {
-    if (!v) return "pending";
-    if (/^none$/i.test(v)) return "ok";  // explicit "no secondary"
-    if (/(Paid|Fully Paid|Patient Paid)/i.test(v)) return "ok";
-    if (/Denied/i.test(v)) return "bad";
-    return "warn";  // Partial / Outstanding / Underpaid / etc.
-  }
-  const priTone = statusToTone(pri);
-  // Empty Secondary = no claim sent yet (could be pending OR no secondary).
-  // Explicit "None" = no secondary insurance at all. Both → ok.
-  const secTone: CheckpointTone = !sec ? "ok" : statusToTone(sec);
-  const tones: CheckpointTone[] = [priTone, secTone];
-  let tone: CheckpointTone = "ok";
-  if (tones.includes("bad")) tone = "bad";
-  else if (tones.includes("warn")) tone = "warn";
-  else if (tones.includes("pending")) tone = "pending";
-
-  // Build a richer detail string: 'Primary: <status>; Secondary: <status>'
-  // — and when Secondary is Outstanding, inline the $ amount from the
-  // Secondary Amount column so ops know if it's $25 or $2,500 of gap
-  // before they open the row.
-  const parts: string[] = [];
-  if (pri) parts.push(`Primary: ${pri}`);
-  if (sec && !/^none$/i.test(sec)) {
-    const money = fmtMoney(secAmt);
-    if (/outstanding/i.test(sec) && money) {
-      parts.push(`Secondary: ${money} outstanding`);
-    } else {
-      parts.push(`Secondary: ${sec}`);
-    }
-  }
-  return {
-    tone,
-    label: pri || "Not run",
-    detail: parts.length ? parts.join("; ") : undefined,
-  };
-}
-
 function normalizeSubscriptionType(raw: string): SubscriptionType {
   if (raw === "Sensors" || raw === "Supplies" || raw === "Sensors & Supplies") return raw;
   // Map any other label sensibly — default to Sensors & Supplies (most permissive)
@@ -657,13 +366,45 @@ function mapItem(
   today: string = todayIso(),
 ): LiveSubscriptionPatient {
   const subType = normalizeSubscriptionType(get(item, SUB_COL.subscription));
-  const confirmation = deriveConfirmation(item, notesUpdatedAt);
-  const benefits     = deriveBenefits(item);
-  const auth         = deriveAuth(item, subType, today);
-  const lastPaid     = deriveLastPaid(item);
   const referralSource = get(item, SUB_COL.referral_source);
   const mnExpiry       = get(item, SUB_COL.mn_expiry);
-  const mr           = deriveMr({ mnExpiry, referralSource });
+  // The five checks + row flags, from board values alone. Pure, tested in
+  // lib/subscription/checks.test.ts; rules in lib/subscription/payerRules.ts.
+  const checks = deriveChecks({
+    today,
+    primaryInsurance:         get(item, SUB_COL.primary_insurance),
+    orderDate:                get(item, SUB_COL.next_order),
+    orderType:                get(item, SUB_COL.order_type),
+    subscriptionType:         subType,
+    patientOrderResponse:     get(item, SUB_COL.patient_order_response),
+    patientInsuranceResponse: get(item, SUB_COL.patient_insurance_response),
+    patientHelpMessage:       get(item, SUB_COL.patient_help_message),
+    patientChangeSummary:     get(item, SUB_COL.patient_change_summary),
+    reorderTextSent:          get(item, SUB_COL.reorder_text_sent),
+    coordinatorNotes:         get(item, SUB_COL.subscription_notes),
+    notesUpdatedAt,
+    lastPatientContact:       get(item, SUB_COL.last_patient_contact),
+    oopEstimate:              get(item, SUB_COL.oop_estimate),
+    totalGp:                  get(item, SUB_COL.total_gp),
+    active:                   get(item, SUB_COL.active),
+    runCheck:                 get(item, SUB_COL.run_check),
+    lastEligibilityError:     get(item, SUB_COL.last_eligibility_error),
+    facilityFlags:            get(item, SUB_COL.facility_flags),
+    lastEligibilityCheck:     get(item, SUB_COL.last_eligibility_check),
+    cobCheck:                 get(item, SUB_COL.cob_check),
+    suggestedPrimary:         get(item, SUB_COL.suggested_primary),
+    sensorsAuthStatus:        get(item, SUB_COL.sensors_auth_status),
+    suppliesAuthStatus:       get(item, SUB_COL.supplies_auth_status),
+    triggerDvs:               get(item, SUB_COL.trigger_dvs),
+    claimsStatus:             get(item, SUB_COL.claims_status_col),
+    insuranceChange:          get(item, SUB_COL.insurance_change),
+    primaryClaimPaid:         get(item, SUB_COL.primary_claim_paid),
+    secondaryClaimPaid:       get(item, SUB_COL.secondary_claim_paid),
+    secondaryAmount:          get(item, SUB_COL.secondary_amount),
+    mnExpiry,
+    referralSource,
+  });
+  const { confirmation, benefits, auth, lastPaid, mr } = checks;
 
   return {
     // Base SubscriptionPatient
@@ -688,6 +429,9 @@ function mapItem(
     lastPaid,
     mr,
     referralSource,
+    firstOrder:  checks.firstOrder,
+    payerGroup:  checks.payerGroup,
+    flags:       checks.flags,
 
     // Extended fields
     dob:                 get(item, SUB_COL.dob),

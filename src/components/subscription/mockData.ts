@@ -5,6 +5,8 @@
 // reasons are real; the checkpoint cells are reshuffled to give the operator
 // a representative test cohort. Refresh by re-running the snapshot script.
 
+import type { PatientFlag, PayerGroupId, RuleId } from "@/lib/subscription/payerRules";
+
 export type CheckpointTone = "ok" | "warn" | "bad" | "pending";
 export type CheckpointGate = "hard" | "soft";
 export type CheckpointKind = "confirmation" | "benefits" | "auth" | "lastPaid" | "mr";
@@ -27,11 +29,17 @@ export type Checkpoint = {
    *  automatically, so against the date the row is showing the patient has
    *  answered and the circle is a plain green check (Brandon, 2026-09-19). */
   delayed?: boolean;
-  /** Passes, but only just: rendered as a hollow (light green) circle. Used
-   *  by the MR check for "records not valid, but OK to order" — the tone is
-   *  still ok so readiness math treats it as a pass, the look tells ops to
-   *  chase the records. */
+  /** A RULE decided this mark, not the column: rendered light (hollow) in
+   *  the tone's colour — light green when a rule passes something the column
+   *  did not, light red when a rule stops something the column looked fine
+   *  on. Dark means the column decided by itself. The tone still drives
+   *  readiness either way. See lib/subscription/payerRules.ts. */
   light?: boolean;
+  /** The rule's reason, with the numbers, for the hover ("Rule: …"). Set
+   *  whenever `light` is. */
+  why?: string;
+  /** Which rule, for the Rules tab's nightly counts. */
+  ruleId?: RuleId;
   /** Rendered as an EMPTY outline circle whatever the tone: the data behind
    *  the check was never recorded, so it's neither a pass nor a fail — it's
    *  a blank. Used by the MR check for a missing MN Expiry ("shown as blank
@@ -112,6 +120,14 @@ export type SubscriptionPatient = {
   coordinatorNotes?: string;
   patientHelpMessage?: string;
   orderType?: string;  // "First Order" / "Reorder" (Order Type column)
+  /** Order Type reads First Order: every check passes by rule and the row
+   *  goes straight to Ready to Order (Brandon, 2026-09-20). */
+  firstOrder?: boolean;
+  /** Which payer-rule group decided the light marks on this row. */
+  payerGroup?: PayerGroupId;
+  /** Row badges for money figures that should exist and don't: OOP unknown
+   *  inside 20 days of the order, GP unknown. See payerRules.confirmPolicy. */
+  flags?: PatientFlag[];
   // Order Cycle v2 block tracking (live columns; optional so mock rows
   // and older cached data still typecheck). See lanes.ts BlockFields.
   checkInDate?: string;
