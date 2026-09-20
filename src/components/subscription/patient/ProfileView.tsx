@@ -112,12 +112,12 @@ export function ProfileView({
         </div>
       </Section>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {/* ── Demographics ── */}
         <Section title="Demographics">
           <div className="grid grid-cols-2 gap-x-6 gap-y-3">
             <Fact label="Gender">{p.gender}</Fact>
-            <Fact label="Email">{p.email ? <a className="inline-flex items-center gap-1 text-primary hover:underline" href={`mailto:${p.email}`}><Mail className="h-3 w-3" />{p.email}</a> : ""}</Fact>
+            <Fact label="Email" className="min-w-0">{p.email ? <a className="inline-flex max-w-full items-center gap-1 text-primary hover:underline" href={`mailto:${p.email}`}><Mail className="h-3 w-3 shrink-0" /><span className="truncate" title={p.email}>{p.email}</span></a> : ""}</Fact>
           </div>
           <div className="mt-3">
             <EditField label="Address" value={draft.address} onChange={(v) => setField("address", v)} />
@@ -144,7 +144,7 @@ export function ProfileView({
             <Button size="sm" variant="outline" className="h-7 gap-1.5 px-2 text-[11px]" onClick={onRunEligibility} disabled={runningElig}
               title="Flips Run Check to Run on Monday — Stedi answers within a minute; Active status and the coverage figures below refresh">
               {runningElig ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-              Run eligibility check
+              {runningElig ? "Checking…" : "Run eligibility check"}
             </Button>
           }
         >
@@ -214,28 +214,28 @@ export function ProfileView({
               <a
                 href={mondayUrl} target="_blank" rel="noopener"
                 className="flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed bg-muted/40 px-3 py-4 text-center hover:bg-muted"
-                title="File upload goes through the Monday item for now — this opens it"
+                title="Opens the Monday item — drop the file on its Medical Necessity Docs column"
               >
                 <Upload className="h-5 w-5 text-muted-foreground" />
                 <b className="text-[13px]">Upload MN Docs</b>
-                <span className="text-[11px] text-muted-foreground">Opens the Monday item — drop the file on its Medical Necessity Docs column</span>
               </a>
-              <div className="space-y-2">
+              <div>
+                {/* The visit date is the input; MN expiry is visit + 6 months,
+                    written on Save (Brandon, 2026-09-20). */}
                 <EditField label="Visit date" type="date" value={draft.visitDate} onChange={(v) => {
                   setField("visitDate", v);
                   if (v) setField("mnExpiry", isoPlusMonths(v, 6));
                 }} />
-                <EditField label="MN expiry" type="date" value={draft.mnExpiry} onChange={(v) => setField("mnExpiry", v)} />
-                <div className="text-[11px] text-muted-foreground">
-                  A visit date sets MN expiry to visit + 6 months; MN expiry can also be set directly. Both save with the page's Save button and refresh Medical Records.
-                </div>
+                {draft.visitDate && draft.mnExpiry && (
+                  <div className="mt-1.5 text-[11px] text-muted-foreground">MN expiry → {usDate(draft.mnExpiry)} on Save</div>
+                )}
               </div>
             </div>
           </div>
         </Section>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {/* ── Order details — editable ── */}
         <Section title={<Eyebrow>Order details</Eyebrow>} right={<span className="text-[11px] text-muted-foreground">editable · saves to the Subscription board</span>}>
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">

@@ -8,8 +8,8 @@
  * (`/messaging/conversation`) but no send route yet, so the composer is shown
  * disabled with the reason, rather than hidden — the layout is the target.
  */
-import { useMemo, useState } from "react";
-import { Loader2, MessageSquare, Phone, Send } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Loader2, MessageSquare, NotebookPen, Phone, Send } from "lucide-react";
 import { toast } from "sonner";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { addSubscriptionNote } from "@/api/setSubscriptionPatient";
@@ -20,6 +20,9 @@ import { markersFor } from "@/components/comms/CommsSheet";
 import { getUser } from "@/lib/comms/auth";
 import { commsConfigured, toE164 } from "@/lib/comms/gateway";
 import { fmtPhone } from "@/lib/comms/format";
+import { getCalls, getConversation } from "@/lib/comms/cache";
+import { callsSince, textsSince } from "@/lib/comms/sinceOrder";
+import { usDate } from "./atoms";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { cn } from "@/lib/utils";
 
@@ -42,17 +45,45 @@ export function operatorInitials(): string {
   return init || "MM";
 }
 
-export function PatientRail({ p, onAllNotes }: { p: LiveSubscriptionPatient; onAllNotes?: () => void }) {
-  const [tab, setTab] = useState<"texts" | "calls">("texts");
+/** The notes the rail shows: our subscription notes plus the patient's own
+ *  message from the reorder portal, newest first as written. */
+export function allNotes(p: LiveSubscriptionPatient): Array<{ stamp: string; text: string; source: "team" | "patient" }> {
+  const ours = noteLines(p.coordinatorNotes).map((n) => ({ ...n, source: "team" as const }));
+  const portal = (p.patientHelpMessage || "").trim();
+  return portal ? [{ stamp: "Patient · reorder portal", text: portal, source: "patient" as const }, ...ours] : ours;
+}
+
+/**
+ * Texts and calls SINCE THE LAST ORDER, from the same cached RingCentral reads
+ * the tabs use (no extra fetch), leaving out the automated reorder texts. Null
+ * until the thread has loaded — the tab shows no number rather than a zero.
+ */
+function useSinceOrderCounts(phone: string, lastOrderDay: string) {
+  const [texts, setTexts] = useState<number | null>(null);
+  const [calls, setCalls] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    setTexts(null); setCalls(null);
+    if (!phone || !commsConfigured()) return;
+    getConversation(phone).then((r) => { if (live) setTexts(textsSince(r.messages, lastOrderDay).length); }).catch(() => {});
+    getCalls(phone).then((c) => { if (live) setCalls(callsSince(c, lastOrderDay).length); }).catch(() => {});
+    return () => { live = false; };
+  }, [phone, lastOrderDay]);
+  return { texts, calls };
+}
+
+export function PatientRail({ p, lastOrderDay }: { p: LiveSubscriptionPatient; lastOrderDay: string }) {
+  const [tab, setTab] = useState<"texts" | "calls" | "notes">("texts");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const { invalidate } = useInvalidateSubscription();
   const phone = useMemo(() => toE164(p.phone), [p.phone]);
   const markers = useMemo(() => markersFor(p), [p]);
-  const notes = useMemo(() => noteLines(p.coordinatorNotes), [p.coordinatorNotes]);
+  const notes = useMemo(() => allNotes(p), [p]);
   const cannotText = /^no$/i.test(p.canText || "");
-  const nTexts = p.textsSinceOrder;
-  const nCalls = p.callsSinceOrder;
+  const counts = useSinceOrderCounts(phone, lastOrderDay);
+  const nTexts = counts.texts ?? p.textsSinceOrder;
+  const nCalls = counts.calls ?? p.callsSinceOrder;
 
   const addNote = async () => {
     const text = note.trim();
@@ -75,17 +106,21 @@ export function PatientRail({ p, onAllNotes }: { p: LiveSubscriptionPatient; onA
       {/* Texts | Calls */}
       <div className="flex items-center gap-2 border-b px-3 py-2.5">
         <div className="inline-flex rounded-lg bg-muted p-0.5">
-          {(["texts", "calls"] as const).map((t) => (
+          {([
+            ["texts", "Texts", <MessageSquare key="t" className="h-3.5 w-3.5" />, nTexts],
+            ["calls", "Calls", <Phone key="c" className="h-3.5 w-3.5" />, nCalls],
+            ["notes", "Notes", <NotebookPen key="n" className="h-3.5 w-3.5" />, notes.length],
+          ] as const).map(([t, label, icon, n]) => (
             <button key={t} type="button" onClick={() => setTab(t)}
-              className={cn("inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-semibold", tab === t ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
-              {t === "texts" ? <MessageSquare className="h-3.5 w-3.5" /> : <Phone className="h-3.5 w-3.5" />}
-              {t === "texts" ? "Texts" : "Calls"}
-              {typeof (t === "texts" ? nTexts : nCalls) === "number" && (
-                <span className="rounded-full bg-muted px-1.5 text-[10px] tabular-nums">{t === "texts" ? nTexts : nCalls}</span>
-              )}
+              className={cn("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-semibold", tab === t ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+              {icon}{label}
+              {typeof n === "number" && <span className={cn("rounded-full px-1.5 text-[10px] tabular-nums", n > 0 ? "bg-sky-100 text-sky-800" : "bg-muted text-muted-foreground")}>{n}</span>}
             </button>
           ))}
         </div>
+      </div>
+      <div className="px-3.5 pt-1.5 text-[10px] text-muted-foreground" title={lastOrderDay ? "Counted since the last order; the automated reorder texts are left out" : "No order on the Order Board yet — everything counts"}>
+        Counts since {lastOrderDay ? `the last order · ${usDate(lastOrderDay)}` : "the start"} · automated reorder texts left out
       </div>
       <div className="flex flex-wrap items-center gap-1.5 px-3.5 pt-2 text-[11px] text-muted-foreground">
         <Phone className="h-3 w-3" />
@@ -103,44 +138,45 @@ export function PatientRail({ p, onAllNotes }: { p: LiveSubscriptionPatient; onA
           <div className="grid h-full place-items-center p-6 text-center text-[12px] text-muted-foreground">Phone on file isn't a usable number: "{p.phone || "—"}".</div>
         ) : tab === "texts" ? (
           <div className="h-full min-h-0"><TextsTab phone={phone} markers={markers} /></div>
-        ) : (
+        ) : tab === "calls" ? (
           <div className="h-full min-h-0"><CallsTab phone={phone} /></div>
+        ) : (
+          <div className="h-full min-h-0 overflow-y-auto bg-muted/20 p-3">
+            {notes.length ? (
+              <div className="space-y-2">
+                {notes.map((n, i) => (
+                  <div key={i} className={cn("rounded-lg border px-3 py-2 text-[12px]", n.source === "patient" ? "border-amber-200 bg-amber-50 text-amber-950" : "bg-card")}>
+                    {n.stamp && <div className={cn("text-[10px]", n.source === "patient" ? "text-amber-800" : "text-muted-foreground")}>{n.stamp}</div>}
+                    <div className="whitespace-pre-wrap break-words">{n.text}</div>
+                  </div>
+                ))}
+              </div>
+            ) : <div className="py-10 text-center text-[12px] text-muted-foreground">No notes on this patient yet.</div>}
+          </div>
         )}
       </div>
 
-      {/* Composer — the layout is the target; sending lands with the gateway's send route. */}
-      <div className="border-t bg-muted/40 px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <input className="w-full flex-1 rounded-lg border border-input bg-card px-3 py-2 text-[13px] disabled:opacity-60" placeholder="Write a text…" disabled aria-label="Write a text"
-            title="Sending isn't wired yet — the gateway has no send route. Texts go out from RingCentral for now." />
-          <Button size="sm" disabled className="h-9 gap-1.5" title="Sending isn't wired yet — the gateway has no send route"><Send className="h-3.5 w-3.5" /> Send text</Button>
-        </div>
-      </div>
-
-      {/* Recent notes */}
-      <div className="border-t px-3.5 py-3">
-        <div className="mb-1.5 flex items-center justify-between">
-          <b className="text-[12px]">Recent notes</b>
-          {onAllNotes && <button type="button" onClick={onAllNotes} className="text-[11px] text-primary hover:underline">All notes</button>}
-        </div>
-        {notes.length ? (
-          <div className="space-y-1.5">
-            {notes.slice(0, 3).map((n, i) => (
-              <div key={i} className="rounded-lg bg-muted px-2.5 py-1.5 text-[12px]">
-                {n.stamp && <div className="text-[10px] text-muted-foreground">{n.stamp}</div>}
-                <div className="whitespace-pre-wrap break-words">{n.text}</div>
-              </div>
-            ))}
+      {/* The box under the list matches the tab: a text to send, or a note to add. */}
+      {tab === "texts" && (
+        <div className="border-t bg-muted/40 px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <input className="w-full flex-1 rounded-lg border border-input bg-card px-3 py-2 text-[13px] disabled:opacity-60" placeholder="Write a text…" disabled aria-label="Write a text"
+              title="Sending isn't wired yet — the gateway has no send route. Texts go out from RingCentral for now." />
+            <Button size="sm" disabled className="h-9 gap-1.5" title="Sending isn't wired yet — the gateway has no send route"><Send className="h-3.5 w-3.5" /> Send text</Button>
           </div>
-        ) : <div className="text-[11px] text-muted-foreground">No notes yet.</div>}
-        <div className="mt-2 flex items-center gap-1.5">
-          <input value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addNote(); }}
-            className="w-full flex-1 rounded-lg border border-input bg-card px-2.5 py-1.5 text-[12px]" placeholder="Add a note (stamped with your initials)" aria-label="Add a note" />
-          <Button size="sm" className="h-8 px-2.5 text-[11px]" onClick={() => void addNote()} disabled={!note.trim() || saving}>
-            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Add"}
-          </Button>
         </div>
-      </div>
+      )}
+      {tab === "notes" && (
+        <div className="border-t bg-muted/40 px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <input value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addNote(); }}
+              className="w-full flex-1 rounded-lg border border-input bg-card px-3 py-2 text-[13px]" placeholder="Add a note (stamped with your initials)" aria-label="Add a note" />
+            <Button size="sm" className="h-9 gap-1.5" onClick={() => void addNote()} disabled={!note.trim() || saving}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <NotebookPen className="h-3.5 w-3.5" />} Add note
+            </Button>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
