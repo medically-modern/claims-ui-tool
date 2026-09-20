@@ -31,7 +31,7 @@ import {
   monitorMergeTarget, orderCategories, orderStatusBorder, pillClass, posLabel, preCheckTone,
 } from "@/lib/subscription/orderBoard";
 import { mergeMonitorIntoSensors, placeOrder } from "@/api/setNewOrder";
-import { fulfillmentOf, orderProgress, type OrderStage } from "@/lib/subscription/orderFulfillment";
+import { fulfillmentOf, orderProductLines, SHIP_STATUS_LABEL, type ProductLine, type ShipStatus } from "@/lib/subscription/orderFulfillment";
 import { useOpenPatient } from "./patient/openPatient";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -216,92 +216,120 @@ function OrderList({ rows, onOpen, onOpenProfile, onMerge, mergingId, selected, 
   );
 }
 
-/** Backordered products on this order (the daily Cardinal availability check). */
-function backorderList(r: NewOrderRow): string[] {
-  return r.backordered.split(",").map((s) => s.trim()).filter(Boolean);
+/** A compact one-line summary of what's on the order, for the overview tables. */
+function productsLine(r: NewOrderRow): string {
+  const cats = orderCategories(r);
+  if (!cats.length) return "—";
+  return cats.map((c) => {
+    const items = c.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(", ");
+    return items ? `${c.category}: ${items}` : c.category;
+  }).join(" · ");
 }
-/** Order-lifecycle stage → pill tone for the order-level Status column. */
-const STAGE_TONE: Record<OrderStage, Parameters<typeof pillClass>[0]> = {
-  error: "red", accepted: "blue", backordered: "red", partial: "amber", shipped: "blue", delivered: "green", sent: "slate",
-};
-/** Per-product state chip styling. */
-type ProdState = "pending" | "backordered" | "shipped" | "delivered";
-const PROD_STATE: Record<ProdState, { label: string; cls: string }> = {
-  pending:     { label: "Pending",     cls: "bg-slate-100 text-slate-700" },
-  backordered: { label: "Backordered", cls: "bg-rose-100 text-rose-800" },
-  shipped:     { label: "Shipped",     cls: "bg-sky-100 text-sky-800" },
-  delivered:   { label: "Delivered",   cls: "bg-emerald-100 text-emerald-800" },
-};
-const nrm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-function matchesBackorder(name: string, boNames: string[]): boolean {
-  const n = nrm(name);
-  if (!n) return false;
-  return boNames.some((b) => { const bn = nrm(b); return !!bn && (bn.includes(n) || n.includes(bn)); });
+/** API Status → a pill tone (same vocabulary as the Pre-Check pill). */
+function apiTone(s: string): Parameters<typeof pillClass>[0] {
+  const l = s.trim().toLowerCase();
+  if (!l) return "slate";
+  if (/error|hold|cannot|fail|reject|denied|deleted/.test(l)) return "red";
+  if (/deliver|success|accepted/.test(l)) return "green";
+  if (/ship/.test(l)) return "blue";
+  if (/warning|review|substitution needed|backorder|partial/.test(l)) return "amber";
+  return "slate";
 }
+const numOf = (s: string) => { const n = Number(String(s).replace(/[^\d.-]/g, "")); return Number.isFinite(n) ? n : 0; };
+/** Ship-status → pill tone. */
+const SHIP_TONE: Record<ShipStatus, Parameters<typeof pillClass>[0]> = {
+  shipped: "green", partial: "amber", backordered: "red", pending: "slate", unknown: "slate",
+};
 
-const OVERVIEW_HEADER = "sticky top-0 z-10 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[15px] font-bold tracking-normal text-slate-700 items-end";
-const OVERVIEW_GRID = "grid grid-cols-[minmax(160px,0.9fr)_92px_minmax(280px,1.5fr)_minmax(240px,1.3fr)_150px] gap-4";
+const OVERVIEW_HEADER = "sticky top-0 z-10 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[13px] font-bold tracking-normal text-slate-700 items-end";
+const OVERVIEW_GRID = "grid grid-cols-[minmax(140px,0.8fr)_88px_minmax(165px,1fr)_108px_minmax(220px,1.4fr)_132px] gap-x-4";
+
+/** Per-product state → pill. Derived from the Line Item Detail, so it says what
+ *  actually happened to THAT product, not the stale order-level chip. */
+const PROD_TONE: Record<ProductLine["state"], Parameters<typeof pillClass>[0]> = {
+  shipped: "green", backordered: "red", pending: "slate",
+};
+const PROD_LABEL: Record<ProductLine["state"], string> = {
+  shipped: "Shipped", backordered: "Backordered", pending: "Pending",
+};
+/** Category tag colors for the SKU-derived categories. */
+const SKU_CAT_TAG: Record<string, string> = {
+  "Sensor": "bg-sky-100 text-sky-800",
+  "Reader": "bg-cyan-100 text-cyan-800",
+  "Pump": "bg-indigo-100 text-indigo-800",
+  "Cartridge": "bg-violet-100 text-violet-800",
+  "Infusion set": "bg-fuchsia-100 text-fuchsia-800",
+};
+
+function TrackingLink({ ship }: { ship: NonNullable<ProductLine["ship"]> }) {
+  return (
+    <div className="text-[12px] leading-tight">
+      <a
+        href={`https://www.google.com/search?q=${encodeURIComponent(ship.tracking)}`}
+        target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+        className="font-mono text-primary hover:underline"
+      >{ship.carrier} {ship.tracking}</a>
+      <div className="tabular-nums text-muted-foreground">
+        Shipped {fmtDate(ship.date)}
+      </div>
+    </div>
+  );
+}
 
 /**
- * One placed-orders list. Each product carries its own state (Pending /
- * Backordered / Shipped / Delivered), the shipments list their tracking, and
- * the Status column rolls the whole order up — all derived from the Line Item
- * Detail, the only reliable signal (Brandon, 2026-09-20).
+ * One placed-orders list, one row PER PRODUCT. Each product carries its own
+ * state pill (Shipped / Backordered / Pending, derived from the Line Item
+ * Detail — the only reliable signal) and its own tracking + ship date, so it's
+ * clear at a glance what happened to each item. The order-level API pill and
+ * the delivery date sit together in the last column (Brandon, 2026-09-20).
  */
 function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
   return (
     <div className="text-[13px] overflow-x-auto">
       <div className={cn(OVERVIEW_GRID, OVERVIEW_HEADER)}>
-        <div>Patient</div><div>Order Date</div><div>Products</div><div>Shipments</div><div>Status</div>
+        <div>Patient</div><div>Order Date</div><div>Product</div><div>Status</div><div>Shipment &amp; Ship Date</div><div>Order Status</div>
       </div>
       {rows.map((r) => {
+        const lines = orderProductLines(r.lineItemDetail);
         const f = fulfillmentOf(r.lineItemDetail);
-        const prog = orderProgress(r.lineItemDetail, r.apiStatus, r.deliveryDate);
-        const bo = backorderList(r);
-        const boNames = bo.length ? bo : f.backorderedSkus;
-        const delivered = !!r.deliveryDate.trim();
-        const anyShipped = f.shipments.length > 0;
-        const products = orderCategories(r).flatMap((c) => c.items.map((i) => ({ name: i.name, qty: i.qty, category: c.category })));
-        const prodState = (name: string): ProdState => {
-          if (matchesBackorder(name, boNames)) return "backordered";
-          if (prog.stage === "error" || prog.stage === "accepted" || prog.stage === "sent") return "pending";
-          if (delivered) return "delivered";
-          if (anyShipped) return "shipped";
-          return "pending";
-        };
-        const statusLabel = prog.stage === "partial" && delivered ? "Partially delivered" : prog.label;
+        const patientCell = (
+          <div className="min-w-0"><div className="font-semibold truncate">{r.name}</div>{r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}</div>
+        );
+        const dateCell = <div className="tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</div>;
+        const apiCell = (
+          <div className="space-y-1">
+            {r.apiStatus ? <span title={r.apiMessage || undefined}><Pill label={r.apiStatus} tone={apiTone(r.apiStatus)} /></span> : <span className="text-muted-foreground">—</span>}
+            {r.deliveryDate && <div className="text-[11px] tabular-nums text-emerald-700">Delivered {fmtDate(r.deliveryDate)}</div>}
+          </div>
+        );
         return (
-          <div key={r.id} className={cn(OVERVIEW_GRID, "cursor-pointer border-b px-4 py-3 items-start hover:bg-muted/40")} onClick={() => onOpen(r)}>
-            <div className="min-w-0"><div className="font-semibold truncate">{r.name}</div>{r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}</div>
-            <div className="tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</div>
-            {/* Per-product state */}
-            <div className="space-y-1.5">
-              {products.length ? products.map((p, i) => {
-                const st = prodState(p.name);
-                return (
-                  <div key={i} className="flex items-start justify-between gap-2">
-                    <div className="min-w-0"><span className="font-medium">{p.name}</span>{p.qty && <span className="text-muted-foreground"> {p.qty}</span>}<span className="text-[11px] text-muted-foreground"> · {p.category}</span></div>
-                    <span className={cn("mt-0.5 inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold", PROD_STATE[st].cls)}>{PROD_STATE[st].label}</span>
+          <div key={r.id} className={cn(OVERVIEW_GRID, "cursor-pointer border-b px-4 py-3 gap-y-2.5 items-start hover:bg-muted/40")} onClick={() => onOpen(r)}>
+            {lines.length === 0 ? (
+              <>
+                {patientCell}{dateCell}
+                <div className="col-span-2 text-[12px] text-muted-foreground">{productsLine(r)}</div>
+                <div><Pill label={SHIP_STATUS_LABEL[f.status]} tone={SHIP_TONE[f.status]} /></div>
+                {apiCell}
+              </>
+            ) : lines.map((p, i) => (
+              <div key={p.sku} className="contents">
+                {i === 0 ? patientCell : <div />}
+                {i === 0 ? dateCell : <div />}
+                {/* Product */}
+                <div className="min-w-0 text-[12px]">
+                  <div className="font-medium truncate" title={p.name}>{p.name}{p.qty ? ` ×${p.qty}` : ""}</div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                    {p.cat && <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold", SKU_CAT_TAG[p.cat] ?? "bg-slate-100 text-slate-700")}>{p.cat}</span>}
+                    {p.substitution && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800" title="Original was dropped by Cardinal and substituted">swapped</span>}
                   </div>
-                );
-              }) : <span className="text-[12px] text-muted-foreground">No products</span>}
-            </div>
-            {/* Shipments — tracking links + dates (order level) */}
-            <div className="space-y-1 text-[12px]">
-              {f.shipments.length ? f.shipments.map((s) => (
-                <div key={s.tracking}>
-                  <a href={`https://www.google.com/search?q=${encodeURIComponent(s.tracking)}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-primary hover:underline">{s.carrier} {s.tracking}</a>
-                  <span className="tabular-nums text-muted-foreground"> · ×{s.qty} · {fmtDate(s.date)}</span>
                 </div>
-              )) : <span className="text-muted-foreground">Not shipped yet</span>}
-              {delivered && <div className="tabular-nums text-emerald-700">Delivered {fmtDate(r.deliveryDate)}</div>}
-              {r.signedBy && <div className="text-muted-foreground">Signed {r.signedBy}</div>}
-            </div>
-            {/* Order rollup */}
-            <div className="space-y-1">
-              <Pill label={statusLabel} tone={STAGE_TONE[prog.stage]} />
-              {r.apiStatus && <div className="text-[11px] text-muted-foreground" title={r.apiMessage || undefined}>API: {r.apiStatus}</div>}
-            </div>
+                {/* Status */}
+                <div><Pill label={PROD_LABEL[p.state]} tone={PROD_TONE[p.state]} /></div>
+                {/* Shipment & ship date */}
+                <div>{p.ship ? <TrackingLink ship={p.ship} /> : p.state === "backordered" ? <span className="text-[12px] text-rose-700">Awaiting stock</span> : <span className="text-muted-foreground">—</span>}</div>
+                {i === 0 ? apiCell : <div />}
+              </div>
+            ))}
           </div>
         );
       })}

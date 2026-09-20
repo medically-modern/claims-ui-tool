@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fulfillmentOf, orderProgress } from "./orderFulfillment";
+import { fulfillmentOf, orderProductLines, orderProgress } from "./orderFulfillment";
 
 describe("orderFulfillment", () => {
   it("Hermy Sep 8: backordered line dropped + substituted, substitution shipped → Fully shipped", () => {
@@ -81,5 +81,56 @@ describe("orderProgress (one-glance lifecycle)", () => {
       "   SHIP FedEx 526812700947 qty 3 on 2026-08-18 from NJ",
     ].join("\n");
     expect(orderProgress(detail, "Partially Shipped", "").stage).toBe("partial");
+  });
+});
+
+describe("orderProductLines", () => {
+  it("Justin Hines: both products shipped (one via substitution) → two shipped rows, real names, own tracking", () => {
+    const detail = [
+      "ORDER STATUS 9/16/2026, 16:01:21 ET",
+      "L2 TN1002817I x3 BX @71.94 -> Backordered (BO: 3)",
+      "L1 TN1013310I x3 BX @30.95 -> SHIPPED",
+      "   SHIP FedEx 537924587259 qty 3 on 2026-09-15 from NEW JERSEY WAREHOUSE",
+      "L2 TN1002817I xnull BX @71.94 -> Deleted",
+      "SUBSTITUTED (dropped by Cardinal): TN1002817I",
+      "SUBSTITUTION ORDER 1121071396",
+      "L1 TN1002820I x3 BX @71.94 -> SHIPPED",
+      "   SHIP FedEx 537926378160 qty 3 on 2026-09-16 from NEW JERSEY WAREHOUSE",
+    ].join("\n");
+    const lines = orderProductLines(detail);
+    expect(lines).toHaveLength(2);
+    const cart = lines.find((l) => l.sku === "TN1013310I")!;
+    expect(cart.name).toBe("t:slim");
+    expect(cart.cat).toBe("Cartridge");
+    expect(cart.state).toBe("shipped");
+    expect(cart.ship?.tracking).toBe("537924587259");
+    // Dropped original folded into its substitution replacement (not shown twice).
+    expect(lines.some((l) => l.sku === "TN1002817I")).toBe(false);
+    const sub = lines.find((l) => l.sku === "TN1002820I")!;
+    expect(sub.state).toBe("shipped");
+    expect(sub.substitution).toBe(true);
+    expect(sub.ship?.date).toBe("2026-09-16");
+  });
+
+  it("partial: one shipped, one still backordered → distinct per-product states", () => {
+    const detail = [
+      "ORDER STATUS 9/19/2026, 01:20:30 ET",
+      "L2 TN1002817I x3 BX @71.94 -> Backordered (BO: 3)",
+      "L1 TN1013310I x3 BX @30.95 -> SHIPPED",
+      "   SHIP FedEx 526812700947 qty 3 on 2026-08-18 from NEW JERSEY WAREHOUSE",
+    ].join("\n");
+    const lines = orderProductLines(detail);
+    expect(lines.find((l) => l.sku === "TN1013310I")?.state).toBe("shipped");
+    expect(lines.find((l) => l.sku === "TN1002817I")?.state).toBe("backordered");
+  });
+
+  it("ignores $0 welcome kit", () => {
+    const detail = [
+      "L2 00MMWELCOME xnull EA @0 -> SHIPPED",
+      "L1 TW7874701I x6 EA @79.32 -> Accepted",
+    ].join("\n");
+    const lines = orderProductLines(detail);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].name).toBe("FreeStyle Libre 2 Plus");
   });
 });

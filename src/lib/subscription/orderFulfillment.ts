@@ -19,6 +19,8 @@
  * Pure: no React, no Monday.
  */
 
+import { skuInfo } from "./cardinalSku";
+
 export type LineState = "shipped" | "backordered" | "accepted" | "deleted" | "other";
 
 export interface ShipInfo { carrier: string; tracking: string; qty: string; date: string; warehouse: string }
@@ -112,6 +114,32 @@ export function summarize(f: Fulfillment): FulfillSummary {
 
 export function fulfillmentOf(detail: string): FulfillSummary {
   return summarize(parseFulfillment(detail));
+}
+
+/** A per-product row for the Overview: the real product (SKU→name), its state,
+ *  and — for shipped lines — the shipment that carried it. Cardinal's dropped
+ *  originals are folded into their substitution replacement. */
+export type ProductState = "shipped" | "backordered" | "pending";
+export interface ProductLine { sku: string; name: string; cat: string; qty: string; state: ProductState; ship?: ShipInfo; substitution: boolean }
+
+export function orderProductLines(detail: string): ProductLine[] {
+  const f = parseFulfillment(detail);
+  const subbed = new Set(f.substitutedSkus);
+  const rank: Record<LineState, number> = { shipped: 4, accepted: 3, backordered: 2, deleted: 1, other: 0 };
+  const bySku = new Map<string, { qty: string; state: LineState; ship?: ShipInfo; substitution: boolean }>();
+  for (const ln of f.lines) {
+    if (isWelcome(ln.sku) || subbed.has(ln.sku)) continue; // freebie / dropped original
+    const cur = bySku.get(ln.sku);
+    if (!cur) { bySku.set(ln.sku, { qty: ln.qty, state: ln.state, ship: ln.ship, substitution: ln.substitution }); continue; }
+    if (rank[ln.state] > rank[cur.state]) cur.state = ln.state;
+    if (ln.ship && !cur.ship) cur.ship = ln.ship;
+    if (ln.qty && !cur.qty) cur.qty = ln.qty;
+    cur.substitution = cur.substitution || ln.substitution;
+  }
+  const toState = (s: LineState): ProductState => (s === "shipped" ? "shipped" : s === "backordered" ? "backordered" : "pending");
+  return [...bySku.entries()]
+    .filter(([, v]) => v.state !== "deleted")
+    .map(([sku, v]) => { const info = skuInfo(sku); return { sku, name: info?.name ?? sku, cat: info?.cat ?? "", qty: v.qty, state: toState(v.state), ship: v.ship, substitution: v.substitution }; });
 }
 
 export const SHIP_STATUS_LABEL: Record<ShipStatus, string> = {

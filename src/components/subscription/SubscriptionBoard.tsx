@@ -1421,7 +1421,12 @@ function OrderCycleWorkflow() {
   // React-Query cache the Order tab reads, so no extra fetch (Brandon,
   // 2026-09-20: "a pill on Order tab to show how many i have in there").
   const { data: newOrderData } = useNewOrders();
-  const orderCount = useMemo(() => newOrderData.filter((r) => r.groupId === ORDER_GROUP_ID).length, [newOrderData]);
+  // Count only orders due up through today — a future-dated order isn't work
+  // to act on yet, so it shouldn't inflate the pill (Brandon, 2026-09-20).
+  const orderCount = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return newOrderData.filter((r) => r.groupId === ORDER_GROUP_ID && (!r.orderDate || r.orderDate.slice(0, 10) <= today)).length;
+  }, [newOrderData]);
   // Monday's Ordering Cycle follows the tool's readiness (Order Prep ↔ Ready
   // to Order) after every fresh read — see hooks/subscription/useOrderingCycleSync.
   const sync = useOrderingCycleSync();
