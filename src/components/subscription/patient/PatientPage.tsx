@@ -29,9 +29,9 @@ import { BlockDialog, CheckInDialog } from "../SubscriptionBoard";
 import { isBlocked, type LanePatient } from "@/lib/subscription/lanes";
 import { ProfileView } from "./ProfileView";
 import { OrdersView } from "./OrdersView";
-import { PatientRail, noteLines } from "./PatientRail";
+import { PatientRail } from "./PatientRail";
 import { draftFrom, draftPatch, isDirty, type ProfileDraft } from "./draft";
-import { Section, usDate } from "./atoms";
+import { usDate } from "./atoms";
 
 export type PatientView = "profile" | "orders" | "claims";
 
@@ -132,8 +132,6 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
     }
   };
 
-  const notes = noteLines(p.coordinatorNotes);
-
   // Pause / block from the profile (Brandon, 2026-09-20): look at what is
   // going on, then pause with a reason and a check-in date. Same dialogs the
   // board uses; a paused patient gets the check-in dialog (contact made /
@@ -147,94 +145,80 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_380px]">
       <div className="min-w-0 space-y-4">
-        {/* ── Top bar ── */}
-        <div className="rounded-2xl border bg-card px-5 py-3 shadow-sm">
-          <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
-            <button type="button" onClick={onBack} className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground" title="Back to the board">
+        {/* ── Header: who (identity + status + patient-level decision), then
+            where (tabs). Editing is not up here at all: a save bar appears at
+            the bottom only while something is unsaved. ── */}
+        <div className="overflow-hidden rounded-2xl border bg-card shadow-sm">
+          <div className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 pt-4">
+            <button type="button" onClick={onBack} className="mt-1 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" title="Back to the Order Cycle" aria-label="Back">
               <ArrowLeft className="h-4 w-4" />
             </button>
-            <div><div className="text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">Patient name</div><div className="text-[18px] font-bold leading-tight">{p.name}</div></div>
-            <div><div className="text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">DOB</div><div className="text-[13px] font-semibold">{fmtDob(p.dob) || "—"}</div></div>
-            <div><div className="text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">Email</div><div className="text-[13px]">{p.email ? <a href={`mailto:${p.email}`} className="text-primary hover:underline">{p.email}</a> : "—"}</div></div>
-            <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">Phone</div>
-              <div className="flex items-center gap-1.5">
-                {editPhone
-                  ? <input autoFocus value={draft.phone} onChange={(e) => setField("phone", e.target.value)} className="w-40 rounded-md border border-input bg-card px-2 py-0.5 text-[13px]" aria-label="Phone" />
-                  : <b className="text-[15px] text-primary">{draft.phone || "—"}</b>}
-                <button type="button" onClick={() => { setEditPhone((v) => !v); setView("profile"); }} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" title="Edit phone"><Pencil className="h-3 w-3" /></button>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <h1 className="text-[20px] font-bold leading-tight tracking-tight">{p.name}</h1>
+                {blocked ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700" title={p.blockNote || undefined}>
+                    <PauseCircle className="h-3 w-3" /> Paused{p.pauseReason ? ` · ${p.pauseReason}` : ""}{p.checkInDate ? ` · check in ${usDate(p.checkInDate)}` : ""}
+                  </span>
+                ) : (
+                  <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                    /not active|dead/i.test(p.rawPatientStatus || "") ? "bg-muted text-muted-foreground" : "bg-emerald-50 text-emerald-800")}>
+                    <span className="h-1.5 w-1.5 rounded-full bg-current" />{p.rawPatientStatus || p.patientStatus || "Active"}
+                  </span>
+                )}
+                {p.firstOrder && <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-semibold text-orange-700">First order</span>}
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-muted-foreground">
+                <span title="Date of birth">DOB <b className="font-medium text-foreground">{fmtDob(p.dob) || "—"}</b></span>
+                <span aria-hidden>·</span>
+                <span>{p.primaryPayer}</span>
+                <span aria-hidden>·</span>
+                <span>{p.subscriptionType}{p.orderFrequency ? ` · ${p.orderFrequency}` : ""}</span>
+                <span aria-hidden>·</span>
+                <span className="inline-flex items-center gap-1">
+                  {editPhone
+                    ? <input autoFocus value={draft.phone} onChange={(e) => setField("phone", e.target.value)} onBlur={() => setEditPhone(false)} className="w-36 rounded-md border border-input bg-card px-2 py-0.5 text-[12px] text-foreground" aria-label="Phone" />
+                    : <b className="font-medium text-foreground">{draft.phone || "no phone"}</b>}
+                  <button type="button" onClick={() => { setEditPhone((v) => !v); setView("profile"); }} className="rounded p-0.5 hover:bg-muted hover:text-foreground" title="Edit phone" aria-label="Edit phone"><Pencil className="h-3 w-3" /></button>
+                </span>
+                {p.email && <><span aria-hidden>·</span><a href={`mailto:${p.email}`} className="max-w-[260px] truncate text-primary hover:underline" title={p.email}>{p.email}</a></>}
               </div>
             </div>
-            <div className="ml-auto flex items-center gap-3">
+            {/* The one decision that belongs to the whole patient, not to a tab. */}
+            <div className="flex shrink-0 items-center gap-1.5 self-center">
               {blocked ? (
-                <div className="flex items-center gap-1.5">
-                  <span className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-bold text-rose-700" title={p.blockNote || undefined}>
-                    <PauseCircle className="h-3.5 w-3.5" /> Paused{p.pauseReason ? ` · ${p.pauseReason}` : ""}{p.checkInDate ? ` · check in ${usDate(p.checkInDate)}` : ""}
-                  </span>
+                <>
                   <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]" onClick={() => setCheckInOpen(true)} title="Log the check-in, unblock, or move to Not Active"><CalendarClock className="h-3.5 w-3.5" /> Check in</Button>
-                  <Button variant="ghost" size="sm" className="h-8 text-[12px]" onClick={() => setBlockOpen(true)} title="Change the block reason or check-in date">Edit</Button>
-                </div>
+                  <Button variant="ghost" size="sm" className="h-8 text-[12px] text-muted-foreground" onClick={() => setBlockOpen(true)} title="Change the block reason or check-in date">Edit pause</Button>
+                </>
               ) : (
-                <Button variant="outline" size="sm" className="h-8 gap-1.5 border-rose-200 text-[12px] text-rose-700 hover:bg-rose-50" onClick={() => setBlockOpen(true)}
-                  title="Pause this patient — pick a reason and a check-in date; the row moves to Blocked">
+                <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-[12px] text-muted-foreground hover:text-rose-700" onClick={() => setBlockOpen(true)}
+                  title="Pause this patient — a reason and a check-in date; the row moves to Blocked">
                   <PauseCircle className="h-3.5 w-3.5" /> Pause
                 </Button>
               )}
-              <div className="inline-flex rounded-xl bg-muted p-[3px]">
-                {([
-                  ["profile", "Profile", <User key="u" className="h-3.5 w-3.5" />, null],
-                  ["orders", "Orders", <Package key="p" className="h-3.5 w-3.5" />, orders.loading && !orders.data.length ? "…" : String(myOrders.length)],
-                  ["claims", "Claims", <FileText key="f" className="h-3.5 w-3.5" />, claims.loading ? "…" : String(claims.claims.length)],
-                ] as const).map(([k, label, icon, n]) => (
-                  <button key={k} type="button" onClick={() => setView(k)}
-                    className={cn("inline-flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-[13px] font-semibold", view === k ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
-                    {icon}{label}{n != null && <span className={cn("rounded px-1.5 text-[10px] tabular-nums", view === k ? "bg-primary/10 text-primary" : "bg-muted-foreground/10")}>{n}</span>}
-                  </button>
-                ))}
-              </div>
-              {view === "profile" && (
-                <div className="flex items-center gap-1.5">
-                  <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-[12px]" onClick={reset} disabled={!dirty || saving} title="Discard unsaved edits"><RotateCcw className="h-3.5 w-3.5" /> Reset</Button>
-                  <Button size="sm" className="h-8 gap-1.5 text-[12px]" onClick={() => void save()} disabled={!dirty || saving} title="Nothing is written to Monday until you press Save">
-                    {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save
-                  </Button>
-                </div>
-              )}
             </div>
           </div>
+          <nav className="mt-3 flex gap-1 border-t px-5" aria-label="Patient views">
+            {([
+              ["profile", "Profile", <User key="u" className="h-3.5 w-3.5" />, null],
+              ["orders", "Orders", <Package key="p" className="h-3.5 w-3.5" />, orders.loading && !orders.data.length ? "…" : String(myOrders.length)],
+              ["claims", "Claims", <FileText key="f" className="h-3.5 w-3.5" />, claims.loading ? "…" : String(claims.claims.length)],
+            ] as const).map(([k, label, icon, n]) => (
+              <button key={k} type="button" onClick={() => setView(k)} aria-current={view === k ? "page" : undefined}
+                className={cn("-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-[13px] font-semibold transition-colors",
+                  view === k ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}>
+                {icon}{label}{n != null && <span className={cn("rounded-full px-1.5 text-[10px] tabular-nums", view === k ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground")}>{n}</span>}
+              </button>
+            ))}
+          </nav>
         </div>
-
-        {dirty && view === "profile" && (
-          <div className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900">
-            <b>Unsaved changes.</b> Nothing is written to Monday until you press Save.
-            <button type="button" onClick={reset} className="ml-auto text-[12px] underline-offset-2 hover:underline">Discard</button>
-          </div>
-        )}
 
         {view === "profile" && (
           <>
             <ProfileView p={p} draft={draft} setField={setField} firstOrderDate={firstOrderDate} ordersCount={myOrders.length}
               runningElig={runningElig || !!eligWatch} onRunEligibility={() => void runElig()} mondayUrl={mondayUrl}
               files={files.files} filesLoading={files.loading} />
-            <Section id="all-notes" title={<div><div className="text-[10px] font-semibold uppercase tracking-[.08em] text-muted-foreground">Subscription notes</div><div className="text-[11px] text-muted-foreground">The running log on this patient's Subscription-board item · newest first · add one from the Notes tab in the rail; it posts at once, stamped with the time and your initials</div></div>}
-              right={<span className="rounded-md bg-muted px-2 py-0.5 text-[11px]">{notes.length} note{notes.length === 1 ? "" : "s"}</span>}>
-              {notes.length ? (
-                <div className="space-y-2">
-                  {notes.map((n, i) => (
-                    <div key={i} className="rounded-lg bg-muted px-3 py-2 text-[12px]">
-                      {n.stamp && <div className="text-[10px] text-muted-foreground">{n.stamp}</div>}
-                      <div className="whitespace-pre-wrap break-words">{n.text}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : <div className="text-[12px] italic text-muted-foreground">No notes on this item yet.</div>}
-              {p.patientHelpMessage && (
-                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-950">
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-800">Patient message from the reorder portal</div>
-                  <div className="whitespace-pre-wrap">{p.patientHelpMessage}</div>
-                </div>
-              )}
-            </Section>
           </>
         )}
 
@@ -254,6 +238,21 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
       </div>
 
       <PatientRail p={p} lastOrderDay={myOrders[0]?.placed ?? ""} />
+
+      {/* The save bar: exists only while something is unsaved, pinned to the
+          bottom so it is reachable from any card without scrolling back up.
+          Nothing is written to Monday until Save. */}
+      {dirty && (
+        <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-4 pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-amber-200 bg-white px-4 py-2.5 shadow-lg">
+            <span className="text-[13px]"><b>{Object.keys(draftPatch(base, draft)).length} unsaved change{Object.keys(draftPatch(base, draft)).length === 1 ? "" : "s"}</b><span className="text-muted-foreground"> — not on Monday yet</span></span>
+            <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-[12px]" onClick={reset} disabled={saving}><RotateCcw className="h-3.5 w-3.5" /> Discard</Button>
+            <Button size="sm" className="h-8 gap-1.5 text-[12px]" onClick={() => void save()} disabled={saving}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save to Monday
+            </Button>
+          </div>
+        </div>
+      )}
 
       <BlockDialog patient={blockOpen ? lane : null} open={blockOpen} onClose={() => setBlockOpen(false)} onDone={onBlockDone} />
       <CheckInDialog patient={checkInOpen ? lane : null} open={checkInOpen} onClose={() => setCheckInOpen(false)} onDone={onBlockDone} />
