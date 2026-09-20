@@ -22,6 +22,8 @@ import type {
 } from "@/components/subscription/mockData";
 import { deriveMr } from "./mrCheck";
 import { readSignal } from "./confirmationSignals";
+import { lastOrderDay } from "@/lib/comms/sinceOrder";
+import { sinceLastOrder } from "./circleDetail";
 import { dvsState } from "./dvs";
 import { renderAuth } from "./authStatus";
 import {
@@ -54,6 +56,9 @@ export interface CheckInputs {
   totalGp: string;
   /** Correspondence Reviewed / Confirm Override cells (lib/subscription/orderStamps). */
   correspondenceReviewed: string;
+  /** Order Frequency label ("30-Days"…): with Next Order it gives the last
+   *  order day, the floor for every "since the last order" test. */
+  orderFrequency?: string;
   confirmOverride: string;
   // Eligibility
   active: string;
@@ -154,21 +159,34 @@ export function parseLatestChangeLines(summary: string): string[] {
   );
 }
 
+/** The "[6/7/26, 2:02 PM ET] Patient CONFIRM:" header of the latest entry, or "". */
+export function latestChangeStamp(summary: string): string {
+  if (!summary) return "";
+  const entries = summary.split(/\n\s*\n/).map((e) => e.trim()).filter(Boolean);
+  return entries.length ? entries[entries.length - 1].split("\n")[0] : "";
+}
+
 export function deriveConfirmation(i: CheckInputs, firstOrder: boolean): { check: Checkpoint; flags: PatientFlag[] } {
   const por = i.patientOrderResponse;
   const reviewed = stampFor(i.correspondenceReviewed, i.orderDate);
+  // Everything here is scoped "since the last order" (Brandon, 2026-09-20):
+  // the board estimates that day as Next Order − Order Frequency.
+  const since = lastOrderDay({ nextOrderDate: i.orderDate, orderFrequency: i.orderFrequency }).day;
   const signal = readSignal({
     helpMessage:        i.patientHelpMessage,
     coordinatorNotes:   i.coordinatorNotes,
     notesUpdatedAt:     i.notesUpdatedAt,
     lastPatientContact: i.lastPatientContact,
     orderDate:          i.orderDate,
+    sinceDay:           since || undefined,
     reviewedAt:         reviewed?.at ?? null,
   });
   // What the patient changed: the parsed change summary (address, order date,
   // CGM/pump type, infusion sets, insurance); the standalone Patient Insurance
   // Response column is the fallback for older patients whose summary is empty.
-  const changes = parseLatestChangeLines(i.patientChangeSummary);
+  // The latest submission only counts if it came in since the last order;
+  // an older one is the previous cycle's answer.
+  const changes = sinceLastOrder(latestChangeStamp(i.patientChangeSummary), since) ? parseLatestChangeLines(i.patientChangeSummary) : [];
   if (changes.length === 0 && i.patientInsuranceResponse === "Changed") {
     changes.push(`Insurance: ${i.patientInsuranceResponse}`);
   }
@@ -176,7 +194,7 @@ export function deriveConfirmation(i: CheckInputs, firstOrder: boolean): { check
     needsRead:      signal.needsRead ? signal.summary : undefined,
     needsReadLines: signal.lines.length ? signal.lines : undefined,
     changes:        changes.length ? changes : undefined,
-    patientMessage: i.patientHelpMessage || undefined,
+    patientMessage: i.patientHelpMessage && sinceLastOrder(i.patientHelpMessage, since) ? i.patientHelpMessage : undefined,
   };
 
   // ── Baseline: the Patient Order Response column on its own ──────────────

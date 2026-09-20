@@ -124,8 +124,12 @@ export interface ReadInputs {
   notesUpdatedAt?: number | null;
   /** text_mm5frhe9, "<ISO ts> in|out sms|call|email" */
   lastPatientContact?: string | null;
-  /** yyyy-mm-dd — the window ends here and opens 30 days earlier. */
+  /** yyyy-mm-dd — the window ends here and opens 30 days earlier when no
+   *  sinceDay is given. */
   orderDate?: string | null;
+  /** yyyy-mm-dd — the last order day. When set, the window opens here:
+   *  "since the last order" (Brandon, 2026-09-20). */
+  sinceDay?: string | null;
   /** Epoch ms when an operator marked this order's correspondence reviewed
    *  (Correspondence Reviewed, valid for this order only). Anything said
    *  before it has been read; anything after it re-raises the badge. */
@@ -154,7 +158,11 @@ export function readSignal(p: ReadInputs, now: number = Date.now()): ReadSignal 
   // The window floor, raised to the review stamp when there is one: read
   // messages do not badge; a newer one does.
   const reviewed = typeof p.reviewedAt === "number" ? p.reviewedAt : null;
-  const since = Math.max(readWindowStart(p.orderDate, now), reviewed ?? 0);
+  const sinceDay = String(p.sinceDay ?? "").slice(0, 10);
+  const floor = /^\d{4}-\d{2}-\d{2}$/.test(sinceDay)
+    ? new Date(sinceDay + "T00:00:00").getTime()
+    : readWindowStart(p.orderDate, now);
+  const since = Math.max(floor, reviewed ?? 0);
   const sources: string[] = [];
   const lines: string[] = [];
 

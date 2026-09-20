@@ -67,7 +67,7 @@ import { snoozeLateEra, isSnoozeLateEraConfigured, SnoozeLateEraError } from "@/
 import { ActionItemsInbox } from "@/components/claims/ActionItemsInbox";
 import { ClaimNotePopover } from "@/components/claims/ClaimNotePopover";
 import {
-  AlertTriangle, ArrowRight, Check, Clock, FileJson, FileSearch, FileText, MoreHorizontal, RefreshCw, Search, Send, Wallet, XCircle,
+  AlertTriangle, ArrowRight, BarChart3, Check, Clock, FileJson, FileSearch, FileText, MoreHorizontal, Package, RefreshCw, Search, Send, Wallet, XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -487,20 +487,10 @@ function compareRows(a: Claim, b: Claim, col: ColumnKey, dir: "asc" | "desc"): n
 // ─── The three tools the banner switches between ────────────────────────────
 type TopLevel = "claims" | "subscription" | "financials";
 const TOP_LEVEL_NAV: HeaderNavItem<TopLevel>[] = [
-  { value: "claims",       label: "Claims" },
-  { value: "subscription", label: "Ordering" },
-  { value: "financials",   label: "Financials" },
+  { value: "claims",       label: "Claims",     icon: FileText },
+  { value: "subscription", label: "Ordering",   icon: Package },
+  { value: "financials",   label: "Financials", icon: BarChart3 },
 ];
-const TOP_LEVEL_SUBTITLE: Record<TopLevel, string> = {
-  claims:       "Review ERAs, check unpaid claims, and resolve claim issues.",
-  subscription: "Tonight's orders — what's due, what's holding each one, and who's paused.",
-  financials:   "Revenue, cost and margin across the boards.",
-};
-const TOP_LEVEL_BOARD_URL: Record<TopLevel, string> = {
-  claims:       "https://medicallymodern-force.monday.com/boards/18245429780",
-  subscription: "https://medicallymodern-force.monday.com/boards/18407459988",
-  financials:   "https://medicallymodern-force.monday.com/boards/18245429780",
-};
 
 const Claims = () => {
   const { id: openPatientId } = useOpenPatient();
@@ -1228,10 +1218,8 @@ const Claims = () => {
       {/* The banner switches tools — Claims · Ordering · Financials — like
           the Command Center's own top nav (Brandon, 2026-09-20). */}
       <AppHeader<TopLevel>
-        title="Command Center"
-        subtitle={TOP_LEVEL_SUBTITLE[topLevel]}
+        title="Claims Command Center"
         nav={{ items: TOP_LEVEL_NAV, value: topLevel, onChange: setTopLevel }}
-        mondayBoardUrl={TOP_LEVEL_BOARD_URL[topLevel]}
       />
 
       <main className="mx-auto max-w-[1920px] space-y-4 px-3 py-4 sm:space-y-6 sm:px-6 sm:py-6">

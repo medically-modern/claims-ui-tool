@@ -1120,7 +1120,6 @@ const ClaimDetail = () => {
           </>
         }
         showBack
-        mondayBoardUrl={`https://medicallymodern-force.monday.com/boards/18245429780/pulses/${claim.mondayItemId}`}
       />
 
       <main className="mx-auto max-w-[1920px] px-6 py-6 space-y-6">
