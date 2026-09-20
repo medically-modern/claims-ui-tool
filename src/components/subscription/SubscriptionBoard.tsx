@@ -1964,11 +1964,11 @@ function OrderCycleWorkflow() {
         )}
       </div>
 
-      {/* Primary nav: Due · Order | Paused — Overview / Rules off to the right */}
+      {/* Primary nav: Due · Order | Paused. Overview / Rules moved down to the
+          Due sub-tab row — they only apply to Due (Brandon, 2026-09-20). */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         {primaryNav}
         <div className="flex items-center gap-2">
-          {referenceNav}
           {/* Send Reorder Text is auto-fired by Josh's backend automation
               when status hits 20-days and reorder link is empty — no
               manual button needed. */}
@@ -2102,9 +2102,12 @@ function OrderCycleWorkflow() {
               <span className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums", needsReviewOnly ? "bg-white/20" : "bg-sky-100 text-sky-800")}>{counts.dueNeedsRead}</span>
             </button>
           )}
-          {/* The circle legend applies to Due only, so it lives here rather
-              than in the header (Brandon, 2026-09-20). */}
-          <div className="ml-auto"><MarkLegend onRules={() => setPrimary("rules")} /></div>
+          {/* Overview / Rules + the circle legend apply to Due only, so they
+              live on this row rather than the header (Brandon, 2026-09-20). */}
+          <div className="ml-auto flex flex-wrap items-center gap-3">
+            {referenceNav}
+            <MarkLegend onRules={() => setPrimary("rules")} />
+          </div>
         </div>
       )}
 

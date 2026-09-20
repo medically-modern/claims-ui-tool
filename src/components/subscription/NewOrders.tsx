@@ -497,20 +497,8 @@ export function NewOrders() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <FreshnessPill isFetching={isFetching} dataUpdatedAt={dataUpdatedAt} onRefresh={() => void refetch()} />
-        {loading && data.length === 0 && (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700">
-            <Loader2 className="h-3 w-3 animate-spin" /> Loading orders…
-          </span>
-        )}
-        {error && (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-medium text-red-700" title={error}>
-            Failed to load — showing last cached
-          </span>
-        )}
-
-        {/* Order is the flow; Returns / Overview are reference, off to the right. */}
-        <div className="ml-auto inline-flex items-center rounded-lg border bg-card p-0.5 text-[12px] font-semibold">
+        {/* Order / Overview / Returns — on the left, ahead of the table (Brandon, 2026-09-20). */}
+        <div className="inline-flex items-center rounded-lg border bg-card p-0.5 text-[12px] font-semibold">
           {([
             ["order", "Order"],
             ["overview", "Overview"],
@@ -525,6 +513,17 @@ export function NewOrders() {
             );
           })}
         </div>
+        <FreshnessPill isFetching={isFetching} dataUpdatedAt={dataUpdatedAt} onRefresh={() => void refetch()} />
+        {loading && data.length === 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700">
+            <Loader2 className="h-3 w-3 animate-spin" /> Loading orders…
+          </span>
+        )}
+        {error && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-medium text-red-700" title={error}>
+            Failed to load — showing last cached
+          </span>
+        )}
 
         {view === "order" && (
           <Select value={preCheckFilter} onValueChange={(v) => setPreCheckFilter(v as "all" | "ready")}>
@@ -559,7 +558,7 @@ export function NewOrders() {
           </Button>
         )}
 
-        <div className="relative w-[240px]">
+        <div className="relative ml-auto w-[240px]">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search patient, member ID" className="pl-9" />
         </div>
