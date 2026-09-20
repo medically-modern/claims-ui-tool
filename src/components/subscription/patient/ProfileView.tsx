@@ -9,8 +9,9 @@
  * Editing: the draft lives in the page; nothing is written to Monday until
  * Save, which writes only the fields that changed (setSubscriptionPatient).
  */
-import { Loader2, Mail, RefreshCw, Upload } from "lucide-react";
+import { ExternalLink, FileText, Loader2, Mail, RefreshCw, Upload } from "lucide-react";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
+import type { PatientFile } from "@/api/queries/patientFiles";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { PAYER_OPTIONS } from "../mockData";
@@ -65,9 +66,11 @@ function isoPlusMonths(iso: string, months: number): string {
 }
 
 export function ProfileView({
-  p, draft, setField, firstOrderDate, ordersCount, runningElig, onRunEligibility, mondayUrl,
+  p, draft, setField, firstOrderDate, ordersCount, runningElig, onRunEligibility, mondayUrl, files, filesLoading,
 }: {
   p: LiveSubscriptionPatient;
+  files: PatientFile[];
+  filesLoading: boolean;
   draft: ProfileDraft;
   setField: <K extends keyof ProfileDraft>(k: K, v: ProfileDraft[K]) => void;
   firstOrderDate: string;
@@ -173,11 +176,27 @@ export function ProfileView({
               {mrLabel}
               {p.mnExpiry && <div className="text-[11px] font-normal text-muted-foreground">Expires {usDate(p.mnExpiry)}{mnDays != null ? ` · ${mnDays < 0 ? `${-mnDays} days ago` : `in ${mnDays} days`}` : ""}</div>}
             </Fact>
-            <Fact label="Files">
-              {p.mnDocsName
-                ? <span className="text-[12px]">{p.mnDocsName}</span>
-                : <span className="text-[11px] font-normal text-muted-foreground">Files live on the Monday item (Medical Necessity Docs column).</span>}
-            </Fact>
+            <div className="min-w-0">
+              <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">Files</div>
+              {filesLoading ? (
+                <div className="text-[11px] text-muted-foreground"><Loader2 className="inline h-3 w-3 animate-spin" /> loading…</div>
+              ) : files.filter((f) => f.column === "mnDocs").length ? (
+                <div className="space-y-1">
+                  {files.filter((f) => f.column === "mnDocs").map((f) => (
+                    <a key={f.id} href={f.url} target="_blank" rel="noopener"
+                      className="flex items-center gap-2 rounded-lg border bg-card px-2 py-1.5 text-[12px] hover:bg-muted"
+                      title="Opens the file (link is good for an hour; refresh the page for a new one)">
+                      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate font-medium">{f.name}</span>
+                      {f.createdAt && <span className="shrink-0 text-[10px] text-muted-foreground">{usDate(f.createdAt.slice(0, 10))}</span>}
+                      <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[11px] text-muted-foreground">No MN docs on the Monday item.</div>
+              )}
+            </div>
             <Fact label="Diagnosis">{p.diagnosis}</Fact>
             <Fact label="Sensors auth" tone={authTone(p.sensorsAuthStatus)}>
               {p.sensorsAuthStatus}{p.sensorsAuthEnd && <div className="text-[11px] font-normal text-muted-foreground">to {usDate(p.sensorsAuthEnd)}</div>}
@@ -201,13 +220,14 @@ export function ProfileView({
                 <b className="text-[13px]">Upload MN Docs</b>
                 <span className="text-[11px] text-muted-foreground">Opens the Monday item — drop the file on its Medical Necessity Docs column</span>
               </a>
-              <div>
+              <div className="space-y-2">
                 <EditField label="Visit date" type="date" value={draft.visitDate} onChange={(v) => {
                   setField("visitDate", v);
-                  setField("mnExpiry", v ? isoPlusMonths(v, 6) : draft.mnExpiry);
+                  if (v) setField("mnExpiry", isoPlusMonths(v, 6));
                 }} />
-                <div className="mt-1.5 text-[11px] text-muted-foreground">
-                  Saved with the page's Save button: sets MN expiry to visit + 6 months{draft.visitDate && draft.mnExpiry ? ` (${usDate(draft.mnExpiry)})` : ""} and refreshes Medical Records.
+                <EditField label="MN expiry" type="date" value={draft.mnExpiry} onChange={(v) => setField("mnExpiry", v)} />
+                <div className="text-[11px] text-muted-foreground">
+                  A visit date sets MN expiry to visit + 6 months; MN expiry can also be set directly. Both save with the page's Save button and refresh Medical Records.
                 </div>
               </div>
             </div>
