@@ -16,7 +16,7 @@
  * Check-In, Why Stuck) since that's the whole point of those views.
  */
 
-import { forwardRef, useMemo, useState } from "react";
+import { Fragment, forwardRef, useMemo, useState } from "react";
 import {
   AlertTriangle, ArrowRight, Bell, Building2, CalendarClock, Check, ClipboardCheck,
   Clock, DollarSign, ExternalLink, Heart, Loader2,
@@ -50,6 +50,9 @@ import { useOpenPatient } from "./patient/openPatient";
 import { AdvanceDialog } from "./patient/AdvanceDialog";
 import { NewOrders } from "./NewOrders";
 import { PayerRulesTab } from "./PayerRulesTab";
+import { describeCircle } from "@/lib/subscription/circleDetail";
+import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
+import { setDvsTrigger } from "@/api/setDvsTrigger";
 import { DvsQueue } from "./DvsQueue";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
@@ -298,16 +301,16 @@ function CircleEditPopover({
   const [err, setErr] = useState<string | null>(null);
   const { invalidate } = useInvalidateSubscription();
 
-  // The Confirm circle offers the two decisions (Brandon, 2026-09-20): hold
-  // the patient (Pause) or move them on (Advance — marks the messages
-  // reviewed, overrides Confirm with a reason if it isn't green).
-  const decisions = kind === "confirmation";
-  const runnable    = kind === "benefits" && check.tone !== "ok";
+  // What the popover says is derived per circle from the live fields
+  // (lib/subscription/circleDetail.ts). The button follows the verdict:
+  // green → Pause (the default is already "advance"); not green → the one
+  // action that moves it (Brandon, 2026-09-20).
+  const d = describeCircle(kind, check, patient as SubscriptionPatient & Partial<LiveSubscriptionPatient>, todayIso());
 
-  const runElig = async () => {
+  const run = async (fn: () => Promise<unknown>) => {
     setSaving(true); setErr(null);
     try {
-      await runEligibilityCheck(patient.mondayItemId);
+      await fn();
       invalidate();
       setOpen(false);
     } catch (e) {
@@ -317,73 +320,79 @@ function CircleEditPopover({
     }
   };
 
+  const verdictCls = d.verdict?.kind === "advanced" ? "text-emerald-800 bg-emerald-50 border-emerald-200"
+    : d.verdict?.kind === "held" ? "text-rose-800 bg-rose-50 border-rose-200"
+    : d.verdict?.kind === "overridden" ? "text-amber-900 bg-amber-50 border-amber-200"
+    : "text-slate-700 bg-slate-50 border-slate-200";
+  const verdictWord = d.verdict?.kind === "advanced" ? "Advanced by rules" : d.verdict?.kind === "held" ? "Held by rules" : d.verdict?.kind === "overridden" ? "Overridden" : "Waiting";
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent align="start" className="w-[320px] p-4">
+      <PopoverContent align="start" className="w-[340px] p-4">
         <div className="space-y-3">
           <div>
             <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
               {PHASE_LABELS[kind]} — {patient.name}
             </div>
-            <div className="text-[13px] font-semibold mt-0.5">
-              {check.label}{check.detail ? ` — ${check.detail}` : ""}
-            </div>
-            {check.changes && check.changes.length > 0 && (
-              <div className="mt-1 text-[11px] text-orange-700">
-                Changes: {check.changes.join(" • ")}
-              </div>
-            )}
-            {check.light && check.why && (
-              <div className="mt-1 text-[11px] text-muted-foreground">Rule: {check.why}</div>
-            )}
-            {check.needsRead && (
-              <div className="mt-1.5 rounded-md border border-sky-200 bg-sky-50/70 px-2 py-1.5 text-[11px] text-sky-950">
-                <div className="mb-0.5 font-semibold text-sky-900">Read before ordering</div>
-                {(check.needsReadLines?.length ? check.needsReadLines : [check.needsRead]).map((l, i) => <div key={i}>{l}</div>)}
-              </div>
-            )}
-            {!check.needsRead && check.patientMessage && (
-              <div className="mt-1 text-[11px] text-sky-700">
-                Patient message: {check.patientMessage}
-              </div>
-            )}
+            <div className="mt-0.5 text-[14px] font-semibold">{d.headline}</div>
           </div>
 
-          {decisions && (
-            <div className="grid grid-cols-2 gap-2">
-              <Button size="sm" variant="outline" className="text-rose-700 border-rose-200 hover:bg-rose-50"
-                onClick={() => { setOpen(false); onBlockRequest?.(patient); }} disabled={!onBlockRequest}>
-                <PauseCircle className="mr-1.5 h-3.5 w-3.5" /> Pause…
-              </Button>
-              <Button size="sm" className="bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}>
-                <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Advance…
-              </Button>
+          {d.facts.length > 0 && (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
+              {d.facts.map((f) => (
+                <Fragment key={f.label}>
+                  <dt className="text-muted-foreground">{f.label}</dt>
+                  <dd className={cn("min-w-0 break-words font-medium",
+                    f.tone === "ok" ? "text-emerald-700" : f.tone === "bad" ? "text-rose-700" : f.tone === "muted" ? "text-muted-foreground font-normal" : "")}>{f.value}</dd>
+                </Fragment>
+              ))}
+            </dl>
+          )}
+
+          {d.verdict && (
+            <div className={cn("rounded-md border px-2.5 py-1.5 text-[12px]", verdictCls)}>
+              <span className="font-semibold">{verdictWord}</span> — {d.verdict.text}
             </div>
           )}
 
-          {runnable && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-full"
-              disabled={saving}
-              onClick={() => void runElig()}
-            >
-              {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
-              Run Eligibility Now
-            </Button>
+          {check.changes && check.changes.length > 0 && (
+            <div className="text-[11px] text-orange-700">Changes: {check.changes.join(" • ")}</div>
+          )}
+          {check.needsRead && (
+            <div className="rounded-md border border-sky-200 bg-sky-50/70 px-2 py-1.5 text-[11px] text-sky-950">
+              <div className="mb-0.5 font-semibold text-sky-900">Read before ordering</div>
+              {(check.needsReadLines?.length ? check.needsReadLines : [check.needsRead]).map((l, i) => <div key={i}>{l}</div>)}
+            </div>
+          )}
+          {!check.needsRead && check.patientMessage && (
+            <div className="text-[11px] text-sky-700">Patient message: {check.patientMessage}</div>
           )}
 
-          {!decisions && onBlockRequest && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-full text-rose-700 border-rose-200 hover:bg-rose-50"
-              onClick={() => { setOpen(false); onBlockRequest(patient); }}
-            >
-              <PauseCircle className="mr-1.5 h-3.5 w-3.5" />
-              Pause…
+          {d.action === "pause" && onBlockRequest && (
+            <Button size="sm" variant="outline" className="w-full text-rose-700 border-rose-200 hover:bg-rose-50"
+              onClick={() => { setOpen(false); onBlockRequest(patient); }}>
+              <PauseCircle className="mr-1.5 h-3.5 w-3.5" /> Pause…
+            </Button>
+          )}
+          {d.action === "advance" && (
+            <Button size="sm" className="w-full bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}>
+              <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Advance…
+            </Button>
+          )}
+          {d.action === "run-eligibility" && (
+            <Button size="sm" variant="outline" className="w-full" disabled={saving}
+              onClick={() => void run(() => runEligibilityCheck(patient.mondayItemId))}>
+              {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+              Run eligibility check
+            </Button>
+          )}
+          {d.action === "run-dvs" && (
+            <Button size="sm" className="w-full bg-sky-700 hover:bg-sky-800" disabled={saving}
+              onClick={() => void run(() => setDvsTrigger(patient.mondayItemId))}
+              title="Writes Trigger DVS on the board; the ePACES bot picks it up and writes the result back">
+              {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Shield className="mr-1.5 h-3.5 w-3.5" />}
+              Run DVS
             </Button>
           )}
 
@@ -392,7 +401,7 @@ function CircleEditPopover({
           )}
         </div>
       </PopoverContent>
-      {decisions && <AdvanceDialog patient={advanceOpen ? patient : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />}
+      {kind === "confirmation" && <AdvanceDialog patient={advanceOpen ? patient : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />}
     </Popover>
   );
 }
