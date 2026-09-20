@@ -77,6 +77,8 @@ import type { ServiceLine } from "@/lib/claims/types";
 import { DenialAnalysisTable } from "@/components/claims/DenialAnalysisTable";
 import { EftEnrollmentTable } from "@/components/claims/EftEnrollmentTable";
 import { SubscriptionBoard } from "@/components/subscription/SubscriptionBoard";
+import { OpenPatientProvider, useOpenPatient } from "@/components/subscription/patient/openPatient";
+import { OpenPatientScreen } from "@/components/subscription/patient/OpenPatientScreen";
 import { PrimarySubmitBoard } from "@/components/claims/PrimarySubmitBoard";
 import { SecondaryBoard } from "@/components/claims/SecondaryBoard";
 import { useThreadClaims } from "@/lib/claims/threadStore";
@@ -481,6 +483,7 @@ function compareRows(a: Claim, b: Claim, col: ColumnKey, dir: "asc" | "desc"): n
 
 
 const Claims = () => {
+  const { id: openPatientId } = useOpenPatient();
   const [topLevel, setTopLevel] = useState<"claims" | "subscription" | "financials">("claims");
   const [board, setBoard] = useState<BoardKey>("primary");
   const [mode, setMode] = useState<ModeKey>("review");
@@ -1205,6 +1208,10 @@ const Claims = () => {
       />
 
       <main className="mx-auto max-w-[1920px] space-y-4 px-3 py-4 sm:space-y-6 sm:px-6 sm:py-6">
+        {/* A patient open full-page replaces everything below the header: no
+            board tabs, no workflow tabs — only Profile | Orders | Claims for
+            that patient; Back returns to the Order Cycle (Brandon, 2026-09-20). */}
+        {openPatientId ? <OpenPatientScreen /> : (<>
         {/* Top-level: Claims Board (the original product) vs Subscription Board.
             Phone: shorter labels so all three tabs fit on one row. */}
         <Tabs value={topLevel} onValueChange={(v) => setTopLevel(v as "claims" | "subscription" | "financials")}>
@@ -2231,6 +2238,7 @@ const Claims = () => {
         )}
         </>
         )}
+        </>)}
       </main>
 
       {/* Row-level Mark Paid confirmation. Opens when the checkmark icon on
@@ -2497,4 +2505,12 @@ function ComingSoon({ title, description }: { title: string; description: string
   );
 }
 
-export default Claims;
+/** The patient page's open state lives above the whole page (see
+ *  components/subscription/patient/openPatient). */
+export default function ClaimsPage() {
+  return (
+    <OpenPatientProvider>
+      <Claims />
+    </OpenPatientProvider>
+  );
+}

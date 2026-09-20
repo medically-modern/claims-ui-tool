@@ -45,7 +45,7 @@ import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPat
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { runEligibilityCheck, saveSubscriptionPatient } from "@/api/setSubscriptionPatient";
-import { PatientPage } from "./patient/PatientPage";
+import { useOpenPatient } from "./patient/openPatient";
 import { Loader2, RefreshCw as ReloadIcon } from "lucide-react";
 
 // ─── Field shape ─────────────────────────────────────────────────────────────
@@ -301,6 +301,7 @@ export function PatientProfile() {
   const { data: livePatients, loading, isFetching, error, usingMock, refetch, dataUpdatedAt }
     = useSubscriptionPatients();
   const { invalidate: invalidateSubscription } = useInvalidateSubscription();
+  const { open: openPatientPage } = useOpenPatient();
   const patients: LiveSubscriptionPatient[] = livePatients ?? [];
 
   const filtered = useMemo(() => {
@@ -331,8 +332,9 @@ export function PatientProfile() {
   }
 
   function openPatient(p: LiveSubscriptionPatient) {
-    setOpenId(p.id);
-    setDrafts((d) => d[p.id] ? d : { ...d, [p.id]: defaultsFromLivePatient(p) });
+    // The full patient page, app-wide (patient/openPatient) — same page a
+    // row click on the Order Cycle opens.
+    openPatientPage(p.mondayItemId);
   }
   function update<K extends keyof EditableProfile>(k: K, v: EditableProfile[K]) {
     if (!openId) return;
@@ -401,14 +403,6 @@ export function PatientProfile() {
   const opened = openId ? patients.find((p) => p.id === openId) : null;
   const draft  = openId ? drafts[openId] : null;
   const dirty  = openId ? !!dirtyMap[openId] : false;
-
-  // ─── Detail view — the full patient page (2026-09-20 redesign) ──────────
-  // The same page a row click on the Order Cycle board opens: Profile |
-  // Orders | Claims with comms and notes in the rail. Editing and the
-  // eligibility check live there now; this list is just the way in.
-  if (opened) {
-    return <PatientPage patient={opened} onBack={() => setOpenId(null)} />;
-  }
 
   // ─── Main table view ─────────────────────────────────────────────────────
   return (
