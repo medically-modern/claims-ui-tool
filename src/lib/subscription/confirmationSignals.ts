@@ -201,7 +201,9 @@ export function readSignal(p: ReadInputs, now: number = Date.now()): ReadSignal 
 
 /** How much of a note fits in a tooltip. Long enough to tell a "wants 90 days"
  *  from a "moving to Florida", short enough not to cover the row. */
-export const EXCERPT_CHARS = 140;
+export // The lines are read in the popover and the profile now, not a hover, so
+// they carry the whole message (Brandon, 2026-09-20: "gets cut off").
+const EXCERPT_CHARS = 2000;
 
 /** One line of a note, whitespace collapsed, cut at a word where it can be. */
 export function excerpt(raw: string | null | undefined, max = EXCERPT_CHARS): string {
