@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { useNewOrders } from "@/hooks/subscription/useNewOrders";
 import { useClaimHistory } from "@/hooks/subscription/useClaimHistory";
+import { usePatientFiles } from "@/hooks/subscription/usePatientFiles";
 import { ordersForPatient } from "@/lib/subscription/orderHistory";
 import { cn } from "@/lib/utils";
 import { ClaimHistoryCard } from "../ClaimHistoryCard";
@@ -66,6 +67,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
     return dates[0] ?? "";
   }, [myOrders]);
   const claims = useClaimHistory(p.mondayItemId);
+  const files = usePatientFiles(p.mondayItemId);
   const mondayUrl = `https://medicallymodern-force.monday.com/boards/18407459988/pulses/${p.mondayItemId}`;
 
   const save = async () => {
@@ -154,7 +156,8 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
         {view === "profile" && (
           <>
             <ProfileView p={p} draft={draft} setField={setField} firstOrderDate={firstOrderDate} ordersCount={myOrders.length}
-              runningElig={runningElig} onRunEligibility={() => void runElig()} mondayUrl={mondayUrl} />
+              runningElig={runningElig} onRunEligibility={() => void runElig()} mondayUrl={mondayUrl}
+              files={files.files} filesLoading={files.loading} />
             <Section id="all-notes" title={<div><div className="text-[10px] font-semibold uppercase tracking-[.08em] text-muted-foreground">Subscription notes</div><div className="text-[11px] text-muted-foreground">The running log on this patient's Subscription-board item · newest first · a note posts as soon as you add it in the rail, stamped with the time and your initials</div></div>}
               right={<span className="rounded-md bg-muted px-2 py-0.5 text-[11px]">{notes.length} note{notes.length === 1 ? "" : "s"}</span>}>
               {notes.length ? (
