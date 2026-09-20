@@ -12,7 +12,7 @@
  * or both order all read the same. Click a row for the rest (OrderDetailSheet).
  */
 import { useMemo, useState } from "react";
-import { ArrowRight, Check, Loader2, RefreshCw as ReloadIcon, Search } from "lucide-react";
+import { ArrowRight, Loader2, RefreshCw as ReloadIcon, Search } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -79,7 +79,7 @@ const ORDER_GRID = "grid grid-cols-[180px_130px_96px_150px_minmax(140px,0.8fr)_m
 const CAT_TAG: Record<string, string> = {
   Sensors:  "bg-sky-100 text-sky-800",
   Supplies: "bg-violet-100 text-violet-800",
-  Pump:     "bg-amber-100 text-amber-800",
+  Pump:     "bg-indigo-100 text-indigo-800",
   Monitor:  "bg-teal-100 text-teal-800",
 };
 
@@ -98,11 +98,6 @@ function CategoryLine({ cat }: { cat: ReturnType<typeof orderCategories>[number]
       {!single && cat.device?.on && (
         <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
           + {cat.device.label}
-        </span>
-      )}
-      {cat.auths.length > 0 && (
-        <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800" title={`Auth on file: ${cat.auths.map((a) => a.label).join(", ")}`}>
-          <Check className="h-3 w-3" /> Auth
         </span>
       )}
     </div>
