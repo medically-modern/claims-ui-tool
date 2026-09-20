@@ -83,22 +83,13 @@ const CAT_TAG: Record<string, string> = {
   Monitor:  "bg-teal-100 text-teal-800",
 };
 
-/** One category's line: tag, its items, the yes/no device, and an auth check. */
+/** One category's line: the tag and its items (type ×qty). */
 function CategoryLine({ cat }: { cat: ReturnType<typeof orderCategories>[number] }) {
-  const single = cat.category === "Pump" || cat.category === "Monitor";
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px]">
       <span className={cn("inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[11px] font-semibold", CAT_TAG[cat.category])}>{cat.category}</span>
       {cat.items.length > 0 && (
         <span className="font-medium">{cat.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(" · ")}</span>
-      )}
-      {/* The device that rides with the category: Monitor (sensors) / Pump
-          (supplies). The Pump / Monitor categories are themselves the device,
-          so no extra chip there. */}
-      {!single && cat.device?.on && (
-        <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
-          + {cat.device.label}
-        </span>
       )}
     </div>
   );
@@ -141,16 +132,16 @@ function OrderList({ rows, onOpen, onMerge, mergingId }: {
             <div>{r.preCheck
               ? <span title={r.preCheckDetail || undefined}><Pill label={r.preCheck} tone={preCheckTone(r.preCheck)} /></span>
               : <span className="text-[12px] text-muted-foreground">—</span>}</div>
-            <div className="tabular-nums">{fmtDate(r.orderDate)}</div>
+            <div className="tabular-nums">
+              {fmtDate(r.orderDate)}
+              {r.shipMethod && <div className="mt-0.5"><span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">{r.shipMethod}</span></div>}
+            </div>
             <div className="min-w-0 font-medium truncate">{r.subscriptionType || "—"}</div>
             <div className="min-w-0">
               <div className="truncate">{r.primaryInsurance || "—"}</div>
               {pos && <Pill label="Office" tone="amber" />}
             </div>
             <div className="space-y-1">
-              {r.shipMethod && (
-                <span className="inline-flex w-fit items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">{r.shipMethod}</span>
-              )}
               {cats.length ? cats.map((c) => <CategoryLine key={c.category} cat={c} />)
                 : <span className="text-[12px] text-muted-foreground">No products on the order</span>}
               {monitorOnly && (

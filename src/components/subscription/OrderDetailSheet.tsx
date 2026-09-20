@@ -87,10 +87,7 @@ export function OrderDetailSheet({ row, open, onClose }: { row: NewOrderRow | nu
               <div className="space-y-2">
                 {cats.map((c) => {
                   const single = c.category === "Pump" || c.category === "Monitor";
-                  const line = [
-                    c.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(" · "),
-                    !single && c.device?.on ? `+ ${c.device.label}` : "",
-                  ].filter(Boolean).join(" · ");
+                  const line = c.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(" · ");
                   return (
                     <div key={c.category} className="rounded-lg border bg-muted/20 px-3 py-2">
                       <div className="text-[12px] font-semibold text-foreground">{c.category}</div>
