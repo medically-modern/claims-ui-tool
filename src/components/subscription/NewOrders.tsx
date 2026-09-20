@@ -24,7 +24,9 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useNewOrders } from "@/hooks/subscription/useNewOrders";
-import { ORDER_GROUP_ID, RETURNS_GROUP_ID, type NewOrderRow } from "@/api/queries/newOrders";
+import {
+  ACCEPTED_PARTIAL_GROUP_ID, ORDER_GROUP_ID, RETURNS_GROUP_ID, SHIPPED_DELIVERED_GROUP_ID, type NewOrderRow,
+} from "@/api/queries/newOrders";
 import {
   monitorMergeTarget, orderCategories, orderStatusBorder, pillClass, posLabel, preCheckTone,
 } from "@/lib/subscription/orderBoard";
@@ -88,11 +90,10 @@ const CAT_TAG: Record<string, string> = {
 /** Ground + signature required — shown as a small "GNDSR" flag on the order. */
 const isGndsr = (shipMethod: string) => /gndsr|signature/i.test(shipMethod);
 
-/** One category's line: an optional lead flag, the tag, and its items (type ×qty). */
-function CategoryLine({ cat, lead }: { cat: ReturnType<typeof orderCategories>[number]; lead?: React.ReactNode }) {
+/** One category's line: the tag and its items (type ×qty). */
+function CategoryLine({ cat }: { cat: ReturnType<typeof orderCategories>[number] }) {
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px]">
-      {lead}
       <span className={cn("inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[11px] font-semibold", CAT_TAG[cat.category])}>{cat.category}</span>
       {cat.items.length > 0 && (
         <span className="font-medium">{cat.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(" · ")}</span>
@@ -157,13 +158,14 @@ function OrderList({ rows, onOpen, onMerge, mergingId, selected, onToggle, onTog
               <div className="truncate">{r.primaryInsurance || "—"}</div>
               {pos && <Pill label="Office" tone="amber" />}
             </div>
-            <button type="button" onClick={() => onOpen(r)} className="space-y-1 text-left">
-              {cats.length ? cats.map((c, ci) => (
-                <CategoryLine key={c.category} cat={c}
-                  lead={ci === 0 && isGndsr(r.shipMethod)
-                    ? <span className="inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[11px] font-semibold bg-slate-200 text-slate-600" title={r.shipMethod}>GNDSR</span>
-                    : undefined} />
-              ))
+            <button type="button" onClick={() => onOpen(r)} className="flex items-start gap-2 text-left">
+              {/* GNDSR flag in a left gutter so it sits to the left of ALL the
+                  category lines and the Pump/Supplies pills stay aligned. */}
+              {isGndsr(r.shipMethod) && (
+                <span className="mt-0.5 inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[11px] font-semibold bg-slate-200 text-slate-600" title={r.shipMethod}>GNDSR</span>
+              )}
+              <div className="min-w-0 space-y-1">
+              {cats.length ? cats.map((c) => <CategoryLine key={c.category} cat={c} />)
                 : <span className="text-[12px] text-muted-foreground">No products on the order</span>}
               {monitorOnly && (
                 <div onClick={(e) => e.stopPropagation()}>
@@ -176,6 +178,7 @@ function OrderList({ rows, onOpen, onMerge, mergingId, selected, onToggle, onTog
                   </Button>
                 </div>
               )}
+              </div>
             </button>
             <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
               {orderable ? (
@@ -205,6 +208,7 @@ function FlatTable({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrder
             <TableHead>Patient</TableHead>
             <TableHead>Order Date</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead>API Status</TableHead>
             <TableHead>Subscription</TableHead>
             <TableHead>Primary Insurance</TableHead>
             <TableHead>CAH #</TableHead>
@@ -219,6 +223,7 @@ function FlatTable({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrder
               <TableCell className="font-semibold">{r.name}</TableCell>
               <TableCell className="tabular-nums">{fmtDate(r.orderDate)}</TableCell>
               <TableCell className="text-[12px]">{r.orderStatus || "—"}</TableCell>
+              <TableCell className="text-[12px]" title={r.apiMessage || undefined}>{r.apiStatus || "—"}</TableCell>
               <TableCell className="text-[12px]">{r.subscriptionType || "—"}</TableCell>
               <TableCell className="text-[12px]">{r.primaryInsurance || "—"}</TableCell>
               <TableCell className="text-[12px] tabular-nums">{r.cahOrderNumber || "—"}</TableCell>
@@ -246,7 +251,10 @@ export function NewOrders() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [orderingId, setOrderingId] = useState<string | null>(null);
   const [bulkOrdering, setBulkOrdering] = useState(false);
+  // Overview splits into the two post-send Monday groups (Brandon, 2026-09-20).
+  const [overviewGroup, setOverviewGroup] = useState<"accepted" | "shipped">("accepted");
   const lastIdx = useRef<number | null>(null);
+  const overviewGroupId = overviewGroup === "accepted" ? ACCEPTED_PARTIAL_GROUP_ID : SHIPPED_DELIVERED_GROUP_ID;
 
   const doMerge = async (monitor: NewOrderRow, sensors: NewOrderRow) => {
     setMergingId(monitor.id);
@@ -262,12 +270,17 @@ export function NewOrders() {
   };
 
   const returnsCount = useMemo(() => data.filter((r) => r.groupId === RETURNS_GROUP_ID).length, [data]);
+  const overviewCounts = useMemo(() => ({
+    accepted: data.filter((r) => r.groupId === ACCEPTED_PARTIAL_GROUP_ID).length,
+    shipped:  data.filter((r) => r.groupId === SHIPPED_DELIVERED_GROUP_ID).length,
+  }), [data]);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = data;
     if (view === "order") list = list.filter((r) => r.groupId === ORDER_GROUP_ID);
     else if (view === "returns") list = list.filter((r) => r.groupId === RETURNS_GROUP_ID);
+    else if (view === "overview") list = list.filter((r) => r.groupId === overviewGroupId);
     if (q) list = list.filter((r) => r.name.toLowerCase().includes(q) || r.memberId.toLowerCase().includes(q) || r.id.includes(q));
     if (view === "order" && preCheckFilter === "ready") list = list.filter((r) => r.preCheck.trim().toLowerCase().startsWith("good to go"));
     // Order: order date sortable (soonest first by default); the others: most recent first.
@@ -278,7 +291,7 @@ export function NewOrders() {
       if (view === "order") return sortDir === "asc" ? a.orderDate.localeCompare(b.orderDate) : b.orderDate.localeCompare(a.orderDate);
       return b.orderDate.localeCompare(a.orderDate);
     });
-  }, [data, view, search, preCheckFilter, sortDir]);
+  }, [data, view, search, preCheckFilter, sortDir, overviewGroupId]);
 
   const selectable = useMemo(() => rows.filter(canOrderRow), [rows]);
   const allSelectableChecked = selectable.length > 0 && selectable.every((r) => selected.has(r.id));
@@ -374,6 +387,23 @@ export function NewOrders() {
           </Select>
         )}
 
+        {view === "overview" && (
+          <div className="inline-flex items-center rounded-lg border bg-card p-0.5 text-[12px] font-semibold">
+            {([
+              ["accepted", `Accepted / Partial${overviewCounts.accepted ? ` (${overviewCounts.accepted})` : ""}`],
+              ["shipped", `Shipped / Delivered${overviewCounts.shipped ? ` (${overviewCounts.shipped})` : ""}`],
+            ] as const).map(([g, label]) => {
+              const on = overviewGroup === g;
+              return (
+                <button key={g} type="button" onClick={() => setOverviewGroup(g)}
+                  className={cn("rounded-md px-2.5 py-1.5 transition-colors", on ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <div className="relative w-[240px]">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search patient, member ID" className="pl-9" />
@@ -402,6 +432,7 @@ export function NewOrders() {
             {search ? "No orders match the search."
               : view === "order" ? (preCheckFilter === "ready" ? "No orders are Good to Go right now." : "Nothing in the Order group right now.")
               : view === "returns" ? "No returns."
+              : view === "overview" ? (overviewGroup === "accepted" ? "Nothing in Accepted / Partial right now." : "Nothing in Shipped / Delivered right now.")
               : "No orders on the board yet."}
           </div>
         )}

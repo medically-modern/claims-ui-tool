@@ -11,6 +11,7 @@ import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients
 export interface ProfileDraft {
   phone: string;
   address: string;
+  doctorAddress: string;
   canText: string;
   primaryInsurance: string;
   memberId1: string;
@@ -33,7 +34,7 @@ export interface ProfileDraft {
 
 /** Fields that write to Monday, in saveSubscriptionPatient's FIELD_MAP names. */
 export const SAVED_FIELDS: ReadonlyArray<Exclude<keyof ProfileDraft, "visitDate">> = [
-  "phone", "address", "canText", "primaryInsurance", "memberId1", "secondaryInsurance", "memberId2",
+  "phone", "address", "doctorAddress", "canText", "primaryInsurance", "memberId1", "secondaryInsurance", "memberId2",
   "nextOrderDate", "subscriptionType", "orderFrequency", "sensorsType", "cgmQty", "suppliesType", "cartridgeQty",
   "infusionSet1", "infusionSet1Qty", "infusionSet2", "infusionSet2Qty", "mnExpiry",
 ];
@@ -42,6 +43,7 @@ export function draftFrom(p: LiveSubscriptionPatient): ProfileDraft {
   return {
     phone: p.phone ?? "",
     address: p.address ?? "",
+    doctorAddress: p.doctorAddress ?? "",
     canText: p.canText ?? "",
     primaryInsurance: p.primaryPayer === "—" ? "" : (p.primaryPayer ?? ""),
     memberId1: p.memberId1 ?? "",

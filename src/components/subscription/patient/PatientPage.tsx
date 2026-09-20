@@ -20,6 +20,8 @@ import { runEligibilityCheck, saveSubscriptionPatient } from "@/api/setSubscript
 import { Button } from "@/components/ui/button";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { useNewOrders } from "@/hooks/subscription/useNewOrders";
+import { ORDER_GROUP_ID } from "@/api/queries/newOrders";
+import { fixOrderAddressAndRecheck } from "@/api/setNewOrder";
 import { useClaimHistory } from "@/hooks/subscription/useClaimHistory";
 import { usePatientFiles } from "@/hooks/subscription/usePatientFiles";
 import { ordersForPatient } from "@/lib/subscription/orderHistory";
@@ -74,6 +76,9 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
 
   const orders = useNewOrders();
   const myOrders = useMemo(() => ordersForPatient(orders.data, { name: p.name, dob: p.dob }), [orders.data, p.name, p.dob]);
+  // The patient's live row in the Order group, if any — the target for the
+  // address-fix → re-check sync on Save (Brandon, 2026-09-20).
+  const openOrder = useMemo(() => myOrders.find((o) => o.row.groupId === ORDER_GROUP_ID)?.row ?? null, [myOrders]);
   const firstOrderDate = useMemo(() => {
     const dates = myOrders.map((o) => o.placed).filter(Boolean).sort();
     return dates[0] ?? "";
@@ -97,6 +102,17 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
       setSavedBase({ ...(landed as unknown as ProfileDraft), visitDate: "" });
       setDraft((d) => ({ ...d, visitDate: "" }));
       setEditPhone(false);
+      // Address fixed on the profile (Subscription Board) → also push it to the
+      // patient's open Order-group row and re-trigger its pre-check: write the
+      // address, blank the status, set it back to "Order" (Brandon, 2026-09-20).
+      if (r.ok.includes("address") && openOrder) {
+        try {
+          await fixOrderAddressAndRecheck(openOrder.id, draft.address);
+          toast.success("Order address updated — pre-check re-running", { description: `${p.name}'s open order on the Order board` });
+        } catch (e) {
+          toast.error("Saved to the profile, but couldn't update the order", { description: e instanceof Error ? e.message : String(e) });
+        }
+      }
       void invalidate();
     } finally {
       setSaving(false);

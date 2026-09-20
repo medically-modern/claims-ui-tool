@@ -14,6 +14,11 @@ const NEW_ORDER_BOARD_ID = "18405457690";
  *  are other groups (verified 2026-09-20). */
 export const ORDER_GROUP_ID = "group_mm18v6n3";
 export const RETURNS_GROUP_ID = "group_mm60y5j7";
+// Overview groups (verified 2026-09-20): the two post-send states an order
+// moves through once Cardinal has it.
+export const ACCEPTED_PARTIAL_GROUP_ID = "group_mm52gfr5";
+export const SHIPPED_DELIVERED_GROUP_ID = "group_mm20m7gz";
+export const CANCELLED_GROUP_ID = "group_mm77bjja";
 
 // Verified 2026-06-07 via Monday API.
 const COL = {

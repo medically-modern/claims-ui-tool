@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { PAYER_OPTIONS } from "../mockData";
 import {
-  Chip, EditField, EditSelect, Eyebrow, Fact, ReadBox, Section, daysText, daysUntil, money, usDate,
+  Chip, EditField, EditSelect, Eyebrow, Fact, Section, daysText, daysUntil, money, usDate,
 } from "./atoms";
 import type { ProfileDraft } from "./draft";
 
@@ -264,8 +264,7 @@ export function ProfileView({
             <Fact label="NPI"><span className="font-mono text-[12px]">{p.doctorNpi}</span></Fact>
           </div>
           <div className="mt-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">Doctor address</div>
-            <ReadBox>{p.doctorAddress}</ReadBox>
+            <EditField label="Doctor address" value={draft.doctorAddress} onChange={(v) => setField("doctorAddress", v)} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
             <Fact label="Doctor phone">{p.doctorPhone}</Fact>
