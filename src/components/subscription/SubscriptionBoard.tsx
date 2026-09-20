@@ -46,7 +46,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 import { PatientProfile } from "./PatientProfile";
-import { CommsIcons } from "@/components/comms/CommsIcons";
 import { CommsSheet } from "@/components/comms/CommsSheet";
 import { useOpenPatient } from "./patient/openPatient";
 import { Authorizations } from "./Authorizations";
@@ -56,7 +55,7 @@ import { PayerRulesTab } from "./PayerRulesTab";
 import { DvsQueue } from "./DvsQueue";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
-import { markConfirmedByOperator, runEligibilityCheck, sendToOrder } from "@/api/setSubscriptionPatient";
+import { markConfirmedByOperator, runEligibilityCheck, saveSubscriptionPatient, sendToOrder } from "@/api/setSubscriptionPatient";
 import { bulkTriggerDvs } from "@/api/setDvsTrigger";
 import { canRunDvs } from "@/lib/subscription/dvs";
 import {
@@ -613,67 +612,80 @@ function CheckInCell({ iso, stuckSince }: { iso?: string; stuckSince?: string })
   );
 }
 
-function ReviewAndSubmit({ p, onSubmit, onBlock, sending, sent }: {
+/** The one action on a row, named for where the row goes next. */
+export type RowActionMode = "prep" | "ready";
+
+const CHECK_NAMES: Record<CheckpointKind, string> = {
+  confirmation: "Confirm", benefits: "Eligibility", auth: "Authorization", lastPaid: "Last Claim Paid", mr: "Medical Records",
+};
+
+function blockingChecks(p: SubscriptionPatient): string[] {
+  return CHECKPOINT_KINDS
+    .map((k) => [k, getCheckpoint(p, k)] as const)
+    .filter(([, c]) => c.tone !== "ok")
+    .map(([k, c]) => `${CHECK_NAMES[k]}: ${c.label}`);
+}
+
+/**
+ * The row's single action (Brandon, 2026-09-20: the pause and comms buttons
+ * are gone from the row — pausing, texting and calling happen from the
+ * patient's page, after looking at what is going on).
+ *
+ *   Order Prep tab → "Ready to Order": writes Ordering Cycle = Ready to Order.
+ *     Only enabled once the five circles are green; until then the hover
+ *     lists what is still holding the row.
+ *   Ready to Order tab → "Send to Order": writes Ordering Cycle = Order, the
+ *     trigger for the Monday automation that spawns the order.
+ */
+function ReviewAndSubmit({ p, mode, onSubmit, onPromote, sending, sent }: {
   p: SubscriptionPatient;
+  mode: RowActionMode;
   onSubmit: () => void;
-  onBlock?: () => void;
+  onPromote?: () => void;
   sending?: boolean;
   sent?:    boolean;
 }) {
   const ready = allChecksPass(p);
-  // Guard: sending with non-green circles requires a second, explicit
-  // click — first click arms the button ("Send anyway?") for 4s.
+  const blockers = ready ? [] : blockingChecks(p);
+  // Sending with non-green circles takes a second, explicit click — the
+  // first arms the button ("Send anyway?") for 4s. Ready tab only.
   const [armed, setArmed] = useState(false);
-  const handleSend = () => {
+  const handle = () => {
+    if (mode === "prep") { if (ready) onPromote?.(); return; }
     if (ready || armed) { setArmed(false); onSubmit(); return; }
     setArmed(true);
     setTimeout(() => setArmed(false), 4000);
   };
+  const prep = mode === "prep";
   return (
-    // pl-8 pushes the buttons away from the Medical Records circle in the
-    // OverviewTable grid layout; justify-end keeps them right-anchored
-    // so the spacing scales with column width.
-    <div className="flex items-center justify-end gap-1.5 pl-8" onClick={(e) => e.stopPropagation()}>
-      {onBlock && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 px-2 text-[11px] font-semibold text-rose-700 border-rose-200 hover:bg-rose-50"
-          onClick={onBlock}
-          disabled={sending || sent}
-          title="Can't order yet — set a block reason + watcher"
-        >
-          <PauseCircle className="h-3.5 w-3.5" />
-        </Button>
-      )}
-      {/* Calls and texts with this patient, each showing how many since their
-          last order and opening the sheet on its own tab. Counts come off
-          Monday; nothing is fetched from RingCentral until one is clicked. */}
-      <CommsIcons patient={p} />
+    <div className="flex items-center justify-end pl-4" onClick={(e) => e.stopPropagation()}>
       <Button
         size="sm"
-        onClick={handleSend}
-        disabled={sending || sent}
+        onClick={handle}
+        disabled={sending || sent || (prep && !ready)}
         className={cn(
-          "h-7 px-2.5 text-[11px] font-semibold text-white shadow-sm transition-colors",
+          "h-7 whitespace-nowrap px-2.5 text-[11px] font-semibold text-white shadow-sm transition-colors disabled:opacity-100",
           sending ? "bg-blue-600"
           : sent  ? "bg-emerald-600"
           : armed ? "bg-rose-600 hover:bg-rose-700"
           : ready ? "bg-emerald-700 hover:bg-emerald-800"
+          : prep  ? "bg-slate-300 text-slate-600"
                   : "bg-slate-400 hover:bg-slate-500",
         )}
         title={
-          sending ? "Writing Ordering Cycle = Order on Monday…"
-          : sent   ? "Sent — Monday automation now spawns the order"
-          : armed  ? "Not all 4 checks are green — click again to send anyway"
-          : ready  ? "All 4 checks passed — send order"
-                   : "Not all 4 checks pass — you'll be asked to confirm"
+          sending ? (prep ? "Writing Ordering Cycle = Ready to Order on Monday…" : "Writing Ordering Cycle = Order on Monday…")
+          : sent   ? (prep ? "Moved to Ready to Order" : "Sent — Monday automation now spawns the order")
+          : armed  ? "Not all five checks are green — click again to send anyway"
+          : ready  ? (prep ? "All five checks green — move to Ready to Order" : "All five checks green — send to Order")
+          : prep   ? `Still holding this row:\n  ${blockers.join("\n  ")}`
+                   : `Not all five checks pass — you'll be asked to confirm\n  ${blockers.join("\n  ")}`
         }
       >
-        {sending ? (<><Loader2 className="mr-1 h-3 w-3 animate-spin" />Sending…</>)
-        : sent    ? (<><Check    className="mr-1 h-3 w-3" />Sent</>)
+        {sending ? (<><Loader2 className="mr-1 h-3 w-3 animate-spin" />{prep ? "Moving…" : "Sending…"}</>)
+        : sent    ? (<><Check    className="mr-1 h-3 w-3" />{prep ? "Ready" : "Sent"}</>)
         : armed   ? (<><AlertTriangle className="mr-1 h-3 w-3" />Send anyway?</>)
-        :           (<><Send     className="mr-1 h-3 w-3" />Send Order</>)}
+        : prep    ? (<><Check    className="mr-1 h-3 w-3" />Ready to Order</>)
+        :           (<><Send     className="mr-1 h-3 w-3" />Send to Order</>)}
       </Button>
     </div>
   );
@@ -1408,6 +1420,26 @@ function OrderCycleWorkflow() {
     return c;
   }, [all, todayStr]);
 
+  // Order Prep's action: Ordering Cycle = Ready to Order on Monday. The tool's
+  // own readiness is still the five circles (the button only enables when
+  // they are green); the write keeps the board's stage in step.
+  const promoteToReady = async (p: SubscriptionPatient) => {
+    const id = p.mondayItemId;
+    setSendingIds((prev) => new Set(prev).add(id));
+    setBatchMsg(`Moving ${p.name} to Ready to Order…`);
+    try {
+      const r = await saveSubscriptionPatient(id, { orderingCycle: "Ready to Order" });
+      if (r.failed.length) throw new Error(r.failed[0].error);
+      setSendingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+      setSentIds((prev) => new Set(prev).add(id));
+      setBatchMsg(`${p.name} is Ready to Order ✓`);
+      invalidateSubscription();
+      setTimeout(() => setSentIds((prev) => { const n = new Set(prev); n.delete(id); return n; }), 2000);
+    } catch (e) {
+      setSendingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+      setBatchMsg(`Couldn't move ${p.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
   const openCell = (p: SubscriptionPatient, kind: CheckpointKind) => { setActivePatient(p); setActiveKind(kind); };
   const openPatient = (p: SubscriptionPatient) => { openPatientPage(p.mondayItemId); };
   const closeDrawer = () => { setActivePatient(null); setActiveKind(null); };
@@ -2027,6 +2059,8 @@ function OrderCycleWorkflow() {
             onCellClick={openCell}
             onPatientClick={openPatient}
             onSubmit={sendToOrderBoard}
+            onPromote={promoteToReady}
+            actionMode={(primary === "due" && duePhase === "ready") || (primary === "prep" && prepPhase === "readysub") ? "ready" : "prep"}
             dvsSelected={dvsSelected}
             onToggleDvs={toggleDvsSelected}
             dvsRunning={dvsRunning}
@@ -2114,18 +2148,17 @@ function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
 // a few px into the 16px gutter rather than colliding — which is why the
 // floor is not tighter.
 //
-// Actions is 330px, not 300: the four buttons (block / comms / review / send)
-// measure ~300px, so the old track left them flush against the last circle
-// with nothing to spare. The surplus is what separates Medical Records from
-// the pause button, and it scales because the buttons stay right-anchored.
+// Actions is 170px: one button now ("Ready to Order" / "Send to Order", ~130px)
+// — the pause and comms buttons left the row on 2026-09-20; those live on the
+// patient's page. 170 keeps the button inside the row with air on both sides.
 //
 // ⚠️ Written out in full, never interpolated. Tailwind generates arbitrary
 // values by scanning the source for COMPLETE class strings; a template
 // literal built from parts produces a class that is never emitted, and the
 // grid silently collapses to a single column.
-const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_330px] gap-4";
+const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_170px] gap-4";
 // Ready-to-Order variant adds a Type (First Order / Reorder) column.
-const OVERVIEW_GRID_TYPE = "grid grid-cols-[240px_120px_160px_110px_190px_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_330px] gap-4";
+const OVERVIEW_GRID_TYPE = "grid grid-cols-[240px_120px_160px_110px_190px_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_170px] gap-4";
 
 type OverviewSortKey =
   | "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer"
@@ -2206,13 +2239,15 @@ function DvsSelectBox({
 }
 
 function OverviewTable({
-  rows, onCellClick, onPatientClick, onSubmit, onBlock, showOrderType, sortKey, sortDir, onSort,
+  rows, onCellClick, onPatientClick, onSubmit, onPromote, actionMode, onBlock, showOrderType, sortKey, sortDir, onSort,
   sendingIds, sentIds, dvsSelected, onToggleDvs, dvsRunning,
 }: {
   rows: SubscriptionPatient[];
   onCellClick: (p: SubscriptionPatient, k: CheckpointKind) => void;
   onPatientClick: (p: SubscriptionPatient) => void;
   onSubmit: (p: SubscriptionPatient) => void;
+  onPromote: (p: SubscriptionPatient) => void;
+  actionMode: RowActionMode;
   onBlock?: (p: SubscriptionPatient) => void;
   showOrderType?: boolean;
   sortKey: OverviewSortKey;
@@ -2298,7 +2333,7 @@ function OverviewTable({
               <CheckpointCircle check={mrOf(p)} />
             </CircleEditPopover>
           </div>
-          <ReviewAndSubmit p={p} onSubmit={() => onSubmit(p)} onBlock={onBlock ? () => onBlock(p) : undefined} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} />
+          <ReviewAndSubmit p={p} mode={actionMode} onSubmit={() => onSubmit(p)} onPromote={() => onPromote(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} />
         </div>
       ))}
     </div>
@@ -2507,7 +2542,7 @@ function PhaseTable({
               <TableCell><BlockedByPill value={p.blockedBy} /></TableCell>
               <TableCell><CheckInCell iso={p.nextCheckIn} stuckSince={p.stuckSince} /></TableCell>
               <TableCell className="text-[12px] text-muted-foreground max-w-[340px]">{p.stuckReason ?? "—"}</TableCell>
-              <TableCell><ReviewAndSubmit p={p} onSubmit={() => onSubmit(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} /></TableCell>
+              <TableCell><ReviewAndSubmit p={p} mode="ready" onSubmit={() => onSubmit(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} /></TableCell>
             </TableRow>
           );
         })}
