@@ -139,6 +139,16 @@ export async function setOrderShipMethod(itemId: string, label: string): Promise
   await mondayQuery(SET_SIMPLE, { board: NEW_ORDER_BOARD_ID, item: itemId, col: COL.ship_method, val: label });
 }
 
+/** Order Status — set any status label (e.g. On Hold → Order). */
+export async function setOrderStatusLabel(itemId: string, label: string): Promise<void> {
+  await mondayQuery(SET_STATUS, { board: NEW_ORDER_BOARD_ID, item: itemId, val: label });
+}
+
+/** Order Date — a plain YYYY-MM-DD written to the date column. */
+export async function setOrderDate(itemId: string, iso: string): Promise<void> {
+  await mondayQuery(SET_SIMPLE, { board: NEW_ORDER_BOARD_ID, item: itemId, col: COL.order_date, val: iso });
+}
+
 /** Mark / unmark an order as DDP (the label on the board is "DDP Order"). */
 export async function setOrderDdp(itemId: string, on: boolean): Promise<void> {
   await mondayQuery(SET_SIMPLE, { board: NEW_ORDER_BOARD_ID, item: itemId, col: COL.ddp_order, val: on ? DDP_LABEL : "" });

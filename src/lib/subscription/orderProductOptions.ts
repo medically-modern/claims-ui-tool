@@ -53,6 +53,9 @@ export const SHIP_METHODS = [
 /** Subscription Type status labels (color_mm18h05q). */
 export const SUBSCRIPTION_TYPES = ["Sensors", "Supplies", "Sensors & Supplies"] as const;
 
+/** Order Status labels operators set by hand (color "status"). */
+export const ORDER_STATUSES = ["Order", "On Hold", "Ordered", "Process Claim", "Stuck", "Paid Cash"] as const;
+
 export const INFUSION_SET_2_TYPES = [
   "Not Serving",
   "AutoSoft XC 6 mm 5\"", "AutoSoft XC 6 mm 23\"", "AutoSoft XC 6 mm 32\"", "AutoSoft XC 6 mm 43\"",

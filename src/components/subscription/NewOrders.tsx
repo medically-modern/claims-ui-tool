@@ -31,6 +31,7 @@ import {
   monitorMergeTarget, orderCategories, orderStatusBorder, pillClass, posLabel, preCheckTone,
 } from "@/lib/subscription/orderBoard";
 import { mergeMonitorIntoSensors, placeOrder } from "@/api/setNewOrder";
+import { fulfillmentOf, SHIP_STATUS_LABEL, type ShipStatus } from "@/lib/subscription/orderFulfillment";
 import { useOpenPatient } from "./patient/openPatient";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -239,78 +240,56 @@ const numOf = (s: string) => { const n = Number(String(s).replace(/[^\d.-]/g, ""
 function backorderList(r: NewOrderRow): string[] {
   return r.backordered.split(",").map((s) => s.trim()).filter(Boolean);
 }
-/** Full vs Partial shipment — partial when anything is backordered / partially shipped. */
-function shipKind(r: NewOrderRow): "Full" | "Partial" {
-  if (/partial/i.test(r.apiStatus) || backorderList(r).length > 0 || numOf(r.backorderedQty) > 0) return "Partial";
-  return "Full";
-}
+/** Ship-status → pill tone. */
+const SHIP_TONE: Record<ShipStatus, Parameters<typeof pillClass>[0]> = {
+  shipped: "green", partial: "amber", backordered: "red", pending: "slate", unknown: "slate",
+};
 
 const OVERVIEW_HEADER = "sticky top-0 z-10 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[15px] font-bold tracking-normal text-slate-700 items-end";
-const ACCEPTED_GRID = "grid grid-cols-[minmax(180px,1fr)_110px_minmax(240px,1.4fr)_minmax(150px,150px)_minmax(180px,1fr)_130px] gap-4";
-const SHIPPED_GRID = "grid grid-cols-[minmax(180px,1fr)_110px_minmax(240px,1.3fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)] gap-4";
+const OVERVIEW_GRID = "grid grid-cols-[minmax(170px,1fr)_100px_minmax(190px,1.1fr)_minmax(300px,1.7fr)_150px] gap-4";
 
-/** Accepted / Partial — did Cardinal take it, and is anything backordered? */
-function AcceptedTable({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
+/**
+ * One placed-orders list. Shipment status is derived from the Line Item Detail
+ * (the only reliable signal), so it reads clearly as what shipped vs didn't,
+ * regardless of the Monday group or the raw API status (Brandon, 2026-09-20).
+ */
+function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
   return (
     <div className="text-[13px] overflow-x-auto">
-      <div className={cn(ACCEPTED_GRID, OVERVIEW_HEADER)}>
-        <div>Patient</div><div>Order Date</div><div>Products</div><div>API Status</div><div>Backordered</div><div>CAH #</div>
+      <div className={cn(OVERVIEW_GRID, OVERVIEW_HEADER)}>
+        <div>Patient</div><div>Order Date</div><div>Products</div><div>Shipment</div><div>API Status</div>
       </div>
       {rows.map((r) => {
-        const bo = backorderList(r);
+        const f = fulfillmentOf(r.lineItemDetail);
+        const bo = backorderList(r);                 // readable names from Monday
+        const boNames = bo.length ? bo : f.backorderedSkus;
         return (
-          <div key={r.id} className={cn(ACCEPTED_GRID, "cursor-pointer border-b px-4 py-3 items-start hover:bg-muted/40")} onClick={() => onOpen(r)}>
+          <div key={r.id} className={cn(OVERVIEW_GRID, "cursor-pointer border-b px-4 py-3 items-start hover:bg-muted/40")} onClick={() => onOpen(r)}>
             <div className="min-w-0"><div className="font-semibold truncate">{r.name}</div>{r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}</div>
             <div className="tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</div>
-            <div className="text-[12px]"><span className="line-clamp-2">{productsLine(r)}</span></div>
+            <div className="text-[12px]"><span className="line-clamp-3">{productsLine(r)}</span></div>
+            {/* Shipment: the derived rollup, the actual shipments, and what's still out. */}
+            <div className="space-y-1.5">
+              <Pill label={SHIP_STATUS_LABEL[f.status]} tone={SHIP_TONE[f.status]} />
+              {f.shipments.map((s) => (
+                <div key={s.tracking} className="text-[12px]">
+                  <span className="text-muted-foreground">×{s.qty} · </span>
+                  <a href={`https://www.google.com/search?q=${encodeURIComponent(s.tracking)}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-primary hover:underline">{s.carrier} {s.tracking}</a>
+                  <span className="tabular-nums text-muted-foreground"> · shipped {fmtDate(s.date)}</span>
+                </div>
+              ))}
+              {r.deliveryDate && <div className="text-[12px] tabular-nums text-emerald-700">Delivered {fmtDate(r.deliveryDate)}</div>}
+              {boNames.length > 0 && (
+                <div className="flex flex-col gap-1 pt-0.5">
+                  {boNames.map((b, i) => (
+                    <span key={i} className="inline-flex w-fit items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-800" title={b}>
+                      <span className="max-w-[240px] truncate">Backordered: {b}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
             <div>{r.apiStatus ? <span title={r.apiMessage || undefined}><Pill label={r.apiStatus} tone={apiTone(r.apiStatus)} /></span> : <span className="text-muted-foreground">—</span>}</div>
-            <div className="min-w-0">{bo.length
-              ? <div className="flex flex-col gap-1">{bo.map((b, i) => <span key={i} className="inline-flex w-fit items-center rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-800" title={b}><span className="max-w-[200px] truncate">{b}</span></span>)}</div>
-              : <span className="text-muted-foreground">—</span>}</div>
-            <div className="text-[12px] tabular-nums whitespace-nowrap">{r.cahOrderNumber || "—"}</div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/** Shipped / Delivered — tracking (one box per row), full/partial, dates. */
-function ShippedTable({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
-  return (
-    <div className="text-[13px] overflow-x-auto">
-      <div className={cn(SHIPPED_GRID, OVERVIEW_HEADER)}>
-        <div>Patient</div><div>Order Date</div><div>Tracking</div><div>Shipped</div><div>Delivered</div>
-      </div>
-      {rows.map((r) => {
-        const kind = shipKind(r);
-        const boxes = r.trackingNumbers.length ? r.trackingNumbers : [""];
-        return (
-          <div key={r.id} className={cn(SHIPPED_GRID, "cursor-pointer border-b px-4 py-3 items-start hover:bg-muted/40")} onClick={() => onOpen(r)}>
-            <div className="min-w-0"><div className="font-semibold truncate">{r.name}</div>{r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}</div>
-            <div className="tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</div>
-            {/* One box per row across the last three columns. */}
-            <div className="space-y-1">
-              {boxes.map((t, i) => (
-                <div key={i} className="rounded border bg-muted/20 px-2 py-1 text-[12px] font-mono">
-                  <span className="mr-1 text-[10px] font-sans text-muted-foreground">Box {i + 1}</span>
-                  {t ? <a href={`https://www.google.com/search?q=${encodeURIComponent(t)}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-primary hover:underline">{t}</a> : <span className="text-muted-foreground">—</span>}
-                </div>
-              ))}
-            </div>
-            <div className="space-y-1">
-              {boxes.map((_, i) => (
-                <div key={i} className="flex items-center gap-1.5 py-1 text-[12px]">
-                  <span className={cn("inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1", pillClass(kind === "Partial" ? "amber" : "green"))}>{kind}</span>
-                  <span className="tabular-nums">{r.shipDate ? fmtDate(r.shipDate) : (r.estShipDate ? `est ${fmtDate(r.estShipDate)}` : "—")}</span>
-                </div>
-              ))}
-            </div>
-            <div className="space-y-1">
-              {boxes.map((_, i) => (
-                <div key={i} className="py-1 text-[12px] tabular-nums whitespace-nowrap">{r.deliveryDate ? fmtDate(r.deliveryDate) : "—"}</div>
-              ))}
-            </div>
           </div>
         );
       })}
@@ -388,11 +367,12 @@ export function NewOrders() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [orderingId, setOrderingId] = useState<string | null>(null);
   const [bulkOrdering, setBulkOrdering] = useState(false);
-  // Overview splits into the two post-send Monday groups (Brandon, 2026-09-20).
-  const [overviewGroup, setOverviewGroup] = useState<"accepted" | "shipped">("accepted");
+  // Overview is one placed-orders list (both post-send groups), filterable by
+  // API status and backordered (Brandon, 2026-09-20).
+  const [apiFilter, setApiFilter] = useState("all");
+  const [boOnly, setBoOnly] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const lastIdx = useRef<number | null>(null);
-  const overviewGroupId = overviewGroup === "accepted" ? ACCEPTED_PARTIAL_GROUP_ID : SHIPPED_DELIVERED_GROUP_ID;
 
   // A name click opens the full patient profile (same page as the Due tab); if
   // no matching subscription patient is found, fall back to the order panel.
@@ -417,17 +397,24 @@ export function NewOrders() {
   };
 
   const returnsCount = useMemo(() => data.filter((r) => r.groupId === RETURNS_GROUP_ID).length, [data]);
-  const overviewCounts = useMemo(() => ({
-    accepted: data.filter((r) => r.groupId === ACCEPTED_PARTIAL_GROUP_ID).length,
-    shipped:  data.filter((r) => r.groupId === SHIPPED_DELIVERED_GROUP_ID).length,
-  }), [data]);
+  const overviewCount = useMemo(() => data.filter((r) => r.groupId === ACCEPTED_PARTIAL_GROUP_ID || r.groupId === SHIPPED_DELIVERED_GROUP_ID).length, [data]);
+  // The API-status values actually present in the placed-orders universe.
+  const apiStatuses = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of data) if ((r.groupId === ACCEPTED_PARTIAL_GROUP_ID || r.groupId === SHIPPED_DELIVERED_GROUP_ID) && r.apiStatus.trim()) set.add(r.apiStatus.trim());
+    return [...set].sort();
+  }, [data]);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = data;
     if (view === "order") list = list.filter((r) => r.groupId === ORDER_GROUP_ID);
     else if (view === "returns") list = list.filter((r) => r.groupId === RETURNS_GROUP_ID);
-    else if (view === "overview") list = list.filter((r) => r.groupId === overviewGroupId);
+    else if (view === "overview") {
+      list = list.filter((r) => r.groupId === ACCEPTED_PARTIAL_GROUP_ID || r.groupId === SHIPPED_DELIVERED_GROUP_ID);
+      if (apiFilter !== "all") list = list.filter((r) => r.apiStatus.trim() === apiFilter);
+      if (boOnly) list = list.filter((r) => r.backordered.trim() || fulfillmentOf(r.lineItemDetail).backorderedSkus.length > 0);
+    }
     if (q) list = list.filter((r) => r.name.toLowerCase().includes(q) || r.memberId.toLowerCase().includes(q) || r.id.includes(q));
     if (view === "order" && preCheckFilter === "ready") list = list.filter((r) => r.preCheck.trim().toLowerCase().startsWith("good to go"));
     // Order: always earliest order date first; the others: most recent first.
@@ -437,7 +424,7 @@ export function NewOrders() {
       if (!b.orderDate) return -1;
       return view === "order" ? a.orderDate.localeCompare(b.orderDate) : b.orderDate.localeCompare(a.orderDate);
     });
-  }, [data, view, search, preCheckFilter, overviewGroupId]);
+  }, [data, view, search, preCheckFilter, apiFilter, boOnly]);
 
   const selectable = useMemo(() => rows.filter(canOrderRow), [rows]);
   const allSelectableChecked = selectable.length > 0 && selectable.every((r) => selected.has(r.id));
@@ -501,7 +488,7 @@ export function NewOrders() {
         <div className="inline-flex items-center rounded-lg border bg-card p-0.5 text-[12px] font-semibold">
           {([
             ["order", "Order"],
-            ["overview", "Overview"],
+            ["overview", `Overview${overviewCount ? ` (${overviewCount})` : ""}`],
             ["returns", `Returns${returnsCount ? ` (${returnsCount})` : ""}`],
           ] as const).map(([v, label]) => {
             const on = view === v;
@@ -536,26 +523,23 @@ export function NewOrders() {
         )}
 
         {view === "overview" && (
-          <div className="inline-flex items-center rounded-lg border bg-card p-0.5 text-[12px] font-semibold">
-            {([
-              ["accepted", `Accepted / Partial${overviewCounts.accepted ? ` (${overviewCounts.accepted})` : ""}`],
-              ["shipped", `Shipped / Delivered${overviewCounts.shipped ? ` (${overviewCounts.shipped})` : ""}`],
-            ] as const).map(([g, label]) => {
-              const on = overviewGroup === g;
-              return (
-                <button key={g} type="button" onClick={() => setOverviewGroup(g)}
-                  className={cn("rounded-md px-2.5 py-1.5 transition-colors", on ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {view === "overview" && (
-          <Button size="sm" className="h-9 gap-1.5 text-[12px]" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" /> New order
-          </Button>
+          <>
+            <Select value={apiFilter} onValueChange={setApiFilter}>
+              <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All API statuses</SelectItem>
+                {apiStatuses.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <button type="button" aria-pressed={boOnly} onClick={() => setBoOnly((v) => !v)}
+              className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-semibold transition-colors",
+                boOnly ? "border-rose-600 bg-rose-600 text-white" : "border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100")}>
+              Backordered only
+            </button>
+            <Button size="sm" className="h-9 gap-1.5 text-[12px]" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" /> New order
+            </Button>
+          </>
         )}
 
         <div className="relative ml-auto w-[240px]">
@@ -580,14 +564,14 @@ export function NewOrders() {
               selected={selected} onToggle={onToggle} onToggleAll={onToggleAll} allSelectableChecked={allSelectableChecked}
               onOrder={(r) => void markOne(r)} orderingId={orderingId} />
           : view === "overview"
-          ? (overviewGroup === "accepted" ? <AcceptedTable rows={rows} onOpen={setDetail} /> : <ShippedTable rows={rows} onOpen={setDetail} />)
+          ? <OverviewList rows={rows} onOpen={setDetail} />
           : <FlatTable rows={rows} onOpen={setDetail} />}
         {rows.length === 0 && !loading && (
           <div className="px-4 py-12 text-center text-sm text-muted-foreground">
             {search ? "No orders match the search."
               : view === "order" ? (preCheckFilter === "ready" ? "No orders are Good to Go right now." : "Nothing in the Order group right now.")
               : view === "returns" ? "No returns."
-              : view === "overview" ? (overviewGroup === "accepted" ? "Nothing in Accepted / Partial right now." : "Nothing in Shipped / Delivered right now.")
+              : view === "overview" ? (boOnly ? "No backordered orders right now." : apiFilter !== "all" ? "No orders with that API status." : "No placed orders yet.")
               : "No orders on the board yet."}
           </div>
         )}

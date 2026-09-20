@@ -17,10 +17,10 @@ import { cn } from "@/lib/utils";
 import type { NewOrderRow } from "@/api/queries/newOrders";
 import { orderCategories, orderStatusTone, pillClass, posLabel, preCheckTone } from "@/lib/subscription/orderBoard";
 import {
-  setOrderPos, setOrderShipMethod, setOrderDdp, updateOrderProducts, type OrderProducts,
+  setOrderPos, setOrderShipMethod, setOrderStatusLabel, setOrderDate, setOrderDdp, updateOrderProducts, type OrderProducts,
 } from "@/api/setNewOrder";
 import {
-  CARTRIDGE_TYPES, CGM_TYPES, INFUSION_SET_1_TYPES, INFUSION_SET_2_TYPES, PUMP_TYPES, SHIP_METHODS,
+  CARTRIDGE_TYPES, CGM_TYPES, INFUSION_SET_1_TYPES, INFUSION_SET_2_TYPES, ORDER_STATUSES, PUMP_TYPES, SHIP_METHODS,
 } from "@/lib/subscription/orderProductOptions";
 
 const NEW_ORDER_BOARD = "18405457690";
@@ -93,6 +93,8 @@ function ProductRow({ label, type, options, onType, qty, onQty, qty2Label, qty2,
 export function OrderDetailSheet({ row, open, onClose, onChanged }: {
   row: NewOrderRow | null; open: boolean; onClose: () => void; onChanged?: () => void;
 }) {
+  const [orderStatus, setOrderStatusState] = useState("");
+  const [orderDate, setOrderDateState] = useState("");
   const [pos, setPos] = useState("");
   const [shipMethod, setShipMethod] = useState("");
   const [ddp, setDdp] = useState(false);
@@ -103,6 +105,8 @@ export function OrderDetailSheet({ row, open, onClose, onChanged }: {
   useEffect(() => {
     if (!row || seedId.current === row.id) return;
     seedId.current = row.id;
+    setOrderStatusState(row.orderStatus || "");
+    setOrderDateState((row.orderDate || "").slice(0, 10));
     setPos(row.pos || "");
     setShipMethod(row.shipMethod || "");
     setDdp(/ddp/i.test(row.ddpOrder));
@@ -114,19 +118,24 @@ export function OrderDetailSheet({ row, open, onClose, onChanged }: {
   const setProdField = (k: keyof OrderProducts, v: string) => setProd((p) => ({ ...p, [k]: v }));
 
   const origProd = productsFromRow(row);
+  const statusDirty = orderStatus !== (row.orderStatus || "");
+  const dateDirty = orderDate !== (row.orderDate || "").slice(0, 10);
   const posDirty = pos !== (row.pos || "");
   const shipDirty = shipMethod !== (row.shipMethod || "");
   const ddpDirty = ddp !== /ddp/i.test(row.ddpOrder);
   const prodDirty = JSON.stringify(prod) !== JSON.stringify(origProd);
-  const dirty = posDirty || shipDirty || ddpDirty || prodDirty;
+  const dirty = statusDirty || dateDirty || posDirty || shipDirty || ddpDirty || prodDirty;
 
   const reset = () => {
+    setOrderStatusState(row.orderStatus || ""); setOrderDateState((row.orderDate || "").slice(0, 10));
     setPos(row.pos || ""); setShipMethod(row.shipMethod || "");
     setDdp(/ddp/i.test(row.ddpOrder)); setProd(productsFromRow(row));
   };
   const save = async () => {
     setSaving(true);
     try {
+      if (statusDirty && orderStatus) await setOrderStatusLabel(row.id, orderStatus);
+      if (dateDirty && /^\d{4}-\d{2}-\d{2}$/.test(orderDate)) await setOrderDate(row.id, orderDate);
       if (posDirty && (pos === "Office" || pos === "Home")) await setOrderPos(row.id, pos);
       if (shipDirty) await setOrderShipMethod(row.id, shipMethod);
       if (ddpDirty) await setOrderDdp(row.id, ddp);
@@ -146,7 +155,7 @@ export function OrderDetailSheet({ row, open, onClose, onChanged }: {
         <SheetHeader>
           <SheetTitle className="text-[18px]">{row.name}</SheetTitle>
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            {row.orderStatus && <Pill label={row.orderStatus} tone={orderStatusTone(row.orderStatus)} />}
+            {orderStatus && <Pill label={orderStatus} tone={orderStatusTone(orderStatus)} />}
             {row.preCheck && <Pill label={row.preCheck} tone={preCheckTone(row.preCheck)} />}
             {posLabel(pos) && <Pill label="Office" tone="amber" />}
             {shipMethod && <Pill label={shipMethod} tone="slate" />}
@@ -174,6 +183,20 @@ export function OrderDetailSheet({ row, open, onClose, onChanged }: {
             </div>
 
             <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-[11px] font-medium text-muted-foreground">Order status</div>
+                <Select value={orderStatus || "—"} onValueChange={(v) => setOrderStatusState(v === "—" ? "" : v)}>
+                  <SelectTrigger className="mt-0.5 h-8 text-[12px]"><SelectValue placeholder="—" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="—" className="text-[12px]">—</SelectItem>
+                    {ORDER_STATUSES.map((s) => <SelectItem key={s} value={s} className="text-[12px]">{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <div className="text-[11px] font-medium text-muted-foreground">Order date</div>
+                <Input type="date" value={orderDate} onChange={(e) => setOrderDateState(e.target.value)} className="mt-0.5 h-8 text-[12px]" />
+              </div>
               <div>
                 <div className="text-[11px] font-medium text-muted-foreground">POS</div>
                 <Select value={pos || "—"} onValueChange={(v) => setPos(v === "—" ? "" : v)}>
