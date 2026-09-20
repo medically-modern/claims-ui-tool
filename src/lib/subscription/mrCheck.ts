@@ -1,26 +1,23 @@
 /**
  * mrCheck.ts — the 5th checkpoint: are the patient's medical records valid?
  *
- * Spec: REORDER_PROCESS.md § "The MR check" (Brandon, 2026-09-14). This is a
- * REFERRAL-SOURCE rule, not a payer rule:
+ * Spec: REORDER_PROCESS.md § "The MR check" (Brandon, 2026-09-14) and the
+ * Payer rules tab (2026-09-20). This is a REFERRAL-SOURCE rule, not a payer
+ * rule, and it follows the dark/light convention in payerRules.ts:
  *
- *   MR valid (MN Expiry today or later)                     → green   · fine for anyone
- *   MR not valid (expired), referral source is anyone else  → light green · OK to order, chase the records
- *   MR not valid (expired), referral source = District Endochrine → red · cannot order — records first
- *   MN Expiry BLANK                                         → an empty outline circle, "Not on file"
+ *   MR valid (MN Expiry today or later)                          → dark green · the column says yes, for anyone
+ *   MR expired, referral source is anyone else                    → LIGHT green · rule: order anyway, chase the records
+ *   MR expired, referral source = District Endochrine             → LIGHT red · rule: records first, no order
+ *   MN Expiry BLANK                                               → LIGHT red · rule: unknown can't count as valid
  *
- * Blank is its own state, not "not valid": it means the date was never
- * recorded — we don't know, and it was missed (Brandon, 2026-09-14). For
- * every ordinary referral source that's a pass (the check is advisory for
- * them anyway) with a visible gap to fill in. For a District Endochrine
- * referral an unknown can't count as valid, so it holds the order the same
- * way a missing eligibility check would — the circle stays blank, the tone
- * is pending, and the patient lands in the Medical Records tab until the
- * expiry is recorded. No "expiring soon" state, by design.
+ * Blank used to render as an outline circle that passed for ordinary
+ * sources. Brandon (2026-09-20): every state is a yes or a no, and a blank
+ * is a no, so that a blank forces someone to fill it in. Rare — 6 of 747
+ * active patients on the last count. No "expiring soon" state, by design.
  *
- * Live board, 2026-09-14: 262 active patients valid, 449 expired, 6 blank;
- * all 3 District Endochrine patients valid. Referral Source is blank on
- * 432 of 787 rows — the hard stop only sees patients whose source is set.
+ * Live board, 2026-09-20: 315 valid, 422 expired, 6 blank; all 4 District
+ * Endochrine patients valid. Referral Source is blank on 432 of 787 rows —
+ * the hard stop only sees patients whose source is set.
  *
  * Pure: no Monday, no React. The board's `Referral Source` label is spelled
  * "District Endochrine" (label id 9); the rule matches both spellings so a
@@ -66,6 +63,7 @@ export function deriveMr(opts: {
   const expiry = String(opts.mnExpiry ?? "").trim().slice(0, 10);
   const hardStop = isMrHardStopSource(opts.referralSource);
   const source = String(opts.referralSource ?? "").trim();
+  const src = source ? ` (${source} referral)` : "";
 
   if (mrIsValid(expiry, today)) {
     return {
@@ -76,34 +74,34 @@ export function deriveMr(opts: {
     };
   }
   if (!expiry) {
-    // Blank — never recorded. Shown as a blank circle either way; only the
-    // hard-stop source lets it hold the order.
-    return hardStop
-      ? {
-          tone: "pending",
-          unknown: true,
-          label: "Not on file",
-          detail: `No MN Expiry recorded · ${source} referral — can't confirm the records, so the order waits until it's filled in`,
-        }
-      : {
-          tone: "ok",
-          unknown: true,
-          label: "Not on file",
-          detail: `No MN Expiry recorded — we don't know; it was missed${source ? ` (${source} referral)` : ""}. OK to order; fill it in`,
-        };
+    // Blank — never recorded. A no for everyone: the column has nothing to
+    // say, and the rule is what says stop until somebody fills it in.
+    return {
+      tone: "bad",
+      light: true,
+      ruleId: "mr.blank",
+      why: `MN Expiry is blank${src} — unknown can't count as valid; record the date`,
+      label: "Not on file",
+      detail: `No MN Expiry recorded${src}. The order waits until the date is filled in.`,
+    };
   }
-  const why = `MR expired ${fmtDay(expiry)}`;
+  const expiredOn = `MR expired ${fmtDay(expiry)}`;
   if (hardStop) {
     return {
       tone: "bad",
+      light: true,
+      ruleId: "mr.expired-hard-stop",
+      why: `${source} referral — records first, no order`,
       label: "Not valid",
-      detail: `${why} · ${source} referral — can't order until the records are updated`,
+      detail: `${expiredOn} · ${source} referral — can't order until the records are updated`,
     };
   }
   return {
     tone: "ok",
     light: true,
+    ruleId: "mr.expired-order-anyway",
+    why: `${expiredOn}${src} — OK to order, chase the records`,
     label: "Not valid · OK to order",
-    detail: `${why} · OK to order${source ? ` (${source} referral)` : ""} — chase the records`,
+    detail: `${expiredOn} · OK to order${src} — chase the records`,
   };
 }

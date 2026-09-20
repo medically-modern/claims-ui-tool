@@ -52,6 +52,7 @@ import { ClaimHistoryCard } from "./ClaimHistoryCard";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
 import { NewOrders } from "./NewOrders";
+import { PayerRulesTab } from "./PayerRulesTab";
 import { DvsQueue } from "./DvsQueue";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
@@ -183,15 +184,16 @@ type CheckpointCircleProps = {
 const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
   function CheckpointCircle({ check, size = 30, title, className, style, ...rest }, ref) {
   const state = circleStateFor(check);
-  // A "hollow" green check — a pass with a caveat. Used only by the MR
-  // check ("records expired, but OK to order"). Delay used to render this
-  // way too; it no longer does, because delaying moves the order date, so
-  // against the date on the row the patient has simply answered.
-  const delayedGreen = state === "green" && !!check.light;
+  // LIGHT = a rule decided this mark, not the column (see payerRules.ts).
+  // Hollow in the tone's colour: light green is "the column did not say yes;
+  // a rule says order anyway", light red is "the column looks fine; a rule
+  // says no". Dark means the column decided by itself. Same tone, same
+  // readiness — the look is the audit trail.
+  const light = !!check.light && (state === "green" || state === "red");
   const sizeStyle = { width: size, height: size };
   const inner =
-    state === "green" ? <Check className={cn("h-4 w-4", delayedGreen ? "text-emerald-600" : "text-white")} strokeWidth={3} /> :
-    state === "red"   ? <X     className="h-4 w-4 text-white"  strokeWidth={3} /> :
+    state === "green" ? <Check className={cn("h-4 w-4", light ? "text-emerald-600" : "text-white")} strokeWidth={3} /> :
+    state === "red"   ? <X     className={cn("h-4 w-4", light ? "text-rose-600" : "text-white")}  strokeWidth={3} /> :
     state === "yellow" ? <span className="text-white font-bold text-[14px] leading-none">!</span> :
     // Three dots that breathe, staggered, so a glance down the column tells
     // you something is in flight without reading a single label.
@@ -204,8 +206,8 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
     ) :
     null;
   const cls =
-    state === "green"  ? (delayedGreen ? "bg-emerald-50 ring-emerald-600" : "bg-emerald-600 ring-emerald-600")
-    : state === "red"  ? "bg-rose-600 ring-rose-600"
+    state === "green"  ? (light ? "bg-emerald-50 ring-emerald-600" : "bg-emerald-600 ring-emerald-600")
+    : state === "red"  ? (light ? "bg-rose-50 ring-rose-600" : "bg-rose-600 ring-rose-600")
     : state === "yellow" ? "bg-amber-400 ring-amber-400"
     : state === "waiting" ? "bg-slate-400 ring-slate-400"
     : state === "gray" ? "bg-slate-300 ring-slate-300"
@@ -218,6 +220,11 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
       title={
         title ?? [
           `${check.label}${check.detail ? " — " + check.detail : ""}`,
+          // Light marks say why: the rule that changed the column's answer,
+          // with the numbers. Dark marks have nothing to add — the column
+          // decided (Brandon, 2026-09-20: "add a hover to the light so it
+          // says why").
+          check.light && check.why ? `Rule: ${check.why}` : null,
           check.changes?.length ? `Changes: ${check.changes.join(" • ")}` : null,
           check.patientMessage ? `Patient message: ${check.patientMessage}` : null,
           // The badge's own hover: what was actually said, one line each
@@ -468,6 +475,69 @@ function fmtMoneyAmt(n: number): string {
     maximumFractionDigits: 2,
   })}`;
 }
+/**
+ * Money figures that should exist and don't — OOP Estimate blank inside 20
+ * days of the order, Total GP blank. Not a verdict (the Confirm circle carries
+ * that); a "go fix the data for this patient" note, next to the name where it
+ * can't be missed (Brandon, 2026-09-20). See payerRules.confirmPolicy.
+ */
+function FlagBadges({ patient }: { patient: SubscriptionPatient }) {
+  const flags = patient.flags ?? [];
+  if (!flags.length) return null;
+  return (
+    <>
+      {flags.map((f) => (
+        <span
+          key={f.id}
+          title={f.detail}
+          className="ml-1.5 inline-flex items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-bold text-violet-700"
+        >
+          <AlertTriangle className="h-3 w-3" />{f.label}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/**
+ * What the circles mean, in one line. Dark = the Monday column decided on its
+ * own; light (hollow) = a payer rule changed the answer, hover for why. Sits in
+ * the header because the light marks are exactly the decisions the rules are
+ * making for you tonight (Brandon, 2026-09-20).
+ */
+function MarkLegend({ onRules }: { onRules?: () => void }) {
+  const dot = (cls: string, inner?: React.ReactNode) => (
+    <span className={cn("inline-flex h-4 w-4 items-center justify-center rounded-full ring-2", cls)}>{inner}</span>
+  );
+  return (
+    <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5">
+        {dot("bg-emerald-600 ring-emerald-600", <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />)}
+        {dot("bg-rose-600 ring-rose-600", <X className="h-2.5 w-2.5 text-white" strokeWidth={3} />)}
+        <span><span className="font-semibold text-foreground">Dark</span> — the board decided</span>
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        {dot("bg-emerald-50 ring-emerald-600", <Check className="h-2.5 w-2.5 text-emerald-600" strokeWidth={3} />)}
+        {dot("bg-rose-50 ring-rose-600", <X className="h-2.5 w-2.5 text-rose-600" strokeWidth={3} />)}
+        <span><span className="font-semibold text-foreground">Light</span> — a payer rule decided, hover for why</span>
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        {dot("bg-amber-400 ring-amber-400", <span className="text-[9px] font-bold leading-none text-white">!</span>)}
+        <span>Something to do</span>
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        {dot("bg-slate-400 ring-slate-400", <span className="text-[8px] leading-none text-white">…</span>)}
+        <span>Answer on its way</span>
+      </span>
+      {onRules && (
+        <button type="button" onClick={onRules} className="underline decoration-dotted underline-offset-2 hover:text-foreground">
+          All rules
+        </button>
+      )}
+    </div>
+  );
+}
+
 function OopBadge({ patient }: { patient: SubscriptionPatient }) {
   const live = patient as unknown as {
     oopEstimate?: string; dedRemaining?: string; coinsurancePct?: string;
@@ -1315,7 +1385,7 @@ function OrderCycleWorkflow() {
   // or backend already promoted Ordering Cycle). Blocked is never ready;
   // unblocking returns the patient to whichever lane their date says.
   // Ready to Order is a readiness sub-split now, not a top-level tab.
-  type PrimaryTab = "due" | "prep" | "blocked" | "neworder" | "overview";
+  type PrimaryTab = "due" | "prep" | "blocked" | "neworder" | "overview" | "rules";
   const [primary, setPrimary] = useState<PrimaryTab>("due");
   type PrepPhase = CheckpointKind | "all" | "readysub";
   const [prepPhase, setPrepPhase] = useState<PrepPhase>("all");
@@ -1741,45 +1811,72 @@ function OrderCycleWorkflow() {
     </TabsTrigger>
   );
 
+  // The primary nav, once. Rendered by the main board and by the two
+  // stand-alone tabs (Order, Rules) so the row of tabs is identical wherever
+  // the operator is.
+  const primaryNav = (
+    <Tabs value={primary} onValueChange={(v) => setPrimary(v as PrimaryTab)}>
+      <TabsList className="bg-card border h-11 p-1">
+        <TabsTrigger value="due" className="text-[15px] font-semibold gap-2 px-4"
+          title="Order date arrived, nothing blocking — tonight's worklist">
+          Due
+          <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.due}</span>
+        </TabsTrigger>
+        <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4"
+          title="Order date in the future — the 4 checkpoint buckets prep the next 21 days">
+          Scheduled
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.scheduled}</span>
+        </TabsTrigger>
+        <TabsTrigger value="blocked" className="text-[15px] font-semibold gap-2 px-4"
+          title="Actively blocked with a reason — watchers flag when the blocker resolves">
+          <PauseCircle className="h-4 w-4 text-rose-600" />
+          Blocked
+          <span className="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.paused}</span>
+          {counts.possiblyResolved > 0 && (
+            <span
+              className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums"
+              title={`${counts.possiblyResolved} block${counts.possiblyResolved === 1 ? " looks" : "s look"} resolved — review`}
+            >
+              <Bell className="h-3 w-3" />{counts.possiblyResolved}
+            </span>
+          )}
+        </TabsTrigger>
+        <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
+        <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4">
+          Order
+        </TabsTrigger>
+        <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
+        <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
+          Overview
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.overview}</span>
+        </TabsTrigger>
+        <TabsTrigger value="rules" className="text-[15px] font-semibold gap-2 px-4"
+          title="The payer rules behind the light marks — rendered from the same table the circles use">
+          Rules
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+
   // New 'Order' tab — independent view rendered from the New Order
   // Board (18405457690). Skip all of the Order Prep / Ready-to-Order
   // shared scaffolding for this tab; NewOrders renders its own header.
   if (primary === "neworder") {
     return (
       <div className="space-y-4">
-        <Tabs value={primary} onValueChange={(v) => setPrimary(v as PrimaryTab)}>
-          <TabsList className="bg-card border h-11 p-1">
-            <TabsTrigger value="due" className="text-[15px] font-semibold gap-2 px-4">
-              Due
-              <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.due}</span>
-            </TabsTrigger>
-            <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4"
-              title="Order date in the future — the 4 checkpoint buckets prep the next 21 days">
-              Scheduled
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.scheduled}</span>
-            </TabsTrigger>
-            <TabsTrigger value="blocked" className="text-[15px] font-semibold gap-2 px-4">
-              <PauseCircle className="h-4 w-4 text-rose-600" />
-              Blocked
-              <span className="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.paused}</span>
-              {counts.possiblyResolved > 0 && (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
-                  <Bell className="h-3 w-3" />{counts.possiblyResolved}
-                </span>
-              )}
-            </TabsTrigger>
-            <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
-            <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4">
-              Order
-            </TabsTrigger>
-            <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
-            <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
-              Overview
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.overview}</span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+        {primaryNav}
         <NewOrders />
+      </div>
+    );
+  }
+
+  // 'Rules' tab — the payer rules behind the light marks, with tonight's
+  // counts. Rendered from lib/subscription/payerRules.ts, never typed by hand.
+  if (primary === "rules") {
+    return (
+      <div className="space-y-4">
+        {primaryNav}
+        <PayerRulesTab patients={all} />
       </div>
     );
   }
@@ -1815,47 +1912,12 @@ function OrderCycleWorkflow() {
             {batchMsg}
           </span>
         )}
+        <MarkLegend onRules={() => setPrimary("rules")} />
       </div>
 
-      {/* Primary nav: Order Prep | Order | Overview */}
+      {/* Primary nav: Due | Scheduled | Blocked | Order | Overview | Rules */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Tabs value={primary} onValueChange={(v) => setPrimary(v as PrimaryTab)}>
-          <TabsList className="bg-card border h-11 p-1">
-            <TabsTrigger value="due" className="text-[15px] font-semibold gap-2 px-4"
-              title="Order date arrived, nothing blocking — tonight's worklist">
-              Due
-              <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.due}</span>
-            </TabsTrigger>
-            <TabsTrigger value="prep" className="text-[15px] font-semibold gap-2 px-4"
-              title="Order date in the future — the 4 checkpoint buckets prep the next 21 days">
-              Scheduled
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.scheduled}</span>
-            </TabsTrigger>
-            <TabsTrigger value="blocked" className="text-[15px] font-semibold gap-2 px-4"
-              title="Actively blocked with a reason — watchers flag when the blocker resolves">
-              <PauseCircle className="h-4 w-4 text-rose-600" />
-              Blocked
-              <span className="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.paused}</span>
-              {counts.possiblyResolved > 0 && (
-                <span
-                  className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums"
-                  title={`${counts.possiblyResolved} block${counts.possiblyResolved === 1 ? " looks" : "s look"} resolved — review`}
-                >
-                  <Bell className="h-3 w-3" />{counts.possiblyResolved}
-                </span>
-              )}
-            </TabsTrigger>
-            <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
-            <TabsTrigger value="neworder" className="text-[15px] font-semibold gap-2 px-4">
-              Order
-            </TabsTrigger>
-            <div aria-hidden className="mx-1.5 h-6 w-px self-center bg-border" />
-            <TabsTrigger value="overview" className="text-[15px] font-semibold gap-2 px-4">
-              Overview
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold tabular-nums">{counts.overview}</span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+        {primaryNav}
         <div className="flex items-center gap-2">
           {/* Send Reorder Text is auto-fired by Josh's backend automation
               when status hits 20-days and reorder link is empty — no
@@ -2290,7 +2352,7 @@ function OverviewTable({
           className={cn(grid, "border-b px-6 py-4 hover:bg-muted/30 transition-colors items-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset")}
         >
           <button type="button" onClick={() => onPatientClick(p)} className="text-left">
-            <div className="text-[15px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /><ShipCandidateBadge patient={p} /></div>
+            <div className="text-[15px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /><FlagBadges patient={p} /><ShipCandidateBadge patient={p} /></div>
             <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">{p.phone}</div>
           </button>
           <div>
@@ -2430,7 +2492,7 @@ function BlockedRow({
     <div className={cn(BLOCKED_GRID, "border-b px-6 py-3.5 hover:bg-muted/30 transition-colors items-center")}>
       <button type="button" onClick={() => onPatientClick(p)} className="text-left">
         <div className="text-[14px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">
-          {p.name}<OopBadge patient={p} />
+          {p.name}<OopBadge patient={p} /><FlagBadges patient={p} />
         </div>
         <div className="text-[11px] text-muted-foreground tabular-nums mt-0.5">
           {p.phone}{p.blockedDate ? ` · blocked ${fmtDate(p.blockedDate)}` : ""}
@@ -2514,7 +2576,7 @@ function PhaseTable({
             <TableRow key={p.id} className="align-top">
               <TableCell>
                 <button type="button" onClick={() => onPatientClick(p)} className="text-left">
-                  <div className="text-[13px] font-semibold flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /></div>
+                  <div className="text-[13px] font-semibold flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /><FlagBadges patient={p} /></div>
                   <div className="text-[11px] text-muted-foreground tabular-nums">{p.phone}</div>
                 </button>
               </TableCell>
