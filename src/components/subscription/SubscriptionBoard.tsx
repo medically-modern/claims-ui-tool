@@ -1106,21 +1106,21 @@ export function BlockDialog({
           {/* Two clicks to pause (Brandon, 2026-09-20): the first shows what
               is about to happen, the second does it. */}
           {confirming ? (
-            <div className="w-full space-y-2 rounded-lg border border-rose-200 bg-rose-50 p-3">
-              <div className="text-[13px] font-semibold text-rose-900">Pause {patient?.name}?</div>
-              <div className="text-[12px] text-rose-800">
+            <div className="w-full space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
+              <div className="text-[13px] font-semibold text-amber-900">Pause {patient?.name}?</div>
+              <div className="text-[12px] text-amber-900">
                 {[...reasons].join(", ")}{checkIn ? ` · check in ${fmtDate(checkIn)}` : ""}. Leaves tonight's list until unpaused.
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <Button variant="outline" size="sm" onClick={() => setConfirming(false)} disabled={saving}>Back</Button>
-                <Button size="sm" className="bg-rose-700 hover:bg-rose-800" disabled={!canSave} onClick={() => void save()}>
+                <Button size="sm" className="bg-amber-500 text-amber-950 hover:bg-amber-600" disabled={!canSave} onClick={() => void save()}>
                   {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PauseCircle className="mr-2 h-4 w-4" />}
                   Yes, pause
                 </Button>
               </div>
             </div>
           ) : (
-            <Button className="w-full bg-rose-700 hover:bg-rose-800" disabled={!canSave} onClick={() => setConfirming(true)}>
+            <Button className="w-full bg-amber-500 text-amber-950 hover:bg-amber-600" disabled={!canSave} onClick={() => setConfirming(true)}>
               <PauseCircle className="mr-2 h-4 w-4" /> Pause patient…
             </Button>
           )}
