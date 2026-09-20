@@ -129,6 +129,41 @@ export async function fetchRecordingBlobUrl(contentUri: string): Promise<string>
   return URL.createObjectURL(blob);
 }
 
+/**
+ * A voicemail's audio (and transcript, when RingCentral made one) as a blob
+ * URL. The call log only points at the message; the message lists its
+ * attachments; the AudioRecording attachment is the sound.
+ *
+ * ⚠️ Works for voicemails in the mailbox the gateway is signed in as. A
+ * voicemail left on another extension (a queue, the main line) 403s until the
+ * gateway allow-lists `/account/~/extension/{id}/message-store/…` and the RC
+ * app can read other mailboxes (Jesus Sarmiento, 2026-08-21, ext 63007214012).
+ */
+export async function fetchVoicemail(messageUri: string): Promise<{ audioUrl: string; transcript?: string }> {
+  if (!messageUri) throw new Error("No voicemail attached to this call");
+  const res = await rcFetch(messageUri);
+  if (res.status === 403 || res.status === 404) {
+    throw new Error("This voicemail is in a different RingCentral mailbox than the one the gateway reads (main line / queue). Listen in RingCentral for now.");
+  }
+  if (!res.ok) throw new Error(`RingCentral voicemail lookup failed (${res.status})`);
+  const msg = (await res.json()) as { attachments?: Array<{ type?: string; contentType?: string; uri?: string }> };
+  const atts = msg.attachments ?? [];
+  const audio = atts.find((a) => a.type === "AudioRecording" && a.uri) ?? atts.find((a) => /^audio\//.test(a.contentType ?? "") && a.uri);
+  if (!audio?.uri) throw new Error("RingCentral has no audio for this voicemail");
+  const audioRes = await rcFetch(audio.uri);
+  if (!audioRes.ok) throw new Error(`RingCentral voicemail download failed (${audioRes.status})`);
+  const audioUrl = URL.createObjectURL(await audioRes.blob());
+  let transcript: string | undefined;
+  const tr = atts.find((a) => a.type === "AudioTranscription" && a.uri);
+  if (tr?.uri) {
+    try {
+      const t = await rcFetch(tr.uri);
+      if (t.ok) transcript = (await t.text()).trim() || undefined;
+    } catch { /* the transcript is a bonus */ }
+  }
+  return { audioUrl, transcript };
+}
+
 /** Bytes for any allow-listed RingCentral content URL — an MMS attachment — as
  *  a blob URL the browser can render. Callers own revoking the URL. */
 export async function fetchRcContentBlobUrl(contentUri: string): Promise<string> {

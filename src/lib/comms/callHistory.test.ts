@@ -184,3 +184,17 @@ describe("summarizeCalls", () => {
     expect(summarizeCalls([])).toMatchObject({ total: 0, missedInbound: 0, lastCallAt: "" });
   });
 });
+
+describe("voicemail messages", () => {
+  it("keeps the message-store pointer a voicemail record carries (no recording)", () => {
+    const c = toPatientCall({
+      id: 1, startTime: "2026-08-21T17:04:00.000Z", direction: "Inbound", result: "Voicemail", duration: 99,
+      from: { phoneNumber: "+16462892414" }, to: { phoneNumber: "+15185551234" },
+      message: { id: 3271653706012, type: "VoiceMail", uri: "https://platform.ringcentral.com/restapi/v1.0/account/1/extension/63007214012/message-store/3271653706012" },
+      legs: [{ result: "Voicemail" }],
+    });
+    expect(c?.voicemail).toBe(true);
+    expect(c?.recording).toBeUndefined();
+    expect(c?.voicemailMessage).toEqual({ id: "3271653706012", uri: "https://platform.ringcentral.com/restapi/v1.0/account/1/extension/63007214012/message-store/3271653706012" });
+  });
+});

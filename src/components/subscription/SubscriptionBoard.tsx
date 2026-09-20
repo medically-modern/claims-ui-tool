@@ -247,7 +247,7 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           message existed and somebody decided (Brandon, 2026-09-20). */}
       {!check.needsRead && check.reviewed && (
         <span
-          className="absolute -top-2 -right-2 grid h-[18px] w-[18px] place-items-center rounded-full bg-emerald-100 text-emerald-800 ring-2 ring-emerald-700"
+          className="absolute -top-2 -right-2 grid h-[18px] w-[18px] place-items-center rounded-full bg-emerald-600 text-white ring-2 ring-emerald-800 shadow-[0_0_0_2px_white]"
           aria-label={check.reviewed}
         >
           <MessageSquare className="h-[11px] w-[11px]" strokeWidth={2.75} />
@@ -259,7 +259,7 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           says (Brandon, 2026-09-19). */}
       {check.medicaidDvs && (
         <span
-          className="absolute -bottom-1 -right-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-[9px] font-bold leading-none text-sky-700 ring-1 ring-sky-300"
+          className="absolute -top-1.5 -right-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-[9px] font-bold leading-none text-sky-700 ring-1 ring-sky-300"
           aria-label="Medicaid — needs a DVS for this order"
                   >M</span>
       )}

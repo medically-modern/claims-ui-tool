@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, RefreshCw, Voicemail } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fetchRecordingBlobUrl } from "@/lib/comms/gateway";
+import { fetchRecordingBlobUrl, fetchVoicemail } from "@/lib/comms/gateway";
 import { fetchedAt, getCalls } from "@/lib/comms/cache";
 import { callsSince } from "@/lib/comms/sinceOrder";
 import { callOutcomeLabel, summarizeCalls, type PatientCall } from "@/lib/comms/callHistory";
@@ -18,6 +18,7 @@ import { fmtWhenET } from "@/lib/comms/format";
 interface AudioState {
   loading?: boolean;
   url?: string;
+  transcript?: string;
   err?: string;
 }
 
@@ -78,12 +79,18 @@ export function CallsTab({ phone, sinceDay = "", sinceLabel }: { phone: string; 
   }, []);
 
   const play = async (call: PatientCall) => {
-    if (!call.recording || audio[call.id]?.url || audio[call.id]?.loading) return;
+    if ((!call.recording && !call.voicemailMessage) || audio[call.id]?.url || audio[call.id]?.loading) return;
     setAudio((a) => ({ ...a, [call.id]: { loading: true } }));
     try {
-      const url = await fetchRecordingBlobUrl(call.recording.contentUri);
-      blobs.current.push(url);
-      setAudio((a) => ({ ...a, [call.id]: { url } }));
+      if (call.recording) {
+        const url = await fetchRecordingBlobUrl(call.recording.contentUri);
+        blobs.current.push(url);
+        setAudio((a) => ({ ...a, [call.id]: { url } }));
+      } else if (call.voicemailMessage) {
+        const { audioUrl, transcript } = await fetchVoicemail(call.voicemailMessage.uri);
+        blobs.current.push(audioUrl);
+        setAudio((a) => ({ ...a, [call.id]: { url: audioUrl, transcript } }));
+      }
     } catch (e) {
       setAudio((a) => ({ ...a, [call.id]: { err: e instanceof Error ? e.message : String(e) } }));
     }
@@ -136,13 +143,13 @@ export function CallsTab({ phone, sinceDay = "", sinceLabel }: { phone: string; 
                     >
                       {callOutcomeLabel(c)}
                     </span>
-                    {c.recording && !a.url && (
+                    {(c.recording || c.voicemailMessage) && !a.url && (
                       <button
                         type="button"
                         onClick={() => void play(c)}
                         disabled={a.loading}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-muted/60 disabled:opacity-50"
-                        title="Play recording"
+                        className={cn("inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold hover:bg-muted/60 disabled:opacity-50", c.voicemailMessage && !c.recording ? "text-amber-700" : "text-emerald-700")}
+                        title={c.voicemailMessage && !c.recording ? "Play voicemail" : "Play recording"}
                       >
                         {a.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
                         Play
@@ -150,6 +157,7 @@ export function CallsTab({ phone, sinceDay = "", sinceLabel }: { phone: string; 
                     )}
                   </div>
                   {a.url && <audio controls autoPlay src={a.url} className="mt-2 h-9 w-full" />}
+                  {a.transcript && <p className="mt-1.5 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-950"><span className="font-semibold">Transcript:</span> {a.transcript}</p>}
                   {a.err && <p className="mt-1.5 text-xs text-destructive">Couldn't load the recording. {a.err}</p>}
                 </li>
               );
