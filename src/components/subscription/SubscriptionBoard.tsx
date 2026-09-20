@@ -241,6 +241,14 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           aria-label={`read before ordering — ${check.needsRead}`}
         />
       )}
+      {/* Read and judged: the badge stays, in green, so the row still says a
+          message existed and somebody decided (Brandon, 2026-09-20). */}
+      {!check.needsRead && check.reviewed && (
+        <MessageSquare
+          className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-emerald-600 p-[2px] text-white ring-1 ring-emerald-700"
+          aria-label={check.reviewed}
+        />
+      )}
       {/* The M marks a Medicaid row whose order is due with no DVS run yet —
           the same rows that get the Run DVS checkbox. It is a note about what
           to DO, sitting next to a circle that only ever reports what Monday
@@ -370,12 +378,30 @@ function CircleEditPopover({
             <div className="text-[11px] text-orange-700">Changes: {check.changes.join(" • ")}</div>
           )}
 
-          {d.action === "pause" && onBlockRequest && (
+          {check.reviewed && !check.needsRead && (
+            <div className="inline-flex items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-800">
+              <MessageSquare className="h-3 w-3" /> {check.reviewed}
+            </div>
+          )}
+
+          {/* A message on a green Confirm is the one case with two decisions:
+              read it, then pause or advance (Brandon, 2026-09-20). */}
+          {d.action === "pause" && kind === "confirmation" && check.needsRead ? (
+            <div className="grid grid-cols-2 gap-2">
+              <Button size="sm" variant="outline" className="text-rose-700 border-rose-200 hover:bg-rose-50"
+                onClick={() => { setOpen(false); onBlockRequest?.(patient); }} disabled={!onBlockRequest}>
+                <PauseCircle className="mr-1.5 h-3.5 w-3.5" /> Pause…
+              </Button>
+              <Button size="sm" className="bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}>
+                <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Advance…
+              </Button>
+            </div>
+          ) : d.action === "pause" && onBlockRequest ? (
             <Button size="sm" variant="outline" className="w-full text-rose-700 border-rose-200 hover:bg-rose-50"
               onClick={() => { setOpen(false); onBlockRequest(patient); }}>
               <PauseCircle className="mr-1.5 h-3.5 w-3.5" /> Pause…
             </Button>
-          )}
+          ) : null}
           {d.action === "advance" && (
             <Button size="sm" className="w-full bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}>
               <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Advance…
@@ -1819,31 +1845,11 @@ function OrderCycleWorkflow() {
     </div>
   );
 
-  // New 'Order' tab — independent view rendered from the New Order
-  // Board (18405457690). Skip all of the Order Prep / Ready-to-Order
-  // shared scaffolding for this tab; NewOrders renders its own header.
-  if (primary === "neworder") {
-    return (
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">{primaryNav}{referenceNav}</div>
-        <NewOrders />
-      </div>
-    );
-  }
-
-  // 'Rules' tab — the payer rules behind the light marks, with tonight's
-  // counts. Rendered from lib/subscription/payerRules.ts, never typed by hand.
-  if (primary === "rules") {
-    return (
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">{primaryNav}{referenceNav}</div>
-        <PayerRulesTab patients={all} />
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
+  // The same two rows on every primary tab — freshness + legend, then the
+  // nav — so switching Due → Order → Paused never moves the tabs; only what
+  // is below them changes (Brandon, 2026-09-20).
+  const topRows = (
+    <>
       {/* Live data freshness + mock-data banner */}
       <div className="flex flex-wrap items-center gap-2">
         <OrderCycleFreshness
@@ -1916,6 +1922,36 @@ function OrderCycleWorkflow() {
         </div>
       </div>
 
+    </>
+  );
+
+  // New 'Order' tab — independent view rendered from the New Order
+  // Board (18405457690). Skip all of the Order Prep / Ready-to-Order
+  // shared scaffolding for this tab; NewOrders renders its own header.
+  if (primary === "neworder") {
+    return (
+      <div className="space-y-4">
+        {topRows}
+        <NewOrders />
+      </div>
+    );
+  }
+
+  // 'Rules' tab — the payer rules behind the light marks, with tonight's
+  // counts. Rendered from lib/subscription/payerRules.ts, never typed by hand.
+  if (primary === "rules") {
+    return (
+      <div className="space-y-4">
+        {topRows}
+        <PayerRulesTab patients={all} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {topRows}
+
       {/* Sub-nav under Order Prep — the 4 readiness phases */}
       {primary === "prep" && (
         <Tabs value={prepPhase} onValueChange={(v) => {
@@ -1961,21 +1997,21 @@ function OrderCycleWorkflow() {
                 {counts.duePrep}
               </span>
             </TabsTrigger>
-            <TabsTrigger value="ready" className="gap-1.5" title="All checks clear — send these now">
+            {/* Somebody said something since the last order — a note, a
+                portal message, or an inbound text/call. Read it, then pause
+                or advance; nothing here auto-advances while it's unread. */}
+            <TabsTrigger value="needsread" className="gap-1.5" title="A message since the last order is holding Confirm — read it, then pause or advance">
+              <MessageSquare className="h-3.5 w-3.5 text-sky-700" />
+              Evaluate Confirmation
+              <span className="rounded-full bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
+                {counts.dueNeedsRead}
+              </span>
+            </TabsTrigger>
+            <TabsTrigger value="ready" className="gap-1.5" title="All five checks clear — send these now">
               <Send className="h-3.5 w-3.5 text-emerald-600" />
               Ready to Order
               <span className="rounded-full bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
                 {counts.dueReady}
-              </span>
-            </TabsTrigger>
-            {/* Somebody said something — a note, a portal message, or an
-                inbound text/call — within 30 days of the order date. The one
-                thing on the row that can't be judged without reading it. */}
-            <TabsTrigger value="needsread" className="gap-1.5" title="A note, portal message, or inbound text/call in the 30 days before the order date — read it before ordering">
-              <MessageSquare className="h-3.5 w-3.5 text-sky-700" />
-              Needs a read
-              <span className="rounded-full bg-amber-100 text-amber-800 px-1.5 py-0.5 text-[10px] font-bold tabular-nums">
-                {counts.dueNeedsRead}
               </span>
             </TabsTrigger>
           </TabsList>
@@ -2181,6 +2217,10 @@ function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
 // up to ~1,210px with gaps, so the table fits a 1,280 viewport without
 // clipping the button; above that the five circle tracks share the surplus.
 const OVERVIEW_GRID = "grid grid-cols-[180px_84px_160px_minmax(180px,1.4fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_140px] gap-2";
+// Order Prep has no action button: the only way to Ready to Order is five
+// green circles, reached through the popovers and the profile (Brandon,
+// 2026-09-20). So no Actions column there either.
+const OVERVIEW_GRID_NOACTION = "grid grid-cols-[180px_84px_160px_minmax(180px,1.4fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)] gap-2";
 // Ready-to-Order variant adds a Type (First Order / Reorder) column.
 const OVERVIEW_GRID_TYPE = "grid grid-cols-[180px_84px_160px_112px_minmax(170px,1.3fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_140px] gap-2";
 
@@ -2283,12 +2323,13 @@ function OverviewTable({
   onToggleDvs: (id: string) => void;
   dvsRunning: boolean;
 }) {
-  const grid = showOrderType ? OVERVIEW_GRID_TYPE : OVERVIEW_GRID;
+  const showActions = actionMode === "ready";
+  const grid = showOrderType ? OVERVIEW_GRID_TYPE : showActions ? OVERVIEW_GRID : OVERVIEW_GRID_NOACTION;
   return (
     <div className="text-[13px] overflow-x-auto">
       {/* sticky: keep the five check headings visible while scrolling.
           Opaque bg (not bg-muted/60) so rows don't ghost through when stuck. */}
-      <div className={cn(grid, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
+      <div className={cn(grid, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[13px] font-bold uppercase tracking-wide text-slate-600 items-end")}>
         <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Order"          k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Subscription"   k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
@@ -2304,7 +2345,7 @@ function OverviewTable({
         <div className="text-center"><SortableLabel label="Authorization"   k="auth"         sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-center"><SortableLabel label="Last Claim Paid" k="lastPaid"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
         <div className="text-center"><SortableLabel label="Medical Records" k="mr"           sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
-        <div className="text-right pr-2 normal-case">Actions</div>
+        {showActions && <div className="text-right pr-2 normal-case">Actions</div>}
       </div>
       {/* The whole row opens the profile — there is no Review button any
           more, because a button that does what clicking the row does is a
@@ -2359,7 +2400,9 @@ function OverviewTable({
               <CheckpointCircle check={mrOf(p)} />
             </CircleEditPopover>
           </div>
-          <ReviewAndSubmit p={p} mode={actionMode} onSubmit={() => onSubmit(p)} onPromote={() => onPromote(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} />
+          {showActions && (
+            <ReviewAndSubmit p={p} mode={actionMode} onSubmit={() => onSubmit(p)} onPromote={() => onPromote(p)} sending={sendingIds.has(p.mondayItemId)} sent={sentIds.has(p.mondayItemId)} />
+          )}
         </div>
       ))}
     </div>

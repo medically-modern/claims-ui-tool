@@ -192,6 +192,7 @@ export function deriveConfirmation(i: CheckInputs, firstOrder: boolean): { check
   }
   const extras: Partial<Checkpoint> = {
     needsRead:      signal.needsRead ? signal.summary : undefined,
+    reviewed:       !signal.needsRead && reviewed ? `Reviewed by ${reviewed.initials} ${fmtStamp(reviewed)}` : undefined,
     needsReadLines: signal.lines.length ? signal.lines : undefined,
     changes:        changes.length ? changes : undefined,
     patientMessage: i.patientHelpMessage && sinceLastOrder(i.patientHelpMessage, since) ? i.patientHelpMessage : undefined,
