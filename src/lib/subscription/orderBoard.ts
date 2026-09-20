@@ -39,6 +39,21 @@ export function orderStatusTone(label: string): PillTone {
   }
 }
 
+/** Order Status → a left-border colour. It's almost always "Order"; when it
+ *  flips to Ordered the row leaves the view anyway, so this is quiet context,
+ *  not a headline (Brandon, 2026-09-20). */
+export function orderStatusBorder(label: string): string {
+  switch (label.trim()) {
+    case "Order":         return "border-l-amber-400";
+    case "Ordered":       return "border-l-emerald-500";
+    case "Paid Cash":     return "border-l-emerald-500";
+    case "Stuck":         return "border-l-rose-500";
+    case "On Hold":       return "border-l-sky-500";
+    case "Process Claim": return "border-l-violet-500";
+    default:              return "border-l-slate-300";
+  }
+}
+
 /** Pre-Check → tone. Anything with "Good to Go" is clear; the rest need a look. */
 export function preCheckTone(label: string): PillTone {
   const l = label.trim().toLowerCase();

@@ -12,7 +12,7 @@
  * or both order all read the same. Click a row for the rest (OrderDetailSheet).
  */
 import { useMemo, useState } from "react";
-import { Loader2, RefreshCw as ReloadIcon, Search } from "lucide-react";
+import { Check, Loader2, RefreshCw as ReloadIcon, Search } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 import { useNewOrders } from "@/hooks/subscription/useNewOrders";
 import { ORDER_GROUP_ID, RETURNS_GROUP_ID, type NewOrderRow } from "@/api/queries/newOrders";
 import {
-  orderCategories, orderStatusTone, pillClass, posLabel, preCheckTone,
+  orderCategories, orderStatusBorder, pillClass, posLabel, preCheckTone,
 } from "@/lib/subscription/orderBoard";
 import { OrderDetailSheet } from "./OrderDetailSheet";
 
@@ -71,22 +71,23 @@ function FreshnessPill({ isFetching, dataUpdatedAt, onRefresh }: {
   );
 }
 
-const ORDER_GRID = "grid grid-cols-[200px_150px_96px_minmax(150px,0.7fr)_minmax(340px,1.4fr)] gap-3";
+const ORDER_GRID = "grid grid-cols-[180px_130px_96px_150px_minmax(140px,0.8fr)_minmax(300px,1.3fr)] gap-3";
 
 /** One category's line: tag, the items, then its auth IDs. */
 function CategoryLine({ cat }: { cat: ReturnType<typeof orderCategories>[number] }) {
   const tagCls = cat.category === "Sensors" ? "bg-sky-100 text-sky-800" : "bg-violet-100 text-violet-800";
   return (
-    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px]">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px]">
       <span className={cn("inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[11px] font-semibold", tagCls)}>{cat.category}</span>
       <span className="font-medium">
         {cat.items.length
           ? cat.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(" · ")
           : <span className="text-muted-foreground">— nothing on this order</span>}
       </span>
+      {/* Auth is a presence check, not the number (Brandon, 2026-09-20). */}
       {cat.auths.length > 0 && (
-        <span className="text-[11px] text-muted-foreground">
-          · auth {cat.auths.map((a) => `${a.label} ${a.id}`).join(" · ")}
+        <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800" title={`Auth on file: ${cat.auths.map((a) => a.label).join(", ")}`}>
+          <Check className="h-3 w-3" /> Auth
         </span>
       )}
     </div>
@@ -97,11 +98,12 @@ function CategoryLine({ cat }: { cat: ReturnType<typeof orderCategories>[number]
 function OrderList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
   return (
     <div className="text-[13px] overflow-x-auto">
-      <div className={cn(ORDER_GRID, "sticky top-0 z-10 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[15px] font-bold tracking-normal text-slate-700 items-end")}>
+      <div className={cn(ORDER_GRID, "sticky top-0 z-10 rounded-t-lg border-b border-l-4 border-l-transparent bg-slate-100 px-4 py-3 text-[15px] font-bold tracking-normal text-slate-700 items-end")}>
         <div>Patient</div>
-        <div>Status</div>
+        <div>Pre-Check</div>
         <div>Order Date</div>
-        <div>Plan</div>
+        <div>Subscription</div>
+        <div>Insurance</div>
         <div>Order</div>
       </div>
       {rows.map((r) => {
@@ -114,21 +116,19 @@ function OrderList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrder
             tabIndex={0}
             onClick={() => onOpen(r)}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(r); } }}
-            className={cn(ORDER_GRID, "cursor-pointer border-b px-4 py-3 items-center hover:bg-muted/40")}
+            className={cn(ORDER_GRID, "cursor-pointer border-b border-l-4 px-4 py-3 items-center hover:bg-muted/40", orderStatusBorder(r.orderStatus))}
+            title={r.orderStatus ? `Order status: ${r.orderStatus}` : undefined}
           >
             <div className="min-w-0">
               <div className="font-semibold truncate">{r.name}</div>
               {r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}
             </div>
-            <div className="flex flex-col gap-1">
-              {r.orderStatus && <Pill label={r.orderStatus} tone={orderStatusTone(r.orderStatus)} />}
-              {r.preCheck && <Pill label={r.preCheck} tone={preCheckTone(r.preCheck)} />}
-              {pos && <Pill label="Office" tone="amber" />}
-            </div>
+            <div>{r.preCheck ? <Pill label={r.preCheck} tone={preCheckTone(r.preCheck)} /> : <span className="text-[12px] text-muted-foreground">—</span>}</div>
             <div className="tabular-nums">{fmtDate(r.orderDate)}</div>
+            <div className="min-w-0 font-medium truncate">{r.subscriptionType || "—"}</div>
             <div className="min-w-0">
-              <div className="font-medium truncate">{r.subscriptionType || "—"}</div>
-              <div className="text-[12px] text-muted-foreground truncate">{r.primaryInsurance || "—"}</div>
+              <div className="truncate">{r.primaryInsurance || "—"}</div>
+              {pos && <Pill label="Office" tone="amber" />}
             </div>
             <div className="space-y-1">
               {cats.length ? cats.map((c) => <CategoryLine key={c.category} cat={c} />)
