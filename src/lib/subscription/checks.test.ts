@@ -87,7 +87,7 @@ describe("Confirm — decided per patient", () => {
     const c = run({ primaryInsurance: "Medicaid", patientOrderResponse: "No Response", totalGp: "-12" }).confirmation;
     expect(c).toMatchObject({ tone: "bad", light: true, ruleId: "confirm.fill-loses-money" });
   });
-  it("blank OOP inside 20 days: light red and the row carries the OOP-unknown badge", () => {
+  it("blank OOP inside 18 days: light red and the row carries the OOP-unknown badge", () => {
     const d = run({ patientOrderResponse: "No Response", oopEstimate: "" });
     expect(d.confirmation).toMatchObject({ tone: "bad", light: true, ruleId: "confirm.oop-unknown" });
     expect(d.flags.map((f) => f.id)).toEqual(["oop-unknown"]);

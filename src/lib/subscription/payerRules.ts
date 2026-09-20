@@ -156,8 +156,12 @@ export interface PatientFlag {
 
 /** Confirm: OOP Estimate above this needs the patient's yes. */
 export const CONFIRM_OOP_THRESHOLD = 5;
-/** OOP Estimate must be populated this close to an order (Brandon, 2026-09-20). */
-export const OOP_WINDOW_DAYS = 20;
+/**
+ * OOP Estimate must be populated this close to an order. The automation writes
+ * it 19 days out (Brandon, 2026-09-20), so a blank at 19 or 20 days is expected
+ * and a blank at 18 is overdue — the badge fires from 18 days.
+ */
+export const OOP_WINDOW_DAYS = 18;
 
 export const RULES: readonly RuleDef[] = [
   {
@@ -199,7 +203,7 @@ export const RULES: readonly RuleDef[] = [
     when: "Patient Order Response is No Response or blank and OOP Estimate is blank or not a number",
     verdict: "block",
     flag: "oop-unknown",
-    source: `Brandon, 2026-09-20 — unknown is never $0. The badge only shows inside ${OOP_WINDOW_DAYS} days of the order, where the estimate should exist.`,
+    source: `Brandon, 2026-09-20 — unknown is never $0. The estimate is written 19 days out, so the badge only shows from ${OOP_WINDOW_DAYS} days, when a blank is overdue.`,
   },
   {
     id: "confirm.gp-unknown",
@@ -423,7 +427,7 @@ export function confirmPolicy(i: ConfirmPolicyInput): ConfirmPolicy {
         ? `OOP Estimate reads "${i.oopEstimate}" — unknown cost, so no reply is not enough`
         : inWindow
           ? "OOP Estimate is blank this close to the order — unknown cost, so no reply is not enough"
-          : `OOP Estimate not computed yet (it arrives about ${OOP_WINDOW_DAYS} days out) — unknown cost until then`,
+          : "OOP Estimate not computed yet (it is written 19 days out) — unknown cost until then",
     };
   }
   if (oop > CONFIRM_OOP_THRESHOLD) {

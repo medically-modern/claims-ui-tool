@@ -128,8 +128,8 @@ export function PayerRulesTab({ patients }: { patients: SubscriptionPatient[] })
           the answer depends on money: no reply is acceptable when OOP Estimate is at most ${CONFIRM_OOP_THRESHOLD} and
           the board's Total GP for the fill is not negative. Over ${CONFIRM_OOP_THRESHOLD}, or a fill that loses money,
           needs the patient's yes. A blank or unreadable figure is <span className="text-foreground">unknown</span>, which
-          cannot pass — and inside {OOP_WINDOW_DAYS} days of the order a blank OOP Estimate also raises the OOP-unknown badge,
-          because by then it should exist. First orders are exempt from all of it.
+          cannot pass — and from {OOP_WINDOW_DAYS} days before the order a blank OOP Estimate also raises the OOP-unknown badge,
+          because the estimate is written at 19 days out and by then it should exist. First orders are exempt from all of it.
         </p>
       </Card>
 
