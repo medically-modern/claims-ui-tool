@@ -65,6 +65,10 @@ const FIELD_MAP: Record<string, Field> = {
   infusionSet2:         { col: SUB_COL.inf_set_2, mut: "status" },
   infusionSet2Qty:      { col: SUB_COL.inf_qty_2, mut: "simple" },
   orderingCycle:        { col: SUB_COL.ordering_cycle, mut: "status" },
+  orderFrequency:       { col: SUB_COL.order_frequency, mut: "status" },
+  cgmQty:               { col: SUB_COL.cgm_qty, mut: "simple" },
+  cartridgeQty:         { col: SUB_COL.cartridge_qty, mut: "simple" },
+  canText:              { col: SUB_COL.can_text, mut: "status" },
   // Insurance
   primaryInsurance:     { col: SUB_COL.primary_insurance, mut: "status" },
   memberId1:            { col: SUB_COL.member_id_1, mut: "simple" },
@@ -189,4 +193,25 @@ export async function markConfirmedByOperator(
     SUB_COL.patient_notes,
     merged ? `${line}\n${merged}` : line,
   );
+}
+
+/**
+ * Prepend a stamped line to Subscription Patient Notes (text_mm6vp1z3) — the
+ * running log on the item, newest first. The stamp is the local date/time and
+ * the operator's initials, so a note reads "[9/20 3:14 PM] BE — swapped to
+ * AutoSoft XC". The whole column is rewritten (Monday text columns have no
+ * append), so the caller passes the current value it is building on.
+ */
+export async function addSubscriptionNote(
+  mondayItemId: string,
+  text: string,
+  existingNotes: string,
+  initials: string,
+): Promise<string> {
+  const now = new Date();
+  const stamp = `${now.getMonth() + 1}/${now.getDate()} ${now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`;
+  const line = `[${stamp}] ${initials || "MM"} — ${text.trim()}`;
+  const merged = existingNotes.trim() ? `${line}\n${existingNotes.trim()}` : line;
+  await writeSimple(mondayItemId, SUB_COL.subscription_notes, merged);
+  return merged;
 }

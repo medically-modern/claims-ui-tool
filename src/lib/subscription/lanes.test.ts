@@ -143,10 +143,13 @@ describe("readiness (Order Prep vs Ready to Order)", () => {
   it("all 4 checks green → ready, even before the order date", () => {
     expect(isReady(patient({ nextOrderDate: "2026-08-10" }))).toBe(true);
   });
-  it("backend-promoted Ordering Cycle → ready even if a check hasn't rendered green", () => {
-    expect(isReady(patient({ confirmation: waiting, orderingCycle: "Ready to Order" }))).toBe(true);
+  it("the board's Ready to Order label does NOT make a row ready — the circles do (Brandon, 2026-09-20)", () => {
+    // A Medicaid row the backend promoted before the order reset: Monday says
+    // Ready to Order, Authorization is amber (DVS not run). It is Order Prep.
+    expect(isReady(patient({ auth: { tone: "warn", label: "Required", dvsNeeded: true }, orderingCycle: "Ready to Order" }))).toBe(false);
+    expect(isReady(patient({ confirmation: waiting, orderingCycle: "Ready to Order" }))).toBe(false);
   });
-  it("any non-green check without promotion → prep", () => {
+  it("any non-green check → prep", () => {
     expect(isReady(patient({ auth: bad }))).toBe(false);
     expect(isReady(patient({ confirmation: waiting }))).toBe(false);
   });

@@ -29,6 +29,34 @@ const COL = {
   primary_insurance:    "color_mm18jhq5",
   member_id:            "text_mm18s3fe",
   subscription_type:    "color_mm18h05q",
+  // ─── The patient page's order history (2026-09-20). Verified against the
+  // board's column list the same day. ───────────────────────────────────────
+  order_type:           "color_mm1s96z2",   // First Order / Reorder
+  order_frequency:      "color_mm1s8tz0",
+  dob:                  "text_mm187t6a",
+  patient_address:      "location_mm187v29",
+  ddp_order:            "color_mm5pn3k1",   // placed through DDP — Cardinal never saw it
+  api_status:           "color_mm3zm9hm",
+  api_message:          "text_mm3zcde7",
+  hold_reason:          "text_mm486hh7",
+  backordered:          "dropdown_mm4wdmdd",
+  backordered_qty:      "numeric_mm3zyqz4",
+  substitute_set:       "color_mm727jnp",
+  substitution_status:  "color_mm727p5m",
+  substitution_cah:     "text_mm5xc3zg",
+  cah_order_number:     "text_mm3z47x2",
+  po_number:            "text_mm3zf5ev",
+  carrier:              "text_mm3za3mt",
+  est_ship_date:        "date_mm3zyb66",
+  ship_date:            "date_mm3zvmqq",
+  delivery_date:        "date_mm3z9258",
+  signed_by:            "text_mm3zpppq",
+  tracking_1:           "text_mm3z39yt",
+  tracking_2:           "text_mm4cd2zq",
+  tracking_3:           "text_mm4cxcsc",
+  confirmed_address:    "text_mm4cm2d6",
+  last_cardinal_sync:   "text_mm481jys",
+  line_item_detail:     "long_text_mm489t0z",
 } as const;
 
 const COL_IDS = Object.values(COL);
@@ -52,6 +80,31 @@ export interface NewOrderRow {
   primaryInsurance: string;
   memberId: string;
   subscriptionType: string;
+  // Cardinal / fulfilment side, for the patient page's order history.
+  orderType: string;
+  orderFrequency: string;
+  dob: string;
+  patientAddress: string;
+  ddpOrder: string;
+  apiStatus: string;
+  apiMessage: string;
+  holdReason: string;
+  backordered: string;
+  backorderedQty: string;
+  substituteSet: string;
+  substitutionStatus: string;
+  substitutionCah: string;
+  cahOrderNumber: string;
+  poNumber: string;
+  carrier: string;
+  estShipDate: string;
+  shipDate: string;
+  deliveryDate: string;
+  signedBy: string;
+  trackingNumbers: string[];
+  confirmedAddress: string;
+  lastCardinalSync: string;
+  lineItemDetail: string;
 }
 
 interface CV { id: string; text: string }
@@ -109,6 +162,30 @@ function mapItem(item: MondayItem): NewOrderRow {
     primaryInsurance:    get(item, COL.primary_insurance),
     memberId:            get(item, COL.member_id),
     subscriptionType:    get(item, COL.subscription_type),
+    orderType:           get(item, COL.order_type),
+    orderFrequency:      get(item, COL.order_frequency),
+    dob:                 get(item, COL.dob),
+    patientAddress:      get(item, COL.patient_address),
+    ddpOrder:            get(item, COL.ddp_order),
+    apiStatus:           get(item, COL.api_status),
+    apiMessage:          get(item, COL.api_message),
+    holdReason:          get(item, COL.hold_reason),
+    backordered:         get(item, COL.backordered),
+    backorderedQty:      get(item, COL.backordered_qty),
+    substituteSet:       get(item, COL.substitute_set),
+    substitutionStatus:  get(item, COL.substitution_status),
+    substitutionCah:     get(item, COL.substitution_cah),
+    cahOrderNumber:      get(item, COL.cah_order_number),
+    poNumber:            get(item, COL.po_number),
+    carrier:             get(item, COL.carrier),
+    estShipDate:         get(item, COL.est_ship_date),
+    shipDate:            get(item, COL.ship_date),
+    deliveryDate:        get(item, COL.delivery_date),
+    signedBy:            get(item, COL.signed_by),
+    trackingNumbers:     [get(item, COL.tracking_1), get(item, COL.tracking_2), get(item, COL.tracking_3)].filter(Boolean),
+    confirmedAddress:    get(item, COL.confirmed_address),
+    lastCardinalSync:    get(item, COL.last_cardinal_sync),
+    lineItemDetail:      get(item, COL.line_item_detail),
   };
 }
 
