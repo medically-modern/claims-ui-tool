@@ -930,7 +930,7 @@ function ReasonChips({ patient }: { patient: LanePatient }) {
  * (suggested for everything else); note becomes the head of the
  * append-only Block Note log.
  */
-function BlockDialog({
+export function BlockDialog({
   patient, open, onClose, onDone,
 }: {
   patient: LanePatient | null;
@@ -1083,7 +1083,7 @@ function BlockDialog({
  * FORCED_DECISION_MISSES the dialog forces the fork: renew with a
  * reason, or move to Not Active (doc §3.3). Unblock lives here too.
  */
-function CheckInDialog({
+export function CheckInDialog({
   patient, open, onClose, onDone,
 }: {
   patient: LanePatient | null;
