@@ -179,6 +179,8 @@ export interface Claim {
   rawEraClaimStatus?: string | null;
   primaryPaidDate?: string | null;
   secondaryPayer?: string | null;
+  /** Subscription Board item this claim was spawned from (text_mm3ahdn3). */
+  subscriptionItemId?: string | null;
   denialAction: DenialAction;
   actionContext?: string;
   nextActionDate?: string | null;

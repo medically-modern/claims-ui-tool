@@ -48,6 +48,7 @@ import { cn } from "@/lib/utils";
 import { PatientProfile } from "./PatientProfile";
 import { CommsIcons } from "@/components/comms/CommsIcons";
 import { CommsSheet } from "@/components/comms/CommsSheet";
+import { ClaimHistoryCard } from "./ClaimHistoryCard";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
 import { NewOrders } from "./NewOrders";
@@ -730,6 +731,9 @@ function PatientDrawer({
                 later; this is the thread and the call log in the one place an
                 operator already opens before deciding to order. */}
             <ProfileComms patient={patient} />
+            {/* What the last claim says about tonight's order, then every claim
+                spawned from this patient. Joined on Subscription Item ID. */}
+            <ClaimHistoryCard mondayItemId={patient.mondayItemId} currentPayer={patient.primaryPayer} />
             <Card className="p-3 space-y-1.5 text-[13px]">
               <div className="flex justify-between"><span className="text-muted-foreground">Phone</span><span>{patient.phone}</span></div>
               <div className="flex justify-between"><span className="text-muted-foreground">Monday ID</span><span className="font-mono text-[11px]">{patient.mondayItemId}</span></div>
