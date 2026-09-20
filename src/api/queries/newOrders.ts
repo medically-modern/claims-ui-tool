@@ -10,11 +10,18 @@
 import { hasMondayToken, mondayQuery } from "@/api/monday";
 
 const NEW_ORDER_BOARD_ID = "18405457690";
+/** The "Order" group — the daily ordering flow. Returns / shipped / cancelled
+ *  are other groups (verified 2026-09-20). */
+export const ORDER_GROUP_ID = "group_mm18v6n3";
+export const RETURNS_GROUP_ID = "group_mm60y5j7";
 
 // Verified 2026-06-07 via Monday API.
 const COL = {
   order_date:           "date_mm1ssf5g",
   order_status:         "status",
+  pre_check:            "color_mm5bh2az",
+  pre_check_detail:     "long_text_mm5byhdp",
+  pos:                  "color_mm3rfpkt",
   pump_type:            "color_mm1s45wm",
   cartridge_type:       "color_mm1szdck",
   infusion_set_1_type:  "color_mm1saxyg",
@@ -29,6 +36,11 @@ const COL = {
   primary_insurance:    "color_mm18jhq5",
   member_id:            "text_mm18s3fe",
   subscription_type:    "color_mm18h05q",
+  monitor_auth_id:      "text_mm1snsw3",
+  sensors_auth_id:      "text_mm28c4xs",
+  pump_auth_id:         "text_mm28nex8",
+  infusion_set_auth_id: "text_mm281vjp",
+  cartridges_auth_id:   "text_mm28kdfj",
   // ─── The patient page's order history (2026-09-20). Verified against the
   // board's column list the same day. ───────────────────────────────────────
   order_type:           "color_mm1s96z2",   // First Order / Reorder
@@ -66,6 +78,15 @@ export interface NewOrderRow {
   name: string;
   orderDate: string;
   orderStatus: string;
+  preCheck: string;
+  preCheckDetail: string;
+  pos: string;
+  groupId: string;
+  monitorAuthId: string;
+  sensorsAuthId: string;
+  pumpAuthId: string;
+  infusionSetAuthId: string;
+  cartridgesAuthId: string;
   pumpType: string;
   cartridgeType: string;
   infusionSet1Type: string;
@@ -110,6 +131,7 @@ export interface NewOrderRow {
 interface CV { id: string; text: string }
 interface MondayItem {
   id: string; name: string;
+  group?: { id: string } | null;
   column_values: CV[];
 }
 interface PageResp {
@@ -124,7 +146,7 @@ const PAGE_QUERY = `
     boards(ids: [$boardId]) {
       items_page(limit: 500) {
         cursor
-        items { id name column_values(ids: $cols) { id text } }
+        items { id name group { id } column_values(ids: $cols) { id text } }
       }
     }
   }
@@ -133,7 +155,7 @@ const NEXT_QUERY = `
   query NewOrderNext($cursor: String!, $cols: [String!]!) {
     next_items_page(cursor: $cursor, limit: 500) {
       cursor
-      items { id name column_values(ids: $cols) { id text } }
+      items { id name group { id } column_values(ids: $cols) { id text } }
     }
   }
 `;
@@ -148,6 +170,15 @@ function mapItem(item: MondayItem): NewOrderRow {
     name: item.name,
     orderDate:           get(item, COL.order_date),
     orderStatus:         get(item, COL.order_status),
+    preCheck:            get(item, COL.pre_check),
+    preCheckDetail:      get(item, COL.pre_check_detail),
+    pos:                 get(item, COL.pos),
+    groupId:             item.group?.id ?? "",
+    monitorAuthId:       get(item, COL.monitor_auth_id),
+    sensorsAuthId:       get(item, COL.sensors_auth_id),
+    pumpAuthId:          get(item, COL.pump_auth_id),
+    infusionSetAuthId:   get(item, COL.infusion_set_auth_id),
+    cartridgesAuthId:    get(item, COL.cartridges_auth_id),
     pumpType:            get(item, COL.pump_type),
     cartridgeType:       get(item, COL.cartridge_type),
     infusionSet1Type:    get(item, COL.infusion_set_1_type),
