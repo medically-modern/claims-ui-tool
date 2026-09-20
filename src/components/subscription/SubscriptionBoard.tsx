@@ -1538,6 +1538,39 @@ function OrderCycleWorkflow() {
     }
   };
 
+  // ── Send all to Order (Ready to Order tab) ──
+  const [sendAllRunning, setSendAllRunning] = useState(false);
+  const [sendAllArmed, setSendAllArmed] = useState(false);
+  const sendAllToOrder = async (readyRows: SubscriptionPatient[]) => {
+    if (sendAllRunning || readyRows.length === 0) return;
+    setSendAllRunning(true);
+    setBatchRunning(true);
+    let done = 0, failed = 0;
+    // 4 at a time — same width as the DVS fan-out.
+    const queue = [...readyRows];
+    const worker = async () => {
+      while (queue.length) {
+        const p = queue.shift()!;
+        setSendingIds((prev) => new Set(prev).add(p.mondayItemId));
+        try {
+          await sendToOrder(p.mondayItemId);
+          setSentIds((prev) => new Set(prev).add(p.mondayItemId));
+        } catch { failed++; }
+        finally {
+          setSendingIds((prev) => { const n = new Set(prev); n.delete(p.mondayItemId); return n; });
+          setBatchMsg(`Sending to Order… ${++done}/${readyRows.length}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, readyRows.length) }, worker));
+    setBatchMsg(failed ? `Sent ${readyRows.length - failed} to Order — ${failed} failed, try again` : `Sent ${readyRows.length} to Order ✓`);
+    setSendAllRunning(false);
+    setBatchRunning(false);
+    setSendAllArmed(false);
+    invalidateSubscription();
+    setTimeout(() => { setSentIds(new Set()); setBatchMsg(null); }, 4000);
+  };
+
   // ── Batch action state ──
   const { invalidate: invalidateSubscription, markDvsRequested } = useInvalidateSubscription();
   const [batchRunning, setBatchRunning] = useState(false);
@@ -2129,6 +2162,37 @@ function OrderCycleWorkflow() {
               {dvsRunning
                 ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Running…</>
                 : <>Run DVS{dvsToRun.length ? ` (${dvsToRun.length})` : ""}</>}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Send all to Order bar — Ready to Order tab only. Every row here is
+          five-green and unheld, so the whole tab can go in one action, the
+          same shape as the Run DVS bar. Two clicks: it spawns real orders. */}
+      {primary === "due" && duePhase === "ready" && rows.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-2.5">
+          <Send className="h-4 w-4 shrink-0 text-emerald-700" />
+          <div className="text-[13px] text-emerald-900">
+            <span className="font-semibold">{rows.length}</span>{" "}
+            {rows.length === 1 ? "order is" : "orders are"} ready — all five checks clear
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            {sendAllArmed && !sendAllRunning && (
+              <span className="text-[12px] font-medium text-emerald-900">Send all {rows.length} to Order?</span>
+            )}
+            {sendAllArmed && !sendAllRunning && (
+              <Button variant="ghost" size="sm" className="h-8 text-[12px] text-emerald-800 hover:bg-emerald-100" onClick={() => setSendAllArmed(false)}>Cancel</Button>
+            )}
+            <Button
+              size="sm"
+              className="h-8 bg-emerald-700 text-[12px] font-semibold hover:bg-emerald-800"
+              disabled={sendAllRunning}
+              onClick={() => { if (!sendAllArmed) { setSendAllArmed(true); return; } void sendAllToOrder(rows); }}
+            >
+              {sendAllRunning
+                ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Sending…</>
+                : sendAllArmed ? <>Yes, send all {rows.length}</> : <>Send all to Order</>}
             </Button>
           </div>
         </div>
