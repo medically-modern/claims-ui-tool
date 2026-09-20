@@ -77,6 +77,7 @@ import type { ServiceLine } from "@/lib/claims/types";
 import { DenialAnalysisTable } from "@/components/claims/DenialAnalysisTable";
 import { EftEnrollmentTable } from "@/components/claims/EftEnrollmentTable";
 import { SubscriptionBoard } from "@/components/subscription/SubscriptionBoard";
+import { usePrefetchSubscription } from "@/hooks/subscription/usePrefetchSubscription";
 import { OpenPatientProvider, useOpenPatient } from "@/components/subscription/patient/openPatient";
 import { OpenPatientScreen } from "@/components/subscription/patient/OpenPatientScreen";
 import { PrimarySubmitBoard } from "@/components/claims/PrimarySubmitBoard";
@@ -541,6 +542,9 @@ const Claims = () => {
   // the Primary Board's bucket views.
   const { data: mondayClaims, isFetching: claimsLoading, refetch: refetchClaims } =
     useAllClaims();
+  // Subscription Board + Order Board start loading now too, not on first
+  // click of that tab — see the hook.
+  usePrefetchSubscription();
 
   // Per-row "marking paid" state. Declared HERE — above every list
   // derivation — because claimsView below reads it. See the block further
