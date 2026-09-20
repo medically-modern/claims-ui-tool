@@ -1218,7 +1218,7 @@ const Claims = () => {
       {/* The banner switches tools — Claims · Ordering · Financials — like
           the Command Center's own top nav (Brandon, 2026-09-20). */}
       <AppHeader<TopLevel>
-        title="Claims Command Center"
+        title="Revenue Cycle Center"
         nav={{ items: TOP_LEVEL_NAV, value: topLevel, onChange: setTopLevel }}
       />
 

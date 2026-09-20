@@ -237,31 +237,28 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           What cannot wait for a click is somebody having said something:
           a note, a portal message, or an inbound text/call inside the 30 days
           before the order date. See lib/subscription/confirmationSignals.ts. */}
+      {/* One badge, two states (Brandon's mockup, 2026-09-20): a message is
+          waiting = white disc, gray outline, gray bubble; it has been read
+          and judged = pale green disc, green outline, green bubble with a
+          check inside. Same spot, same size, so the eye compares colour. */}
       {check.needsRead && (
-        <MessageSquare
-          className="absolute -top-1.5 -right-1.5 h-4 w-4 text-sky-700 bg-white rounded-full p-[2px] ring-1 ring-sky-300"
-          aria-label={`read before ordering — ${check.needsRead}`}
-        />
-      )}
-      {/* Read and judged: the badge stays, in green, so the row still says a
-          message existed and somebody decided (Brandon, 2026-09-20). */}
-      {!check.needsRead && check.reviewed && (
         <span
-          className="absolute -top-2 -right-2 grid h-[18px] w-[18px] place-items-center rounded-full bg-emerald-600 text-white ring-2 ring-emerald-800 shadow-[0_0_0_2px_white]"
-          aria-label={check.reviewed}
+          className="absolute -top-2 -right-2 grid h-5 w-5 place-items-center rounded-full bg-white text-slate-500 ring-[1.5px] ring-slate-400 shadow-sm"
+          aria-label={`read before ordering — ${check.needsRead}`}
         >
-          <MessageSquare className="h-[11px] w-[11px]" strokeWidth={2.75} />
+          <MessageSquare className="h-3 w-3" strokeWidth={2.5} />
         </span>
       )}
-      {/* The M marks a Medicaid row whose order is due with no DVS run yet —
-          the same rows that get the Run DVS checkbox. It is a note about what
-          to DO, sitting next to a circle that only ever reports what Monday
-          says (Brandon, 2026-09-19). */}
-      {check.medicaidDvs && (
+      {!check.needsRead && check.reviewed && (
         <span
-          className="absolute -top-1.5 -right-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-[9px] font-bold leading-none text-sky-700 ring-1 ring-sky-300"
-          aria-label="Medicaid — needs a DVS for this order"
-                  >M</span>
+          className="absolute -top-2 -right-2 grid h-5 w-5 place-items-center rounded-full bg-emerald-50 text-emerald-700 ring-[1.5px] ring-emerald-500 shadow-sm"
+          aria-label={check.reviewed}
+        >
+          <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            <path d="m8.5 10.5 2.5 2.5 4.5-5" />
+          </svg>
+        </span>
       )}
     </button>
   );
