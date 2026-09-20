@@ -396,34 +396,36 @@ function CircleEditPopover({
               patient (Pause, amber) or take them out of the cycle (Inactive,
               red) — Brandon, 2026-09-20. */}
           {d.action === "pause" && (
-            <div className={cn("grid gap-2", kind === "confirmation" && check.needsRead ? "grid-cols-3" : "grid-cols-2")}>
+            <div className="space-y-2">
               {kind === "confirmation" && check.needsRead && (
-                <Button size="sm" variant="outline" className="border-emerald-300 bg-emerald-50 px-2 font-semibold text-emerald-800 hover:bg-emerald-700 hover:text-white" disabled={saving}
+                <Button size="sm" variant="outline" className="w-full border-emerald-300 bg-emerald-50 font-semibold text-emerald-800 hover:bg-emerald-700 hover:text-white" disabled={saving}
                   onClick={() => void run(async () => {
                     const initials = operatorInitials();
                     await writeOrderStamps(patient.mondayItemId, { correspondenceReviewed: makeStamp({ initials, nextOrderDate: patient.nextOrderDate }) });
                     markReviewed(patient.mondayItemId, `Reviewed by ${initials} ${fmtStamp({ at: Date.now(), iso: "", initials, forOrder: patient.nextOrderDate, reason: "" })}`);
                   })}
                   title="I read the texts, calls and notes since the last order">
-                  {saving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1 h-3.5 w-3.5" />} Mark reviewed
+                  {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />} Mark reviewed
                 </Button>
               )}
-              <Button size="sm" variant="outline" className="border-amber-300 bg-amber-50 px-2 text-amber-900 hover:bg-amber-100"
-                onClick={() => { setOpen(false); onBlockRequest?.(patient); }} disabled={!onBlockRequest}
-                title="Pause this patient — a reason and a check-in date">
-                <PauseCircle className="mr-1 h-3.5 w-3.5" /> Pause…
-              </Button>
-              <Button size="sm" variant="outline" className="border-rose-300 bg-rose-50 px-2 text-rose-800 hover:bg-rose-100"
-                onClick={() => { setOpen(false); setInactiveOpen(true); }}
-                title="Move this patient to Not Active — out of the Order Cycle until reactivated">
-                <UserX className="mr-1 h-3.5 w-3.5" /> Inactive…
-              </Button>
+              <div className="grid grid-cols-2 gap-2">
+                <Button size="sm" variant="outline" className="border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                  onClick={() => { setOpen(false); onBlockRequest?.(patient); }} disabled={!onBlockRequest}
+                  title="Pause this patient — a reason and a check-in date">
+                  <PauseCircle className="mr-1.5 h-3.5 w-3.5" /> Pause
+                </Button>
+                <Button size="sm" variant="outline" className="border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100"
+                  onClick={() => { setOpen(false); setInactiveOpen(true); }}
+                  title="Move this patient to Not Active — out of the Order Cycle until reactivated">
+                  <UserX className="mr-1.5 h-3.5 w-3.5" /> Inactive
+                </Button>
+              </div>
             </div>
           )}
           {d.action === "advance" && (
             <Button size="sm" className="w-full bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}
               title="Override this circle for this order, with a reason">
-              <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Order anyway…
+              <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Order anyway
             </Button>
           )}
           {d.action === "run-eligibility" && (
