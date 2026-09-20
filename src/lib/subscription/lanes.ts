@@ -236,9 +236,19 @@ export function allChecksGreen(p: LanePatient): boolean {
     && mrOf(p).tone === "ok";
 }
 
+/**
+ * Ready = every check green, nothing else. The board's own Ordering Cycle
+ * label used to count too ("Ready to Order" on Monday made the row ready
+ * here), which let Medicaid rows the backend promoted BEFORE the order reset
+ * sit in Ready to Order with an amber Authorization — a DVS not run, a claim
+ * not paid. Brandon, 2026-09-20: "patients should not be in ready to order if
+ * their DVS is not paid. If there's a !, then it should be in order prep and
+ * the run dvs gets triggered there." So the label no longer overrides the
+ * circles; the backend never demotes, and the tool no longer pretends it did.
+ */
 export function isReady(p: LanePatient): boolean {
   if (isBlocked(p)) return false;
-  return (p.orderingCycle || "") === "Ready to Order" || allChecksGreen(p);
+  return allChecksGreen(p);
 }
 
 // ─── Ship-without-confirmation candidate (doc §4) ────────────────────────────

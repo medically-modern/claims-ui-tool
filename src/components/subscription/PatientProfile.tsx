@@ -45,6 +45,7 @@ import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPat
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { runEligibilityCheck, saveSubscriptionPatient } from "@/api/setSubscriptionPatient";
+import { PatientPage } from "./patient/PatientPage";
 import { Loader2, RefreshCw as ReloadIcon } from "lucide-react";
 
 // ─── Field shape ─────────────────────────────────────────────────────────────
@@ -401,141 +402,12 @@ export function PatientProfile() {
   const draft  = openId ? drafts[openId] : null;
   const dirty  = openId ? !!dirtyMap[openId] : false;
 
-  // ─── Detail view ─────────────────────────────────────────────────────────
-  if (opened && draft) {
-    return (
-      <div className="space-y-4">
-        {/* Sticky-ish header */}
-        <Card className="p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <Button variant="ghost" size="sm" onClick={() => setOpenId(null)}>
-                <ArrowLeft className="mr-2 h-4 w-4" />Back to patients
-              </Button>
-              <div>
-                <div className="text-lg font-semibold">{opened.name}</div>
-                <div className="text-xs text-muted-foreground tabular-nums">
-                  UID {opened.mondayItemId} · {opened.primaryPayer} · {opened.subscriptionType}
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {dirty && <Button variant="outline" size="sm" onClick={discard}>Discard</Button>}
-              <Button size="sm" disabled={!dirty || saving} onClick={save}>
-                {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</> : <><Save className="mr-2 h-4 w-4" />Save changes</>}
-              </Button>
-            </div>
-          </div>
-        </Card>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <FormSection title="Demographics">
-            <Field label="Name" value={draft.name} onChange={(v) => update("name", v)} />
-            <Field label="DOB" value={draft.dob} onChange={(v) => update("dob", v)} type="date" />
-            <SelectField label="Gender" value={draft.gender} onChange={(v) => update("gender", v)} options={GENDERS} />
-            <ReadOnlyField label="Patient UID" value={draft.patientUid} />
-            <Field label="Phone" value={draft.phone} onChange={(v) => update("phone", v)} />
-            <Field label="Email" value={draft.email} onChange={(v) => update("email", v)} />
-            <Field label="Address" value={draft.address} onChange={(v) => update("address", v)} fullWidth />
-          </FormSection>
-
-          <FormSection title="Order / Subscription">
-            <SelectField label="Subscription type" value={draft.subscriptionType} onChange={(v) => update("subscriptionType", v)} options={["Sensors", "Supplies", "Sensors & Supplies"]} />
-            <Field label="Next Order date" value={draft.nextOrderDate} onChange={(v) => update("nextOrderDate", v)} type="date" />
-            <SelectField label="Sensors type" value={draft.sensorsType || "—"} onChange={(v) => update("sensorsType", v === "—" ? "" : v)} options={["—", ...SENSORS_TYPES]} />
-            <SelectField label="Supplies type" value={draft.suppliesType || "—"} onChange={(v) => update("suppliesType", v === "—" ? "" : v)} options={["—", ...SUPPLIES_TYPES]} />
-            <SelectField label="Infusion Set 1" value={draft.infusionSet1 || "—"} onChange={(v) => update("infusionSet1", v === "—" ? "" : v)} options={["—", ...INFUSION_SETS_1]} />
-            <Field label="Inf. Qty 1" value={draft.infusionSet1Qty} onChange={(v) => update("infusionSet1Qty", v)} type="number" />
-            <SelectField label="Infusion Set 2" value={draft.infusionSet2 || "—"} onChange={(v) => update("infusionSet2", v === "—" ? "" : v)} options={["—", ...INFUSION_SETS_2]} />
-            <Field label="Inf. Qty 2" value={draft.infusionSet2Qty} onChange={(v) => update("infusionSet2Qty", v)} type="number" />
-          </FormSection>
-
-          <FormSection title="Insurance" action={
-            <Button size="sm" variant="outline" onClick={runEligibility} disabled={runningElig}>
-              {runningElig ? <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />Running…</> : <><RefreshCw className="mr-2 h-3.5 w-3.5" />Run Eligibility Check</>}
-            </Button>
-          }>
-            <SelectField label="Primary insurance" value={draft.primaryInsurance} onChange={(v) => update("primaryInsurance", v)} options={PAYER_OPTIONS.filter((p) => p !== "All payers")} />
-            <Field label="Member ID 1" value={draft.memberId1} onChange={(v) => update("memberId1", v)} />
-            <SelectField label="Secondary insurance" value={draft.secondaryInsurance} onChange={(v) => update("secondaryInsurance", v)} options={SECONDARY_PAYERS} />
-            <Field label="Member ID 2" value={draft.memberId2} onChange={(v) => update("memberId2", v)} />
-            <FileField label="Insurance Card" value={draft.insuranceCardName} onChange={(v) => update("insuranceCardName", v)} fullWidth />
-          </FormSection>
-
-          <FormSection title="Doctor">
-            <Field label="Doctor name" value={draft.doctorName} onChange={(v) => update("doctorName", v)} />
-            <Field label="NPI" value={draft.doctorNpi} onChange={(v) => update("doctorNpi", v)} />
-            <Field label="Doctor address" value={draft.doctorAddress} onChange={(v) => update("doctorAddress", v)} fullWidth />
-            <Field label="Doctor phone" value={draft.doctorPhone} onChange={(v) => update("doctorPhone", v)} />
-            <Field label="Doctor fax" value={draft.doctorFax} onChange={(v) => update("doctorFax", v)} />
-            <SelectField label="Fax / Parachute" value={draft.clinicalsMethod} onChange={(v) => update("clinicalsMethod", v)} options={CLINICALS_METHODS} />
-          </FormSection>
-
-          <FormSection title="Status & flags">
-            <SelectField label="Status" value={draft.status} onChange={(v) => update("status", v)} options={PATIENT_STATUS_OPTIONS.filter((s) => s !== "All")} />
-            <SelectField label="Pause reason" value={draft.pauseReason || "—"} onChange={(v) => update("pauseReason", v === "—" ? "" : v)} options={["—", ...PAUSE_REASON_OPTIONS.filter((p) => p !== "Any pause reason")]} />
-            <SelectField label="Dead reason" value={draft.deadReason || "—"} onChange={(v) => update("deadReason", v === "—" ? "" : v)} options={["—", ...DEAD_REASONS]} />
-          </FormSection>
-
-          <FormSection title="Clinical / Medical Records" subtitle="Editable here; managed primarily in the Medical Records workflow">
-            <Field label="Diagnosis" value={draft.diagnosis} onChange={(v) => update("diagnosis", v)} fullWidth />
-            <Field label="MN Expiry" value={draft.mnExpiry} onChange={(v) => update("mnExpiry", v)} type="date" />
-            <div className="col-span-1" />
-            <FileList
-              label="MN Docs"
-              files={draft.mnDocs}
-              onRemove={(id) => update("mnDocs", draft.mnDocs.filter((f) => f.id !== id))}
-              onAdd={(name) => update("mnDocs", [...draft.mnDocs, { id: `doc-${Date.now()}`, name, url: "#", uploadedAt: new Date().toISOString().slice(0, 10) }])}
-            />
-          </FormSection>
-
-          <FormSection title="Authorizations" subtitle="Editable here; managed primarily in the Authorizations workflow" fullWidth>
-            <div className="col-span-2 grid grid-cols-2 gap-3 mb-2">
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-2">Sensors</div>
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-2">Supplies</div>
-            </div>
-            <SelectField label="Auth status" value={draft.sensorsAuthStatus} onChange={(v) => update("sensorsAuthStatus", v)} options={AUTH_STATUSES} />
-            <SelectField label="Auth status" value={draft.suppliesAuthStatus} onChange={(v) => update("suppliesAuthStatus", v)} options={AUTH_STATUSES} />
-            <Field label="Auth ID" value={draft.sensorsAuthId} onChange={(v) => update("sensorsAuthId", v)} />
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Inf. Set Auth ID" value={draft.infusionAuthId} onChange={(v) => update("infusionAuthId", v)} />
-              <Field label="Cartridge Auth ID" value={draft.cartridgeAuthId} onChange={(v) => update("cartridgeAuthId", v)} />
-            </div>
-            <Field label="Auth start" value={draft.sensorsAuthStart} onChange={(v) => update("sensorsAuthStart", v)} type="date" />
-            <Field label="Auth start" value={draft.suppliesAuthStart} onChange={(v) => update("suppliesAuthStart", v)} type="date" />
-            <Field label="Auth end" value={draft.sensorsAuthEnd} onChange={(v) => update("sensorsAuthEnd", v)} type="date" />
-            <Field label="Auth end" value={draft.suppliesAuthEnd} onChange={(v) => update("suppliesAuthEnd", v)} type="date" />
-            <Field label="Units" value={draft.sensorsAuthUnits} onChange={(v) => update("sensorsAuthUnits", v)} type="number" />
-            <Field label="Units" value={draft.suppliesAuthUnits} onChange={(v) => update("suppliesAuthUnits", v)} type="number" />
-            <SelectField label="Prior Auth Req?" value={draft.priorAuthReqSensors} onChange={(v) => update("priorAuthReqSensors", v)} options={["Yes", "No", "Evaluate"]} />
-            <SelectField label="Prior Auth Req?" value={draft.priorAuthReqSupplies} onChange={(v) => update("priorAuthReqSupplies", v)} options={["Yes", "No", "Evaluate"]} />
-            <div className="col-span-2 border-t pt-3 mt-1">
-              <div className="grid grid-cols-2 gap-3">
-                <SelectField label="Trigger DVS" value={draft.triggerDvs} onChange={(v) => update("triggerDvs", v)} options={["Yes", "No"]} />
-              </div>
-            </div>
-          </FormSection>
-
-          <ReadOnlyContextSection title="Eligibility / Coverage (read-only)" subtitle="Populated by Run Eligibility Check" entries={[
-            ["Active?", "Active"],
-            ["Stedi Payer Name", "Fidelis Care New York"],
-            ["Stedi Plan Name", "Child Health Plus"],
-            ["Stedi Member ID", draft.memberId1],
-            ["Date Plan Begin", "2025-12-01"],
-            ["Deductible", "$0.00"],
-            ["Ded. Remaining", "$0.00"],
-            ["Coinsurance %", "20%"],
-            ["OOP Max", "$3,500"],
-            ["OOP Max Remaining", "$2,750"],
-          ]} />
-
-          <ReadOnlyContextSection title="Billing context (read-only)" subtitle="From the Claims Board" entries={[
-            ["Primary Claim Paid?", "Yes"],
-            ["Secondary Claim Paid?", "—"],
-          ]} />
-        </div>
-      </div>
-    );
+  // ─── Detail view — the full patient page (2026-09-20 redesign) ──────────
+  // The same page a row click on the Order Cycle board opens: Profile |
+  // Orders | Claims with comms and notes in the rail. Editing and the
+  // eligibility check live there now; this list is just the way in.
+  if (opened) {
+    return <PatientPage patient={opened} onBack={() => setOpenId(null)} />;
   }
 
   // ─── Main table view ─────────────────────────────────────────────────────

@@ -63,6 +63,22 @@ export const SUB_COL = {
   // The patient's own words come from patient_help_message; Patient Portal
   // Notes (long_text_mm3evvzj) is deliberately absent (Brandon, 2026-09-19).
   subscription_notes: "text_mm6vp1z3",
+  // Order Frequency (30/60/90-Days) — the profile's Order details block.
+  order_frequency:    "color_mm48kv1c",
+  cgm_qty:            "numeric_mm3sr332",
+  cartridge_qty:      "numeric_mm3sfe56",
+  // Contacts block on the profile (columns added 2026-08).
+  can_text:           "color_mm72jg9e",
+  primary_contact:    "color_mm72vm7p",
+  alternate_contact:  "color_mm723hfk",
+  alternate_phone:    "phone_mm72r19q",
+  caregiver_name:     "text_mm72mdzk",
+  caregiver_authorized: "boolean_mm72nt75",
+  // The reorder form: the link we texted and when the patient answered.
+  reorder_link:       "text_mm3khve4",
+  patient_response_at: "text_mm3kt9bs",
+  // Board's own MR status label (MR Valid / MR Expired / …), shown as-is.
+  mr_status:          "color_mktyr8xg",
   // Insurance
   primary_insurance:   "color_mm254qxj",
   member_id_1:         "text_mkvp6zfg",
@@ -274,6 +290,26 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   blockNote: string;
   blockedDate: string;
   lastPatientContact: string;
+  // Profile page (2026-09-20 redesign)
+  orderFrequency: string;
+  cgmQty: string;
+  cartridgeQty: string;
+  canText: string;
+  primaryContact: string;
+  alternateContact: string;
+  alternatePhone: string;
+  caregiverName: string;
+  caregiverAuthorized: string;
+  reorderLink: string;
+  reorderTextSent: string;
+  patientResponseAt: string;
+  patientChangeSummary: string;
+  mrStatus: string;
+  lastEligibilityCheck: string;
+  lastEligibilityError: string;
+  cobCheck: string;
+  suggestedPrimary: string;
+  insuranceChange: string;
 }
 
 // ─── Monday types ───────────────────────────────────────────────────────────
@@ -523,6 +559,25 @@ function mapItem(
     blockNote:           get(item, SUB_COL.block_note),
     blockedDate:         get(item, SUB_COL.blocked_date),
     lastPatientContact:  get(item, SUB_COL.last_patient_contact),
+    orderFrequency:      get(item, SUB_COL.order_frequency),
+    cgmQty:              get(item, SUB_COL.cgm_qty),
+    cartridgeQty:        get(item, SUB_COL.cartridge_qty),
+    canText:             get(item, SUB_COL.can_text),
+    primaryContact:      get(item, SUB_COL.primary_contact),
+    alternateContact:    get(item, SUB_COL.alternate_contact),
+    alternatePhone:      get(item, SUB_COL.alternate_phone),
+    caregiverName:       get(item, SUB_COL.caregiver_name),
+    caregiverAuthorized: get(item, SUB_COL.caregiver_authorized),
+    reorderLink:         get(item, SUB_COL.reorder_link),
+    reorderTextSent:     get(item, SUB_COL.reorder_text_sent),
+    patientResponseAt:   get(item, SUB_COL.patient_response_at),
+    patientChangeSummary: get(item, SUB_COL.patient_change_summary),
+    mrStatus:            get(item, SUB_COL.mr_status),
+    lastEligibilityCheck: get(item, SUB_COL.last_eligibility_check),
+    lastEligibilityError: get(item, SUB_COL.last_eligibility_error),
+    cobCheck:            get(item, SUB_COL.cob_check),
+    suggestedPrimary:    get(item, SUB_COL.suggested_primary),
+    insuranceChange:     get(item, SUB_COL.insurance_change),
     nextCheckIn:         get(item, SUB_COL.check_in_date) || undefined,
     stuckSince:          get(item, SUB_COL.blocked_date) || undefined,
     stuckReason:         (get(item, SUB_COL.block_note).split("\n")[0] || undefined),

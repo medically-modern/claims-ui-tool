@@ -48,7 +48,8 @@ import { cn } from "@/lib/utils";
 import { PatientProfile } from "./PatientProfile";
 import { CommsIcons } from "@/components/comms/CommsIcons";
 import { CommsSheet } from "@/components/comms/CommsSheet";
-import { ClaimHistoryCard } from "./ClaimHistoryCard";
+import { PatientPage } from "./patient/PatientPage";
+import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { Authorizations } from "./Authorizations";
 import { MedicalRecords } from "./MedicalRecords";
 import { NewOrders } from "./NewOrders";
@@ -687,76 +688,36 @@ function ReviewAndSubmit({ p, onSubmit, onBlock, sending, sent }: {
  * and nesting two scroll-locked overlays is how you get a page that cannot be
  * dismissed. One click, the thread opens over the top, closing returns here.
  */
-function ProfileComms({ patient }: { patient: SubscriptionPatient }) {
-  const [tab, setTab] = useState<"texts" | "calls" | null>(null);
-  const calls = patient.callsSinceOrder;
-  const texts = patient.textsSinceOrder;
-  const line =
-    typeof calls === "number" || typeof texts === "number"
-      ? `${calls ?? "—"} calls · ${texts ?? "—"} texts since the last order`
-      : "Open the thread and call log for this patient";
-  return (
-    <Card className="p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Comms</div>
-          <div className="mt-0.5 truncate text-[12px] text-slate-600">{line}</div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <Button
-            variant="outline" size="sm"
-            className="h-7 gap-1 px-2 text-[11px] font-semibold text-sky-800 border-sky-200 hover:bg-sky-50"
-            onClick={() => setTab("calls")}
-          >
-            <Phone className="h-3.5 w-3.5" />
-            {typeof calls === "number" && <span className="tabular-nums">{calls}</span>}
-            Calls
-          </Button>
-          <Button
-            variant="outline" size="sm"
-            className="h-7 gap-1 px-2 text-[11px] font-semibold text-sky-800 border-sky-200 hover:bg-sky-50"
-            onClick={() => setTab("texts")}
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            {typeof texts === "number" && <span className="tabular-nums">{texts}</span>}
-            Texts
-          </Button>
-        </div>
-      </div>
-      {tab && (
-        <CommsSheet patient={patient} defaultTab={tab} open onOpenChange={(o) => !o && setTab(null)} />
-      )}
-    </Card>
-  );
-}
-
+/**
+ * The per-circle drawer: one check, its status, and the actions on it. The
+ * whole-patient view it used to carry (readiness list, comms, claim history)
+ * moved to the full-page PatientPage on 2026-09-20 — a row click opens that.
+ */
 function PatientDrawer({
   patient, kind, onClose,
 }: {
   patient: SubscriptionPatient | null;
-  kind: CheckpointKind | "patient" | null;
+  kind: CheckpointKind | null;
   onClose: () => void;
 }) {
   const open = !!patient && !!kind;
   if (!open || !patient || !kind) {
     return <Sheet open={false} onOpenChange={onClose}><SheetContent /></Sheet>;
   }
-  const isPatientView = kind === "patient";
-  const checkpoint: Checkpoint | null = isPatientView ? null : getCheckpoint(patient, kind);
-  const gate = !isPatientView ? CHECKPOINT_GATE[kind as CheckpointKind] : null;
+  const checkpoint: Checkpoint = getCheckpoint(patient, kind);
+  const gate = CHECKPOINT_GATE[kind];
   const isSoft = gate === "soft";
-  const isFailing = checkpoint && checkpoint.tone !== "ok";
+  const isFailing = checkpoint.tone !== "ok";
   const title = ({
     confirmation: "Patient Confirmation",
     benefits:     "Benefits & Eligibility",
     auth:         "Authorization",
     lastPaid:     "Last Order — Claim Status",
     mr:           "Medical Records",
-    patient:      "Review profile",
   } as const)[kind];
   return (
     <Sheet open={open} onOpenChange={onClose}>
-      <SheetContent className={cn(isPatientView ? "w-[640px] sm:max-w-[640px]" : "w-[480px] sm:max-w-[480px]", "overflow-y-auto")}>
+      <SheetContent className={cn("w-[480px] sm:max-w-[480px]", "overflow-y-auto")}>
         <SheetHeader>
           <SheetTitle>{title}</SheetTitle>
           <SheetDescription>
@@ -764,53 +725,7 @@ function PatientDrawer({
           </SheetDescription>
         </SheetHeader>
 
-        {isPatientView ? (
-          <div className="mt-6 space-y-4">
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Readiness checks</div>
-              <div className="space-y-2">
-                {CHECKPOINT_KINDS.map((k, idx) => {
-                  const c = getCheckpoint(patient, k);
-                  return (
-                    <Card key={k} className="p-3 flex items-center justify-between">
-                      <div>
-                        <div className="text-[13px] font-semibold">{`${idx + 1}. ${PHASE_LABELS[k]}`}</div>
-                        <div className="text-[12px] text-muted-foreground mt-0.5">{c.label}{c.detail ? ` — ${c.detail}` : ""}</div>
-                        {c.overrideReason && (
-                          <div className="mt-1 text-[11px] text-slate-600 italic">override: {c.overrideReason}</div>
-                        )}
-                      </div>
-                      <CheckpointIcon check={c} />
-                    </Card>
-                  );
-                })}
-              </div>
-            </div>
-            {patient.stuckReason && (
-              <Card className="p-3 border-amber-200 bg-amber-50">
-                <div className="text-[11px] uppercase tracking-wide text-amber-700">Why stuck</div>
-                <div className="text-[13px] text-slate-800 mt-1">{patient.stuckReason}</div>
-                <div className="flex gap-3 mt-2 text-[11px] text-muted-foreground items-center">
-                  {patient.blockedBy && <span className="flex items-center gap-1">Blocked by: <BlockedByPill value={patient.blockedBy} /></span>}
-                  {patient.nextCheckIn && <span>Next check-in: {fmtDate(patient.nextCheckIn)}</span>}
-                </div>
-              </Card>
-            )}
-            {/* Comms lives in the profile now, not only behind a row button
-                (Brandon, 2026-09-19). The full redesign of this panel comes
-                later; this is the thread and the call log in the one place an
-                operator already opens before deciding to order. */}
-            <ProfileComms patient={patient} />
-            {/* What the last claim says about tonight's order, then every claim
-                spawned from this patient. Joined on Subscription Item ID. */}
-            <ClaimHistoryCard mondayItemId={patient.mondayItemId} currentPayer={patient.primaryPayer} />
-            <Card className="p-3 space-y-1.5 text-[13px]">
-              <div className="flex justify-between"><span className="text-muted-foreground">Phone</span><span>{patient.phone}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Monday ID</span><span className="font-mono text-[11px]">{patient.mondayItemId}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Run Check</span><span className="text-[11px]">{patient.runCheck}</span></div>
-            </Card>
-          </div>
-        ) : checkpoint && (
+        {(
           <div className="mt-6 space-y-4">
             <Card className="p-4 flex items-center justify-between">
               <div>
@@ -858,27 +773,20 @@ function PatientDrawer({
           </div>
         )}
         <SheetFooter className="mt-6">
-          {!isPatientView && kind === "confirmation" && (
+          {kind === "confirmation" && (
             <div className="flex w-full gap-2">
               <Button variant="outline" className="flex-1"><Send className="mr-2 h-4 w-4" />Resend Reorder Text</Button>
               <Button className="flex-1"><Check className="mr-2 h-4 w-4" />Mark Changes Reviewed</Button>
             </div>
           )}
-          {!isPatientView && kind === "benefits" && (
+          {kind === "benefits" && (
             <Button className="w-full"><RefreshCw className="mr-2 h-4 w-4" />Run Eligibility Now</Button>
           )}
-          {!isPatientView && kind === "auth" && (
+          {kind === "auth" && (
             <Button className="w-full"><ExternalLink className="mr-2 h-4 w-4" />Open Auth Workflow</Button>
           )}
-          {!isPatientView && kind === "lastPaid" && (
+          {kind === "lastPaid" && (
             <Button variant="outline" className="w-full"><ExternalLink className="mr-2 h-4 w-4" />Open in Claims UI</Button>
-          )}
-          {isPatientView && (
-            <Button variant="outline" className="w-full" asChild>
-              <a href={`https://medicallymodern-force.monday.com/boards/18407459988/pulses/${patient.mondayItemId}`} target="_blank" rel="noreferrer">
-                <ExternalLink className="mr-2 h-4 w-4" />Open in Monday
-              </a>
-            </Button>
           )}
         </SheetFooter>
       </SheetContent>
@@ -1407,7 +1315,10 @@ function OrderCycleWorkflow() {
   const [statusFilter, setStatusFilter] = useState<string>("Active");
   const [pauseReason, setPauseReason] = useState<string>("Any pause reason");
   const [activePatient, setActivePatient] = useState<SubscriptionPatient | null>(null);
-  const [activeKind, setActiveKind] = useState<CheckpointKind | "patient" | null>(null);
+  const [activeKind, setActiveKind] = useState<CheckpointKind | null>(null);
+  // A row click opens the patient full-page (PatientPage). Held by Monday id
+  // so a refetch keeps the page on the fresh row rather than a stale copy.
+  const [openPatientId, setOpenPatientId] = useState<string | null>(null);
 
   // ── Sort state ──
   // Default sort: nextOrderDate ascending (soonest order first). Operators
@@ -1500,7 +1411,7 @@ function OrderCycleWorkflow() {
   }, [all, todayStr]);
 
   const openCell = (p: SubscriptionPatient, kind: CheckpointKind) => { setActivePatient(p); setActiveKind(kind); };
-  const openPatient = (p: SubscriptionPatient) => { setActivePatient(p); setActiveKind("patient"); };
+  const openPatient = (p: SubscriptionPatient) => { setOpenPatientId(p.mondayItemId); };
   const closeDrawer = () => { setActivePatient(null); setActiveKind(null); };
   // Flips Ordering Cycle -> 'Order' on the Subscription Board row.
   // Brandon's existing Monday automation listens on that column-value
@@ -1857,6 +1768,20 @@ function OrderCycleWorkflow() {
       </TabsList>
     </Tabs>
   );
+
+  // A patient is open: the whole board area is their page (Profile | Orders |
+  // Claims, with comms and notes in the rail). Back returns to the same tab.
+  const openPatientRow = openPatientId ? all.find((p) => p.mondayItemId === openPatientId) : null;
+  if (openPatientId) {
+    return openPatientRow ? (
+      <PatientPage patient={openPatientRow as LiveSubscriptionPatient} onBack={() => setOpenPatientId(null)} />
+    ) : (
+      <div className="space-y-3">
+        <button type="button" onClick={() => setOpenPatientId(null)} className="text-[12px] text-muted-foreground hover:text-foreground">← Back to the board</button>
+        <Card className="p-6 text-[13px] text-muted-foreground">{loading ? "Loading the patient…" : "That patient is no longer on the board."}</Card>
+      </div>
+    );
+  }
 
   // New 'Order' tab — independent view rendered from the New Order
   // Board (18405457690). Skip all of the Order Prep / Ready-to-Order
