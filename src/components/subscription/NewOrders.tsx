@@ -205,8 +205,117 @@ function OrderList({ rows, onOpen, onOpenProfile, onMerge, mergingId, selected, 
   );
 }
 
-/** Returns / Overview — flat reference tables, kept simple until we design
- *  them properly (Brandon, 2026-09-20: "let's just focus on Order for now"). */
+/** A compact one-line summary of what's on the order, for the overview tables. */
+function productsLine(r: NewOrderRow): string {
+  const cats = orderCategories(r);
+  if (!cats.length) return "—";
+  return cats.map((c) => {
+    const items = c.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(", ");
+    return items ? `${c.category}: ${items}` : c.category;
+  }).join(" · ");
+}
+/** API status → tone. Anything that reads like an error is rose; accepted/ok green. */
+function apiStatusTone(s: string): string {
+  const l = s.trim().toLowerCase();
+  if (!l) return "text-muted-foreground";
+  if (/error|fail|reject|denied|invalid|stuck/.test(l)) return "text-rose-700 font-semibold";
+  if (/accept|success|ok|complete|sent|submitted/.test(l)) return "text-emerald-700 font-medium";
+  return "text-amber-700 font-medium";
+}
+const numOf = (s: string) => { const n = Number(String(s).replace(/[^\d.-]/g, "")); return Number.isFinite(n) ? n : 0; };
+/** Something on this order needs a human: API error, a hold, or a backorder. */
+function orderIssue(r: NewOrderRow): string | null {
+  if (r.holdReason.trim()) return `Hold: ${r.holdReason}`;
+  if (/error|fail|reject|denied|invalid|stuck/i.test(r.apiStatus)) return r.apiMessage || `API: ${r.apiStatus}`;
+  if (numOf(r.backorderedQty) > 0 || /yes|backorder/i.test(r.backordered)) return `Backordered${r.backorderedQty ? ` ×${numOf(r.backorderedQty)}` : ""}`;
+  if (/partial/i.test(r.substitutionStatus) || r.substituteSet.trim()) return `Substitution: ${r.substituteSet || r.substitutionStatus}`;
+  return null;
+}
+
+/** Accepted / Partial — did Cardinal take it, and is anything stuck? */
+function AcceptedTable({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
+  return (
+    <div className="overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Patient</TableHead>
+            <TableHead>Order Date</TableHead>
+            <TableHead>Products</TableHead>
+            <TableHead>CAH #</TableHead>
+            <TableHead>API Status</TableHead>
+            <TableHead>Issue</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((r) => {
+            const issue = orderIssue(r);
+            return (
+              <TableRow key={r.id} className={cn("cursor-pointer", issue && "border-l-2 border-l-rose-400")} onClick={() => onOpen(r)}>
+                <TableCell className="align-top">
+                  <div className="font-semibold">{r.name}</div>
+                  {r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}
+                </TableCell>
+                <TableCell className="align-top tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</TableCell>
+                <TableCell className="align-top text-[12px] max-w-[320px]"><span className="line-clamp-2">{productsLine(r)}</span></TableCell>
+                <TableCell className="align-top text-[12px] tabular-nums whitespace-nowrap">{r.cahOrderNumber || "—"}</TableCell>
+                <TableCell className={cn("align-top text-[12px]", apiStatusTone(r.apiStatus))} title={r.apiMessage || undefined}>{r.apiStatus || "—"}</TableCell>
+                <TableCell className="align-top text-[12px]">
+                  {issue ? <span className="inline-flex items-center gap-1 rounded bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700">{issue}</span>
+                    : <span className="text-muted-foreground">—</span>}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+/** Shipped / Delivered — where is the package. */
+function ShippedTable({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
+  return (
+    <div className="overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Patient</TableHead>
+            <TableHead>Order Date</TableHead>
+            <TableHead>Carrier</TableHead>
+            <TableHead>Tracking</TableHead>
+            <TableHead>Shipped</TableHead>
+            <TableHead>Delivered</TableHead>
+            <TableHead>Signed by</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((r) => (
+            <TableRow key={r.id} className="cursor-pointer" onClick={() => onOpen(r)}>
+              <TableCell className="align-top">
+                <div className="font-semibold">{r.name}</div>
+                {r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}
+              </TableCell>
+              <TableCell className="align-top tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</TableCell>
+              <TableCell className="align-top text-[12px]">{r.carrier || "—"}</TableCell>
+              <TableCell className="align-top text-[12px] font-mono">
+                {r.trackingNumbers.length ? r.trackingNumbers.map((t) => (
+                  <a key={t} href={`https://www.google.com/search?q=${encodeURIComponent(t)}`} target="_blank" rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()} className="block text-primary hover:underline">{t}</a>
+                )) : <span className="text-muted-foreground">—</span>}
+              </TableCell>
+              <TableCell className="align-top tabular-nums whitespace-nowrap">{r.shipDate ? fmtDate(r.shipDate) : (r.estShipDate ? `est ${fmtDate(r.estShipDate)}` : "—")}</TableCell>
+              <TableCell className="align-top tabular-nums whitespace-nowrap">{r.deliveryDate ? fmtDate(r.deliveryDate) : "—"}</TableCell>
+              <TableCell className="align-top text-[12px]">{r.signedBy || "—"}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+/** Returns — flat reference table. */
 function FlatTable({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
   return (
     <div className="overflow-x-auto">
@@ -468,6 +577,8 @@ export function NewOrders() {
           ? <OrderList rows={rows} onOpen={setDetail} onOpenProfile={openProfileFor} onMerge={(m, se) => void doMerge(m, se)} mergingId={mergingId}
               selected={selected} onToggle={onToggle} onToggleAll={onToggleAll} allSelectableChecked={allSelectableChecked}
               onOrder={(r) => void markOne(r)} orderingId={orderingId} />
+          : view === "overview"
+          ? (overviewGroup === "accepted" ? <AcceptedTable rows={rows} onOpen={setDetail} /> : <ShippedTable rows={rows} onOpen={setDetail} />)
           : <FlatTable rows={rows} onOpen={setDetail} />}
         {rows.length === 0 && !loading && (
           <div className="px-4 py-12 text-center text-sm text-muted-foreground">

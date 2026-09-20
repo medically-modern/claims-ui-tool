@@ -83,6 +83,29 @@ const SET_SIMPLE = `
     change_simple_column_value(board_id: $board, item_id: $item, column_id: $col, value: $val) { id }
   }
 `;
+const SET_JSON = `
+  mutation SetJsonCol($board: ID!, $item: ID!, $col: String!, $val: JSON!) {
+    change_column_value(board_id: $board, item_id: $item, column_id: $col, value: $val) { id }
+  }
+`;
+const READ_ITEM_COL = `query ReadNoCol($itemId: [ID!], $colId: [String!]) { items(ids: $itemId) { column_values(ids: $colId) { id value } } }`;
+
+/** Existing lat/lng on a location column, so an address reformat keeps the place. */
+async function readCoords(itemId: string, colId: string): Promise<{ lat?: string; lng?: string }> {
+  try {
+    const r = await mondayQuery<{ items: Array<{ column_values: Array<{ id: string; value: string | null }> }> }>(
+      READ_ITEM_COL, { itemId: [itemId], colId: [colId] });
+    const raw = r?.items?.[0]?.column_values?.[0]?.value;
+    if (raw) { const v = JSON.parse(raw); if (v?.lat != null && v?.lng != null) return { lat: String(v.lat), lng: String(v.lng) }; }
+  } catch { /* no coords available */ }
+  return {};
+}
+/** A Monday location value ({lat,lng,address}); coords omitted if unknown. */
+function locationValue(address: string, coords: { lat?: string; lng?: string }): Record<string, unknown> {
+  const v: Record<string, unknown> = { address };
+  if (coords.lat && coords.lng) { v.lat = coords.lat; v.lng = coords.lng; }
+  return v;
+}
 
 /**
  * After an address is fixed on the patient profile (Subscription Board): copy
@@ -91,7 +114,10 @@ const SET_SIMPLE = `
  * (Brandon, 2026-09-20).
  */
 export async function fixOrderAddressAndRecheck(itemId: string, address: string): Promise<void> {
-  await mondayQuery(SET_SIMPLE, { board: NEW_ORDER_BOARD_ID, item: itemId, col: COL_PATIENT_ADDRESS, val: address });
+  // Keep the order row's existing coordinates (same place, cleaner text); a
+  // location column rejects a bare string.
+  const coords = await readCoords(itemId, COL_PATIENT_ADDRESS);
+  await mondayQuery(SET_JSON, { board: NEW_ORDER_BOARD_ID, item: itemId, col: COL_PATIENT_ADDRESS, val: JSON.stringify(locationValue(address, coords)) });
   // Blank → Order forces a change event even if the status was already "Order".
   await mondayQuery(SET_STATUS, { board: NEW_ORDER_BOARD_ID, item: itemId, val: "" });
   await mondayQuery(SET_STATUS, { board: NEW_ORDER_BOARD_ID, item: itemId, val: "Order" });
@@ -164,6 +190,11 @@ export async function createOrderFromLast(source: NewOrderRow, products: OrderPr
   const vals: Record<string, unknown> = { ...productVals(products, false) };
   const put = (col: string, val: unknown) => { if (val !== undefined) vals[col] = val; };
   put("status", { label: "Order" });
+  // Reuse the source order's coordinates for the (location) address column.
+  if (source.patientAddress.trim()) {
+    const coords = await readCoords(source.id, COL.patient_address);
+    put(COL.patient_address, locationValue(source.patientAddress.trim(), coords));
+  }
   if (/^\d{4}-\d{2}-\d{2}$/.test(orderDateIso)) put(COL.order_date, { date: orderDateIso });
   put(COL.order_type, labelVal(source.orderType || "Reorder"));
   put(COL.order_frequency, labelVal(source.orderFrequency));
@@ -182,10 +213,5 @@ export async function createOrderFromLast(source: NewOrderRow, products: OrderPr
   const r = await mondayQuery<{ create_item: { id: string } }>(CREATE_ITEM, {
     board: NEW_ORDER_BOARD_ID, group: ORDER_GROUP_ID, name: source.name, vals: JSON.stringify(vals),
   });
-  const newId = r.create_item.id;
-  // Location column is written as a plain address string (same as the profile).
-  if (source.patientAddress.trim()) {
-    await mondayQuery(SET_SIMPLE, { board: NEW_ORDER_BOARD_ID, item: newId, col: COL.patient_address, val: source.patientAddress.trim() });
-  }
-  return newId;
+  return r.create_item.id;
 }

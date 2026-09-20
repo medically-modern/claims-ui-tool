@@ -38,6 +38,26 @@ async function writeStatus(itemId: string, columnId: string, label: string) {
   });
 }
 
+const READ_COL = `query ReadCol($itemId: [ID!], $colId: [String!]) { items(ids: $itemId) { column_values(ids: $colId) { id value } } }`;
+/**
+ * Location columns can't take plain text — Monday needs {lat, lng, address}.
+ * An address fix is a reformat of the SAME place, so we keep the existing
+ * coordinates and only swap the address text (Brandon, 2026-09-20). If the
+ * column has no coordinates yet, we send the address alone as a best effort.
+ */
+async function writeLocation(itemId: string, columnId: string, address: string) {
+  let lat: string | undefined, lng: string | undefined;
+  try {
+    const r = await mondayQuery<{ items: Array<{ column_values: Array<{ id: string; value: string | null }> }> }>(
+      READ_COL, { itemId: [itemId], colId: [columnId] });
+    const raw = r?.items?.[0]?.column_values?.[0]?.value;
+    if (raw) { const v = JSON.parse(raw); if (v && v.lat != null && v.lng != null) { lat = String(v.lat); lng = String(v.lng); } }
+  } catch { /* no current coords — fall through to address-only */ }
+  const payload: Record<string, unknown> = { address };
+  if (lat && lng) { payload.lat = lat; payload.lng = lng; }
+  await mondayQuery(STATUS_MUT, { itemId, boardId: String(SUBSCRIPTION_BOARD_ID), columnId, value: JSON.stringify(payload) });
+}
+
 /**
  * Field-to-column registry. Each entry knows what Monday column id
  * to write and whether to use simple (text/date/numeric) or status
@@ -45,7 +65,7 @@ async function writeStatus(itemId: string, columnId: string, label: string) {
  */
 type Field = {
   col: string;
-  mut: "simple" | "status";
+  mut: "simple" | "status" | "location";
 };
 const FIELD_MAP: Record<string, Field> = {
   // Demographics
@@ -54,7 +74,7 @@ const FIELD_MAP: Record<string, Field> = {
   gender:               { col: SUB_COL.gender, mut: "status" },
   phone:                { col: SUB_COL.phone, mut: "simple" },
   email:                { col: SUB_COL.email, mut: "simple" },
-  address:              { col: SUB_COL.patient_address, mut: "simple" },
+  address:              { col: SUB_COL.patient_address, mut: "location" },
   // Order / Subscription
   subscriptionType:     { col: SUB_COL.subscription, mut: "status" },
   nextOrderDate:        { col: SUB_COL.next_order, mut: "simple" },
@@ -77,7 +97,7 @@ const FIELD_MAP: Record<string, Field> = {
   // Doctor
   doctorName:           { col: SUB_COL.doctor, mut: "simple" },
   doctorNpi:            { col: SUB_COL.npi, mut: "simple" },
-  doctorAddress:        { col: SUB_COL.doctor_address, mut: "simple" },
+  doctorAddress:        { col: SUB_COL.doctor_address, mut: "location" },
   doctorPhone:          { col: SUB_COL.doctor_phone, mut: "simple" },
   doctorFax:            { col: SUB_COL.doctor_fax, mut: "simple" },
   clinicalsMethod:      { col: SUB_COL.fax_parachute, mut: "status" },
@@ -138,6 +158,7 @@ export async function saveSubscriptionPatient(
         const cfg = FIELD_MAP[field];
         if (!cfg) throw new Error(`No Monday column wired for field '${field}'`);
         if (cfg.mut === "status") await writeStatus(mondayItemId, cfg.col, value);
+        else if (cfg.mut === "location") await writeLocation(mondayItemId, cfg.col, value);
         else                       await writeSimple(mondayItemId, cfg.col, value);
       }
       ok.push(field);
