@@ -14,18 +14,16 @@ const row = (o: Partial<NewOrderRow>): NewOrderRow => ({
 });
 
 describe("orderCategories", () => {
-  it("sensors-only order: one line, monitor rides with sensors", () => {
-    const cats = orderCategories(row({ subscriptionType: "Sensors", cgmType: "FreeStyle Libre 3 Plus", qtyCgmMonitor: "1", sensorsAuthId: "S1", monitorAuthId: "M1" }));
+  it("sensors-only order: sensor + monitor as items", () => {
+    const cats = orderCategories(row({ subscriptionType: "Sensors", cgmType: "FreeStyle Libre 3 Plus", qtyCgmSensors: "6", qtyCgmMonitor: "1", sensorsAuthId: "S1", monitorAuthId: "M1" }));
     expect(cats.map((c) => c.category)).toEqual(["Sensors"]);
-    expect(cats[0].items.map((i) => `${i.name} ${i.qty}`.trim())).toEqual(["FreeStyle Libre 3 Plus"]);
-    expect(cats[0].device).toEqual({ label: "Monitor", on: true });
+    expect(cats[0].items.map((i) => `${i.name} ${i.qty}`.trim())).toEqual(["FreeStyle Libre 3 Plus ×6", "Monitor ×1"]);
     expect(cats[0].auths).toEqual([{ label: "Sensors", id: "S1" }, { label: "Monitor", id: "M1" }]);
   });
   it("supplies-only order: one line, pump/cartridge/infusion", () => {
-    const cats = orderCategories(row({ subscriptionType: "Supplies", pumpType: "Mobi", qtyPump: "1", cartridgeType: "Mobi Cartridge", qtyCartridge: "3", infusionSet1Type: "AutoSoft 90", qtyInfusionSet1: "3", pumpAuthId: "P1", cartridgesAuthId: "C1", infusionSetAuthId: "I1" }));
+    const cats = orderCategories(row({ subscriptionType: "Supplies", cartridgeType: "t:slim", qtyCartridge: "3", infusionSet1Type: "AutoSoft 90", qtyInfusionSet1: "3", pumpAuthId: "P1", cartridgesAuthId: "C1", infusionSetAuthId: "I1" }));
     expect(cats.map((c) => c.category)).toEqual(["Supplies"]);
-    expect(cats[0].items.map((i) => `${i.name} ${i.qty}`.trim())).toEqual(["Mobi Cartridge ×3", "AutoSoft 90 ×3"]);
-    expect(cats[0].device).toEqual({ label: "Pump", on: true });
+    expect(cats[0].items.map((i) => `${i.name} ${i.qty}`.trim())).toEqual(["t:slim Cartridges ×3", "AutoSoft 90 ×3"]);
     expect(cats[0].auths.map((a) => a.label)).toEqual(["Pump", "Cartridges", "Infusion set"]);
   });
   it("both: two lines", () => {
@@ -66,9 +64,15 @@ describe("monitor-only orders", () => {
     expect(cats[0].monitorOnly).toBe(true);
     expect(isMonitorOnly(row({ subscriptionType: "", qtyCgmMonitor: "1" }))).toBe(true);
   });
-  it("blank subscription with only a pump → Pump category", () => {
-    const cats = orderCategories(row({ subscriptionType: "", pumpType: "Mobi", qtyPump: "1" }));
+  it("Justin Elkins shape: monitor row carries the CGM type but sensor qty 0 → still Monitor-only", () => {
+    const cats = orderCategories(row({ subscriptionType: "", cgmType: "FreeStyle Libre 3 Plus", qtyCgmSensors: "", qtyCgmMonitor: "1" }));
+    expect(cats.map((c) => c.category)).toEqual(["Monitor"]);
+    expect(cats[0].monitorOnly).toBe(true);
+  });
+  it("blank subscription with only a pump → Pump category showing type ×1 (qty often blank)", () => {
+    const cats = orderCategories(row({ subscriptionType: "", pumpType: "t:slim", qtyPump: "" }));
     expect(cats.map((c) => c.category)).toEqual(["Pump"]);
+    expect(cats[0].items.map((i) => `${i.name} ${i.qty}`.trim())).toEqual(["t:slim ×1"]);
   });
   it("finds the sensors order to merge into (same patient + dob, sensors line)", () => {
     const mon = row({ id: "m", name: "Jane Doe", dob: "1990-01-01", subscriptionType: "", qtyCgmMonitor: "1", monitorAuthId: "M9" });

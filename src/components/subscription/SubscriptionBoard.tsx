@@ -1952,7 +1952,6 @@ function OrderCycleWorkflow() {
             {batchMsg}
           </span>
         )}
-        <MarkLegend onRules={() => setPrimary("rules")} />
       </div>
 
       {/* Primary nav: Due · Order | Paused — Overview / Rules off to the right */}
@@ -2093,6 +2092,9 @@ function OrderCycleWorkflow() {
               <span className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums", needsReviewOnly ? "bg-white/20" : "bg-sky-100 text-sky-800")}>{counts.dueNeedsRead}</span>
             </button>
           )}
+          {/* The circle legend applies to Due only, so it lives here rather
+              than in the header (Brandon, 2026-09-20). */}
+          <div className="ml-auto"><MarkLegend onRules={() => setPrimary("rules")} /></div>
         </div>
       )}
 
@@ -2124,7 +2126,7 @@ function OrderCycleWorkflow() {
       {/* Run DVS bar — only when there is something to run. Medicaid rows with
           an order due and no DVS yet show an open circle with an M in the
           Authorization column; tick them and fire them all at once. */}
-      {dvsCandidates.length > 0 && (
+      {dvsCandidates.length > 0 && !(primary === "due" && duePhase === "ready") && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-sky-200 bg-sky-50/70 px-4 py-2.5">
           <Stethoscope className="h-4 w-4 shrink-0 text-sky-700" />
           <div className="text-[13px] text-sky-900">

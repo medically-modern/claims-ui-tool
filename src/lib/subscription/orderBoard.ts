@@ -74,10 +74,8 @@ export interface OrderAuth { label: string; id: string }
 export interface OrderCategory {
   /** "Pump" / "Monitor" are single-device orders (blank subscription). */
   category: "Sensors" | "Supplies" | "Pump" | "Monitor";
-  /** The type ×qty lines: sensor; or cartridge + infusion set(s). */
+  /** Every line as type ×qty (monitor and pump are lines too, not chips). */
   items: OrderItem[];
-  /** The yes/no device that rides with the category. */
-  device?: { label: "Monitor" | "Pump"; on: boolean };
   auths: OrderAuth[];
   /** A monitor-only order that should be merged into the patient's sensors
    *  order (set on the "Monitor" category only). */
@@ -85,15 +83,17 @@ export interface OrderCategory {
 }
 
 function num(s: string): number { const n = Number(String(s).replace(/[^\d.-]/g, "")); return Number.isFinite(n) ? n : 0; }
-/** A product type counts only when it names something real — not blank, "None",
- *  or "Not Serving" (Brandon, 2026-09-20: drop Not Serving / blank). */
+/** A type names something real — not blank, "None", or "Not Serving". */
 function serving(type: string): boolean {
   const t = (type || "").trim();
   return !!t && !/^(none|not serving)$/i.test(t);
 }
-function line(type: string, qty: string, fallback: string): OrderItem | null {
-  if (!serving(type) && num(qty) <= 0) return null;
-  return { name: serving(type) ? type : fallback, qty: num(qty) > 0 ? `×${num(qty)}` : "" };
+/** A product line, gated on QUANTITY (the type columns are populated as
+ *  reference even when nothing is ordered — Brandon, 2026-09-20). */
+function line(type: string, qty: string, fallback: string, suffix = ""): OrderItem | null {
+  if (num(qty) <= 0) return null;
+  const base = serving(type) ? `${type}${suffix}` : fallback;
+  return { name: base, qty: `×${num(qty)}` };
 }
 
 /**
@@ -101,45 +101,48 @@ function line(type: string, qty: string, fallback: string): OrderItem | null {
  * (Brandon, 2026-09-20): Supplies → Supplies only; Sensors → Sensors only;
  * Sensors & Supplies → both. Blank means a single-device order — pump-only
  * (pumps are always their own order) or monitor-only (monitors often ride
- * with sensors and get merged in).
+ * with sensors and get merged in). Monitor and pump show as real lines
+ * (e.g. "Monitor ×1", "t:slim ×1"), never a chip.
  */
 export function orderCategories(row: NewOrderRow): OrderCategory[] {
   const sub = (row.subscriptionType || "").toLowerCase();
   const out: OrderCategory[] = [];
 
-  const sensorItems = [line(row.cgmType, row.qtyCgmSensors, "CGM sensors")].filter(Boolean) as OrderItem[];
-  const monitorOn = num(row.qtyCgmMonitor) > 0;
+  const sensorQty = num(row.qtyCgmSensors);
+  const monitorQty = num(row.qtyCgmMonitor);
+  const sensorItems = [
+    line(row.cgmType, row.qtyCgmSensors, "CGM sensors"),
+    monitorQty > 0 ? { name: "Monitor", qty: `×${monitorQty}` } : null,
+  ].filter(Boolean) as OrderItem[];
   const sensorAuths = ([
     { label: "Sensors", id: row.sensorsAuthId },
     { label: "Monitor", id: row.monitorAuthId },
   ] as OrderAuth[]).filter((a) => a.id.trim());
 
   const supplyItems = [
-    line(row.cartridgeType, row.qtyCartridge, "Cartridge"),
+    line(row.cartridgeType, row.qtyCartridge, "Cartridges", " Cartridges"),
     line(row.infusionSet1Type, row.qtyInfusionSet1, "Infusion set"),
     line(row.infusionSet2Type, row.qtyInfusionSet2, "Infusion set 2"),
+    line(row.pumpType, row.qtyPump, "Pump"),
   ].filter(Boolean) as OrderItem[];
-  const pumpOn = serving(row.pumpType) || num(row.qtyPump) > 0;
   const supplyAuths = ([
     { label: "Pump", id: row.pumpAuthId },
     { label: "Cartridges", id: row.cartridgesAuthId },
     { label: "Infusion set", id: row.infusionSetAuthId },
   ] as OrderAuth[]).filter((a) => a.id.trim());
+  const cartridgeInfusion = supplyItems.filter((i) => !/pump/i.test(i.name)).length > 0;
 
-  const pushSensors = () => out.push({ category: "Sensors", items: sensorItems, device: { label: "Monitor", on: monitorOn }, auths: sensorAuths });
-  const pushSupplies = () => out.push({ category: "Supplies", items: supplyItems, device: { label: "Pump", on: pumpOn }, auths: supplyAuths });
-
-  if (sub.includes("sensor")) pushSensors();
-  if (sub.includes("suppl")) pushSupplies();
+  if (sub.includes("sensor")) out.push({ category: "Sensors", items: sensorItems, auths: sensorAuths });
+  if (sub.includes("suppl")) out.push({ category: "Supplies", items: supplyItems, auths: supplyAuths });
   if (!sub) {
-    // Blank subscription: a single-device order.
-    if (pumpOn && supplyItems.length === 0 && sensorItems.length === 0 && !monitorOn) {
-      out.push({ category: "Pump", items: [], device: { label: "Pump", on: true }, auths: ([{ label: "Pump", id: row.pumpAuthId }] as OrderAuth[]).filter((a) => a.id.trim()) });
-    } else if (monitorOn && sensorItems.length === 0 && supplyItems.length === 0 && !pumpOn) {
-      out.push({ category: "Monitor", items: [], device: { label: "Monitor", on: true }, auths: ([{ label: "Monitor", id: row.monitorAuthId }] as OrderAuth[]).filter((a) => a.id.trim()), monitorOnly: true });
+    if (serving(row.pumpType) && !cartridgeInfusion && sensorQty === 0 && monitorQty === 0) {
+      // Pump-only order — qty is often blank on the board, so default to ×1.
+      out.push({ category: "Pump", items: [{ name: row.pumpType, qty: `×${num(row.qtyPump) || 1}` }], auths: ([{ label: "Pump", id: row.pumpAuthId }] as OrderAuth[]).filter((a) => a.id.trim()) });
+    } else if (monitorQty > 0 && sensorQty === 0 && !cartridgeInfusion && !serving(row.pumpType)) {
+      out.push({ category: "Monitor", items: [{ name: "Monitor", qty: `×${monitorQty}` }], auths: ([{ label: "Monitor", id: row.monitorAuthId }] as OrderAuth[]).filter((a) => a.id.trim()), monitorOnly: true });
     } else {
-      if (sensorItems.length || monitorOn) pushSensors();
-      if (supplyItems.length || pumpOn) pushSupplies();
+      if (sensorItems.length) out.push({ category: "Sensors", items: sensorItems, auths: sensorAuths });
+      if (supplyItems.length) out.push({ category: "Supplies", items: supplyItems, auths: supplyAuths });
     }
   }
   return out;
