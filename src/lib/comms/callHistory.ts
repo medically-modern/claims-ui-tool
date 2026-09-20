@@ -34,6 +34,10 @@ export interface PatientCall {
   /** Recording, when the account records calls AND the app may read them.
    *  Absent is the normal case, not an error — see `fetchPatientCallHistory`. */
   recording?: { id: string; contentUri: string };
+  /** A voicemail is not a call recording: RingCentral files it in the message
+   *  store and the call-log record only points at it. `uri` is the message
+   *  resource; its AudioRecording attachment is the audio. */
+  voicemailMessage?: { id: string; uri: string };
 }
 
 /**
@@ -122,7 +126,8 @@ export interface RcCallLogRecord {
   from?: { phoneNumber?: string; name?: string };
   to?: { phoneNumber?: string; name?: string };
   recording?: { id?: string | number; contentUri?: string };
-  legs?: Array<{ result?: string; duration?: number; recording?: { id?: string | number; contentUri?: string } }>;
+  message?: { id?: string | number; uri?: string; type?: string };
+  legs?: Array<{ result?: string; duration?: number; recording?: { id?: string | number; contentUri?: string }; message?: { id?: string | number; uri?: string; type?: string } }>;
 }
 
 /** Last 10 digits — the only substring present in every rendering of a US
@@ -166,6 +171,9 @@ export function toPatientCall(record: RcCallLogRecord): PatientCall | null {
   const rec =
     (record.recording?.contentUri ? record.recording : undefined) ??
     (record.legs ?? []).map((l) => l.recording).find((r) => r?.contentUri);
+  const vm =
+    (record.message?.uri && /voice/i.test(String(record.message.type ?? "VoiceMail")) ? record.message : undefined) ??
+    (record.legs ?? []).map((l) => l.message).find((m) => m?.uri && /voice/i.test(String(m.type ?? "VoiceMail")));
   return {
     id: String(record.id ?? record.sessionId ?? startTime),
     direction,
@@ -180,6 +188,7 @@ export function toPatientCall(record: RcCallLogRecord): PatientCall | null {
     ...(rec?.contentUri
       ? { recording: { id: String(rec.id ?? ""), contentUri: String(rec.contentUri) } }
       : {}),
+    ...(vm?.uri ? { voicemailMessage: { id: String(vm.id ?? ""), uri: String(vm.uri) } } : {}),
   };
 }
 
