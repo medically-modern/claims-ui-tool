@@ -2216,13 +2216,13 @@ function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
 // Laptop-sized (Brandon, 2026-09-20 — 13"/14" screens): the fixed tracks add
 // up to ~1,210px with gaps, so the table fits a 1,280 viewport without
 // clipping the button; above that the five circle tracks share the surplus.
-const OVERVIEW_GRID = "grid grid-cols-[180px_84px_160px_minmax(180px,1.4fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_140px] gap-2";
+const OVERVIEW_GRID = "grid grid-cols-[180px_84px_160px_minmax(170px,1fr)_minmax(100px,0.8fr)_minmax(100px,0.8fr)_minmax(110px,0.8fr)_minmax(100px,0.8fr)_minmax(100px,0.8fr)_140px] gap-2";
 // Order Prep has no action button: the only way to Ready to Order is five
 // green circles, reached through the popovers and the profile (Brandon,
 // 2026-09-20). So no Actions column there either.
-const OVERVIEW_GRID_NOACTION = "grid grid-cols-[180px_84px_160px_minmax(180px,1.4fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)] gap-2";
+const OVERVIEW_GRID_NOACTION = "grid grid-cols-[180px_84px_160px_minmax(170px,1fr)_minmax(100px,0.8fr)_minmax(100px,0.8fr)_minmax(110px,0.8fr)_minmax(100px,0.8fr)_minmax(100px,0.8fr)] gap-2";
 // Ready-to-Order variant adds a Type (First Order / Reorder) column.
-const OVERVIEW_GRID_TYPE = "grid grid-cols-[180px_84px_160px_112px_minmax(170px,1.3fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_minmax(64px,0.7fr)_140px] gap-2";
+const OVERVIEW_GRID_TYPE = "grid grid-cols-[170px_80px_150px_104px_minmax(130px,1fr)_minmax(88px,0.8fr)_minmax(88px,0.8fr)_minmax(104px,0.8fr)_minmax(88px,0.8fr)_minmax(88px,0.8fr)_132px] gap-2";
 
 type OverviewSortKey =
   | "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer"
@@ -2329,7 +2329,7 @@ function OverviewTable({
     <div className="text-[13px] overflow-x-auto">
       {/* sticky: keep the five check headings visible while scrolling.
           Opaque bg (not bg-muted/60) so rows don't ghost through when stuck. */}
-      <div className={cn(grid, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[13px] font-bold uppercase tracking-wide text-slate-600 items-end")}>
+      <div className={cn(grid, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[15px] font-bold tracking-normal text-slate-700 items-end")}>
         <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Order"          k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Subscription"   k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
