@@ -64,6 +64,9 @@ export function useSubscriptionPatients() {
     error: q.error ? (q.error as Error).message : null,
     usingMock,
     dataUpdatedAt: q.dataUpdatedAt,
+    /** True once THIS session has fetched from Monday (not just restored the
+     *  persisted snapshot) — the gate for anything that writes back. */
+    isFetchedAfterMount: q.isFetchedAfterMount,
     refetch: q.refetch,
   };
 }
