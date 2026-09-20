@@ -2156,9 +2156,12 @@ function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
 // values by scanning the source for COMPLETE class strings; a template
 // literal built from parts produces a class that is never emitted, and the
 // grid silently collapses to a single column.
-const OVERVIEW_GRID = "grid grid-cols-[240px_120px_180px_200px_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_170px] gap-4";
+// Laptop-sized (Brandon, 2026-09-20 — 13"/14" screens): the fixed tracks add
+// up to ~1,210px with gaps, so the table fits a 1,280 viewport without
+// clipping the button; above that the five circle tracks share the surplus.
+const OVERVIEW_GRID = "grid grid-cols-[190px_92px_150px_170px_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_150px] gap-3";
 // Ready-to-Order variant adds a Type (First Order / Reorder) column.
-const OVERVIEW_GRID_TYPE = "grid grid-cols-[240px_120px_160px_110px_190px_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_minmax(84px,1fr)_170px] gap-4";
+const OVERVIEW_GRID_TYPE = "grid grid-cols-[200px_96px_130px_90px_150px_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_minmax(72px,1fr)_150px] gap-3";
 
 type OverviewSortKey =
   | "name" | "nextOrderDate" | "subscriptionType" | "primaryPayer"
@@ -2261,10 +2264,10 @@ function OverviewTable({
 }) {
   const grid = showOrderType ? OVERVIEW_GRID_TYPE : OVERVIEW_GRID;
   return (
-    <div className="text-[13px]">
+    <div className="text-[13px] overflow-x-auto">
       {/* sticky: keep the five check headings visible while scrolling.
           Opaque bg (not bg-muted/60) so rows don't ghost through when stuck. */}
-      <div className={cn(grid, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
+      <div className={cn(grid, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
         <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Order"          k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Subscription"   k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
@@ -2293,7 +2296,7 @@ function OverviewTable({
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPatientClick(p); }
           }}
-          className={cn(grid, "border-b px-6 py-4 hover:bg-muted/30 transition-colors items-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset")}
+          className={cn(grid, "border-b px-4 py-3.5 hover:bg-muted/30 transition-colors items-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset")}
         >
           <button type="button" onClick={() => onPatientClick(p)} className="text-left">
             <div className="text-[15px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /><FlagBadges patient={p} /><ShipCandidateBadge patient={p} /></div>
@@ -2382,7 +2385,7 @@ function BlockedTable({
 
   return (
     <div className="text-[13px]">
-      <div className={cn(BLOCKED_GRID, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
+      <div className={cn(BLOCKED_GRID, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
         <div>Patient</div>
         <div>Order</div>
         <div>Reason</div>

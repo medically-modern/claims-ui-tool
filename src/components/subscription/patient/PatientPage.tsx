@@ -46,8 +46,13 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
 }) {
   const p = patient;
   const [view, setView] = useState<PatientView>(initialView);
-  const base = useMemo(() => draftFrom(p), [p]);
-  const [draft, setDraft] = useState<ProfileDraft>(base);
+  // The board's values as of the last read — or, right after a Save, what
+  // was just written, so the unsaved banner clears at once instead of
+  // waiting for the refetch to echo the same values back.
+  const [savedBase, setSavedBase] = useState<ProfileDraft | null>(null);
+  const boardBase = useMemo(() => draftFrom(p), [p]);
+  const base = savedBase ?? boardBase;
+  const [draft, setDraft] = useState<ProfileDraft>(boardBase);
   const [saving, setSaving] = useState(false);
   const [runningElig, setRunningElig] = useState(false);
   const [editPhone, setEditPhone] = useState(false);
@@ -55,7 +60,10 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
 
   // A fresh board read replaces the draft only when the operator has not
   // started editing — a refetch must never eat a half-typed member ID.
-  useEffect(() => { setDraft((d) => (isDirty(draftFrom(p), d) ? d : draftFrom(p))); }, [p]);
+  useEffect(() => {
+    setSavedBase(null);
+    setDraft((d) => (isDirty(draftFrom(p), d) ? d : draftFrom(p)));
+  }, [p]);
 
   const dirty = isDirty(base, draft);
   const setField = <K extends keyof ProfileDraft>(k: K, v: ProfileDraft[K]) => setDraft((d) => ({ ...d, [k]: v }));
@@ -78,6 +86,12 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
       const r = await saveSubscriptionPatient(p.mondayItemId, patch);
       if (r.failed.length === 0) toast.success(`Saved ${r.ok.length} field${r.ok.length === 1 ? "" : "s"} to Monday`);
       else toast.error(`Saved ${r.ok.length}, ${r.failed.length} failed`, { description: r.failed.map((f) => `${f.field}: ${f.error}`).slice(0, 3).join("\n"), duration: 12_000 });
+      // What landed is the new baseline; fields that failed stay dirty.
+      const landed = { ...base } as unknown as Record<string, string>;
+      const written = draft as unknown as Record<string, string>;
+      for (const k of r.ok) landed[k] = written[k];
+      setSavedBase({ ...(landed as unknown as ProfileDraft), visitDate: "" });
+      setDraft((d) => ({ ...d, visitDate: "" }));
       setEditPhone(false);
       void invalidate();
     } finally {
@@ -85,11 +99,29 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
     }
   };
   const reset = () => { setDraft(base); setEditPhone(false); };
+
+  // Run eligibility: blank → Run on the column, then poll the board every 10s
+  // (up to 2 min) until the check lands — the answer shows up here without a
+  // manual refresh. "Landed" = Last Eligibility Check or Active? changed.
+  const [eligWatch, setEligWatch] = useState<{ check: string; active: string; until: number } | null>(null);
+  useEffect(() => {
+    if (!eligWatch) return;
+    if (p.lastEligibilityCheck !== eligWatch.check || p.active !== eligWatch.active) {
+      setEligWatch(null);
+      toast.success("Eligibility check landed", { description: `Active status: ${p.active || "—"} · checked ${p.lastEligibilityCheck || "—"}` });
+      return;
+    }
+    if (Date.now() > eligWatch.until) { setEligWatch(null); return; }
+    const t = setTimeout(() => void invalidate(), 10_000);
+    return () => clearTimeout(t);
+  }, [eligWatch, p.lastEligibilityCheck, p.active, invalidate]);
+
   const runElig = async () => {
     setRunningElig(true);
     try {
       await runEligibilityCheck(p.mondayItemId);
-      toast.success("Eligibility check requested", { description: "Run Check is set to Run on Monday — Stedi answers within a minute; this page refreshes on its own." });
+      toast.success("Eligibility check requested", { description: "Run Check is set to Run on Monday — Stedi answers within a minute; this page picks the result up on its own." });
+      setEligWatch({ check: p.lastEligibilityCheck, active: p.active, until: Date.now() + 120_000 });
       void invalidate();
     } catch (e) {
       toast.error("Couldn't request the check", { description: e instanceof Error ? e.message : String(e) });
@@ -101,7 +133,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
   const notes = noteLines(p.coordinatorNotes);
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_380px]">
       <div className="min-w-0 space-y-4">
         {/* ── Top bar ── */}
         <div className="rounded-2xl border bg-card px-5 py-3 shadow-sm">
@@ -156,9 +188,9 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
         {view === "profile" && (
           <>
             <ProfileView p={p} draft={draft} setField={setField} firstOrderDate={firstOrderDate} ordersCount={myOrders.length}
-              runningElig={runningElig} onRunEligibility={() => void runElig()} mondayUrl={mondayUrl}
+              runningElig={runningElig || !!eligWatch} onRunEligibility={() => void runElig()} mondayUrl={mondayUrl}
               files={files.files} filesLoading={files.loading} />
-            <Section id="all-notes" title={<div><div className="text-[10px] font-semibold uppercase tracking-[.08em] text-muted-foreground">Subscription notes</div><div className="text-[11px] text-muted-foreground">The running log on this patient's Subscription-board item · newest first · a note posts as soon as you add it in the rail, stamped with the time and your initials</div></div>}
+            <Section id="all-notes" title={<div><div className="text-[10px] font-semibold uppercase tracking-[.08em] text-muted-foreground">Subscription notes</div><div className="text-[11px] text-muted-foreground">The running log on this patient's Subscription-board item · newest first · add one from the Notes tab in the rail; it posts at once, stamped with the time and your initials</div></div>}
               right={<span className="rounded-md bg-muted px-2 py-0.5 text-[11px]">{notes.length} note{notes.length === 1 ? "" : "s"}</span>}>
               {notes.length ? (
                 <div className="space-y-2">
@@ -195,7 +227,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
         )}
       </div>
 
-      <PatientRail p={p} onAllNotes={() => { setView("profile"); setTimeout(() => document.getElementById("all-notes")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); }} />
+      <PatientRail p={p} lastOrderDay={myOrders[0]?.placed ?? ""} />
     </div>
   );
 }

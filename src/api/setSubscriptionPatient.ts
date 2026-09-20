@@ -156,7 +156,10 @@ export async function saveSubscriptionPatient(
  * Used by the Run Eligibility Check button on Patient Profile.
  */
 export async function runEligibilityCheck(mondayItemId: string): Promise<void> {
-  await writeStatus(mondayItemId, "color_mm2nnjam", "Run");
+  // Blank first, then Run: the automation fires on the column CHANGING, so a
+  // row already sitting at "Run" (a stale trigger) would otherwise not fire.
+  await writeStatus(mondayItemId, SUB_COL.run_check, "");
+  await writeStatus(mondayItemId, SUB_COL.run_check, "Run");
 }
 
 /**
