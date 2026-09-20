@@ -79,6 +79,10 @@ export const SUB_COL = {
   patient_response_at: "text_mm3kt9bs",
   // Board's own MR status label (MR Valid / MR Expired / …), shown as-is.
   mr_status:          "color_mktyr8xg",
+  // Per-order operator decisions, written by the tool (lib/subscription/
+  // orderStamps.ts): "<ISO minute> <initials> for <Next Order>[ — reason]".
+  correspondence_reviewed: "text_mm7czwqr",
+  confirm_override:        "text_mm7cmkec",
   // Insurance
   primary_insurance:   "color_mm254qxj",
   member_id_1:         "text_mkvp6zfg",
@@ -310,6 +314,8 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   cobCheck: string;
   suggestedPrimary: string;
   insuranceChange: string;
+  correspondenceReviewed: string;
+  confirmOverride: string;
 }
 
 // ─── Monday types ───────────────────────────────────────────────────────────
@@ -422,6 +428,8 @@ function mapItem(
     lastPatientContact:       get(item, SUB_COL.last_patient_contact),
     oopEstimate:              get(item, SUB_COL.oop_estimate),
     totalGp:                  get(item, SUB_COL.total_gp),
+    correspondenceReviewed:   get(item, SUB_COL.correspondence_reviewed),
+    confirmOverride:          get(item, SUB_COL.confirm_override),
     active:                   get(item, SUB_COL.active),
     runCheck:                 get(item, SUB_COL.run_check),
     lastEligibilityError:     get(item, SUB_COL.last_eligibility_error),
@@ -578,6 +586,8 @@ function mapItem(
     cobCheck:            get(item, SUB_COL.cob_check),
     suggestedPrimary:    get(item, SUB_COL.suggested_primary),
     insuranceChange:     get(item, SUB_COL.insurance_change),
+    correspondenceReviewed: get(item, SUB_COL.correspondence_reviewed),
+    confirmOverride:     get(item, SUB_COL.confirm_override),
     nextCheckIn:         get(item, SUB_COL.check_in_date) || undefined,
     stuckSince:          get(item, SUB_COL.blocked_date) || undefined,
     stuckReason:         (get(item, SUB_COL.block_note).split("\n")[0] || undefined),
