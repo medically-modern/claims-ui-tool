@@ -31,6 +31,12 @@ const COL = {
   // so operators can interpret Wrong Payer denials.
   PAYOR_ID: "text_mm1gcz3y",
   SECONDARY_PAYER: "color_mkxq1a2p",
+  // The Subscription Board item this claim was spawned from. Populated by the
+  // order->claim spawn on 192 of the 200 most recent claims (2026-09-20); the
+  // blanks are secondary / resubmission rows for patients who have a linked
+  // primary beside them. This is the join the patient profile's claim
+  // history hangs off — see fetchClaimsForSubscriptionItem.
+  SUBSCRIPTION_ITEM_ID: "text_mm3ahdn3",
   SECONDARY_ID: "text_mkxwcqfy",
   DOS: "date_mkwr7spz",
   CLAIM_SENT_DATE: "date_mm14rk8d",
@@ -614,6 +620,7 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     // Populated by the Stedi-Monday backend for every ERA received.
     primaryPaidDate: isoOrNull(txt(item, COL.PRIMARY_PAID_DATE)),
     secondaryPayer: txt(item, COL.SECONDARY_PAYER) || null,
+    subscriptionItemId: txt(item, COL.SUBSCRIPTION_ITEM_ID) || null,
     denialAction: mapDenialAction(txt(item, COL.DENIAL_ACTION)),
     claimResentDate: isoOrNull(txt(item, COL.CLAIM_RESENT_DATE)),
     lateActionDate:  isoOrNull(txt(item, COL.LATE_ACTION_DATE)),
@@ -679,6 +686,41 @@ export async function fetchClaimByItemId(itemId: string): Promise<Claim | null> 
   });
   const item = data.items?.[0];
   return item ? mapMondayItemToClaim(item) : null;
+}
+
+/**
+ * Every claim spawned from one Subscription Board patient, newest DOS first.
+ *
+ * A filtered items_page on Subscription Item ID, NOT a slice of the whole
+ * board: the whole-board loader is a ~50s walk of 1,700 rows and the profile
+ * opens in a click. One patient has a handful of claims and this returns in
+ * well under a second. Follows the cursor in case a long-tenured patient
+ * ever exceeds a page.
+ */
+const BY_SUBSCRIPTION_QUERY = `
+  query ClaimsForSubscription($rules: [ItemsQueryRule!]) {
+    boards(ids: [${CLAIMS_BOARD_ID}]) {
+      items_page(limit: ${PAGE_LIMIT}, query_params: { rules: $rules }) {
+        cursor
+        items { ${ITEM_FIELDS} }
+      }
+    }
+  }
+`;
+
+export async function fetchClaimsForSubscriptionItem(subscriptionItemId: string): Promise<Claim[]> {
+  const id = String(subscriptionItemId ?? "").trim();
+  if (!id) return [];
+  const data = await mondayQuery<QueryResponse>(BY_SUBSCRIPTION_QUERY, {
+    rules: [{ column_id: COL.SUBSCRIPTION_ITEM_ID, compare_value: [id], operator: "contains_text" }],
+  });
+  const items: MondayItem[] = [];
+  await drainCursor(data.boards[0]?.items_page, items);
+  return items
+    // contains_text is a substring match; keep only the exact id.
+    .filter((it) => (it.column_values.find((c) => c.id === COL.SUBSCRIPTION_ITEM_ID)?.text ?? "").trim() === id)
+    .map(mapMondayItemToClaim)
+    .sort((a, b) => (b.dos || "").localeCompare(a.dos || ""));
 }
 
 // ---------- board loaders ----------
