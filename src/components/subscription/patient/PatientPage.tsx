@@ -13,7 +13,7 @@
  * view, so nothing about the patient is more than a glance away.
  */
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, FileText, Loader2, Package, Pencil, RotateCcw, Save, User } from "lucide-react";
+import { ArrowLeft, CalendarClock, FileText, Loader2, Package, PauseCircle, Pencil, RotateCcw, Save, User } from "lucide-react";
 import { toast } from "sonner";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { runEligibilityCheck, saveSubscriptionPatient } from "@/api/setSubscriptionPatient";
@@ -25,6 +25,8 @@ import { usePatientFiles } from "@/hooks/subscription/usePatientFiles";
 import { ordersForPatient } from "@/lib/subscription/orderHistory";
 import { cn } from "@/lib/utils";
 import { ClaimHistoryCard } from "../ClaimHistoryCard";
+import { BlockDialog, CheckInDialog } from "../SubscriptionBoard";
+import { isBlocked, type LanePatient } from "@/lib/subscription/lanes";
 import { ProfileView } from "./ProfileView";
 import { OrdersView } from "./OrdersView";
 import { PatientRail, noteLines } from "./PatientRail";
@@ -132,6 +134,16 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
 
   const notes = noteLines(p.coordinatorNotes);
 
+  // Pause / block from the profile (Brandon, 2026-09-20): look at what is
+  // going on, then pause with a reason and a check-in date. Same dialogs the
+  // board uses; a paused patient gets the check-in dialog (contact made /
+  // not, unblock, or move to Not Active) instead.
+  const lane = p as unknown as LanePatient;
+  const blocked = isBlocked(lane);
+  const [blockOpen, setBlockOpen] = useState(false);
+  const [checkInOpen, setCheckInOpen] = useState(false);
+  const onBlockDone = (msg: string) => { toast.success(msg); void invalidate(); };
+
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_380px]">
       <div className="min-w-0 space-y-4">
@@ -154,6 +166,20 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
               </div>
             </div>
             <div className="ml-auto flex items-center gap-3">
+              {blocked ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-bold text-rose-700" title={p.blockNote || undefined}>
+                    <PauseCircle className="h-3.5 w-3.5" /> Paused{p.pauseReason ? ` · ${p.pauseReason}` : ""}{p.checkInDate ? ` · check in ${usDate(p.checkInDate)}` : ""}
+                  </span>
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]" onClick={() => setCheckInOpen(true)} title="Log the check-in, unblock, or move to Not Active"><CalendarClock className="h-3.5 w-3.5" /> Check in</Button>
+                  <Button variant="ghost" size="sm" className="h-8 text-[12px]" onClick={() => setBlockOpen(true)} title="Change the block reason or check-in date">Edit</Button>
+                </div>
+              ) : (
+                <Button variant="outline" size="sm" className="h-8 gap-1.5 border-rose-200 text-[12px] text-rose-700 hover:bg-rose-50" onClick={() => setBlockOpen(true)}
+                  title="Pause this patient — pick a reason and a check-in date; the row moves to Blocked">
+                  <PauseCircle className="h-3.5 w-3.5" /> Pause
+                </Button>
+              )}
               <div className="inline-flex rounded-xl bg-muted p-[3px]">
                 {([
                   ["profile", "Profile", <User key="u" className="h-3.5 w-3.5" />, null],
@@ -228,6 +254,9 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
       </div>
 
       <PatientRail p={p} lastOrderDay={myOrders[0]?.placed ?? ""} />
+
+      <BlockDialog patient={blockOpen ? lane : null} open={blockOpen} onClose={() => setBlockOpen(false)} onDone={onBlockDone} />
+      <CheckInDialog patient={checkInOpen ? lane : null} open={checkInOpen} onClose={() => setCheckInOpen(false)} onDone={onBlockDone} />
     </div>
   );
 }
