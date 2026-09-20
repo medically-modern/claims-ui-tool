@@ -30,6 +30,28 @@ function onOrAfterDay(iso: string, day: string): boolean {
   return Number.isFinite(t) && Number.isFinite(d) ? t >= d : true;
 }
 
+/**
+ * The day the last order went out, as the rail's "since" point.
+ *   - the newest Order Board row for the patient, when there is one;
+ *   - otherwise Next Order minus the order frequency ("30-Days" → 30), which
+ *     is when the previous cycle's order would have gone out — the Order
+ *     Board only goes back so far, and older patients have no row on it;
+ *   - "" (everything counts) when neither is known, e.g. a first order.
+ */
+export interface SincePoint { day: string; estimated: boolean }
+
+export function lastOrderDay(opts: { orderPlaced?: string | null; nextOrderDate?: string | null; orderFrequency?: string | null }): SincePoint {
+  const placed = String(opts.orderPlaced ?? "").slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(placed)) return { day: placed, estimated: false };
+  const next = String(opts.nextOrderDate ?? "").slice(0, 10);
+  const freq = Number((/(\d+)/.exec(opts.orderFrequency ?? "") ?? [])[1]);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(next) || !Number.isFinite(freq) || freq <= 0) return { day: "", estimated: false };
+  const d = new Date(next + "T00:00:00");
+  d.setDate(d.getDate() - freq);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return { day: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, estimated: true };
+}
+
 export function textsSince(messages: ConversationMessage[], sinceDay: string): ConversationMessage[] {
   return messages.filter((m) => !isAutomatedText(m) && onOrAfterDay(m.time, sinceDay));
 }

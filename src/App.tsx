@@ -7,11 +7,9 @@
 // background." A short staleTime on the heavy queries means a reload
 // within the staleness window won't even hit Monday at all.
 //
-// Cache buster: VITE_BUILD_SHA (set by the GH Pages workflow). When
-// a new deploy lands with a different commit hash, the persisted
-// cache is dropped wholesale on first load — protects against
-// new-build / old-cached-shape mismatches (e.g. the Claim type
-// gaining a new field that older entries don't carry).
+// Cache buster: CACHE_SCHEMA_VERSION below, bumped by hand when a cached
+// shape changes incompatibly. (It used to be the build SHA, which made
+// every deploy a cold load for everyone.)
 //
 // Storage: IndexedDB (via idb-keyval), NOT localStorage. The cache is
 // one JSON string holding every successful query; at ~1,700 claims it
@@ -64,6 +62,17 @@ const queryClient = new QueryClient({
 
 const CACHE_KEY = "claims-ui-tool:react-query-cache";
 
+// Persisted-cache schema version. Bump this when a query's mapped shape
+// changes in a way old cached rows can't survive (a field renamed, a type
+// changed — NOT a field added, which old rows simply lack until the refetch).
+//
+// Until 2026-09-20 the buster was the build SHA, so every deploy threw the
+// whole cache away and every operator's next open was a cold load with a
+// blank board. On a day with ten deploys that was the normal experience.
+// Each heavy query already refetches on mount, so a cached snapshot is on
+// screen for the seconds the refetch takes and then replaced.
+const CACHE_SCHEMA_VERSION = "2026-09-20.1";
+
 // The pre-IndexedDB cache lived under this same key in localStorage.
 // Drop it once so it stops eating the quota other features may use.
 try {
@@ -93,9 +102,9 @@ const App = () => (
       // render week-old data on a vacation return, long enough that
       // routine same-day reloads always hit the cache.
       maxAge: ONE_DAY_MS,
-      // Bust the cache whenever a new build ships. Keeps us safe
-      // from schema drift (e.g. adding a new field to Claim).
-      buster: (import.meta.env.VITE_BUILD_SHA as string) || "dev",
+      // Bust the cache only when the schema version above changes —
+      // not on every deploy (see CACHE_SCHEMA_VERSION).
+      buster: CACHE_SCHEMA_VERSION,
       dehydrateOptions: {
         // Persist only successful fetches. Mutations + in-flight
         // queries aren't useful across reloads.

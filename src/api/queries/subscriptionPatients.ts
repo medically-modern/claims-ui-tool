@@ -228,7 +228,8 @@ export const SUB_COL = {
   partial_approval_date:"date_mm2na60z",
 } as const;
 
-const READ_IDS = Object.values(SUB_COL);
+// Placeholder ids (…__TODO) are not sent to Monday.
+const READ_IDS = Object.values(SUB_COL).filter((id) => !id.includes("__TODO"));
 
 // ─── Type extensions ───────────────────────────────────────────────────────
 /**
@@ -332,32 +333,39 @@ interface MondayItem  {
 // Patients" group is hidden by default in the Patient Profile.
 const NOT_ACTIVE_GROUP_ID = "group_mkp19fyp";
 
-const PAGE_QUERY = `
-  query SubFirstPage($boardId: ID!, $cols: [String!]!) {
-    boards(ids: [$boardId]) {
-      items_page(limit: 500) {
-        cursor
-        items {
-          id name
-          group { id title }
-          column_values(ids: $cols) { id text }
-        }
-      }
+// ─── Queries ────────────────────────────────────────────────────────────────
+// Two-step read (2026-09-20). Paging 500 rows × ~115 columns through one
+// cursor took 26 s cold on the live board (16 s + 10 s, sequential by
+// construction — each page's cursor comes back with the previous page).
+// Reading the id list alone is cheap, and `items(ids:)` takes up to 100 ids
+// per call with no cursor, so the row reads can run side by side: measured
+// 5.5 s for the ids + 2.5 s for nine parallel chunks = 8 s for the same data,
+// at a quarter of the Monday complexity (9 × 3.3k vs 66k + 49k).
+// The id pages are pipelined too: chunks for page 1 start while page 2 loads.
+const IDS_FIRST_QUERY = `
+  query SubIdsFirst($boardId: ID!) {
+    boards(ids: [$boardId]) { items_page(limit: 500) { cursor items { id } } }
+  }
+`;
+const IDS_NEXT_QUERY = `
+  query SubIdsNext($cursor: String!) {
+    next_items_page(cursor: $cursor, limit: 500) { cursor items { id } }
+  }
+`;
+const ITEMS_QUERY = `
+  query SubItems($ids: [ID!], $cols: [String!]!) {
+    items(ids: $ids) {
+      id name
+      group { id title }
+      column_values(ids: $cols) { id text }
     }
   }
 `;
-const NEXT_QUERY = `
-  query SubNextPage($cursor: String!, $cols: [String!]!) {
-    next_items_page(cursor: $cursor, limit: 500) {
-      cursor
-      items {
-        id name
-        group { id title }
-        column_values(ids: $cols) { id text }
-      }
-    }
-  }
-`;
+/** Monday's ceiling for `items(ids:)`. */
+const ITEMS_CHUNK = 100;
+/** Parallel row reads in flight. Nine chunks at 10-wide finished in 2.5 s;
+ *  8 keeps a comfortable margin under Monday's per-token concurrency. */
+const ITEMS_CONCURRENCY = 8;
 
 // ─── Cell helpers ───────────────────────────────────────────────────────────
 function get(item: MondayItem, col: string): string {
@@ -595,11 +603,33 @@ function mapItem(
 }
 
 // ─── Fetcher ────────────────────────────────────────────────────────────────
-interface PageResponse {
-  boards: Array<{ items_page: { cursor: string | null; items: MondayItem[] } }>;
+interface IdPage { cursor: string | null; items: Array<{ id: string }> }
+interface IdsFirstResponse { boards: Array<{ items_page: IdPage }> }
+interface IdsNextResponse { next_items_page: IdPage }
+interface ItemsResponse { items: MondayItem[] }
+
+/** Run `fn` over `chunks`, at most `width` at a time, preserving order. */
+async function mapLimited<T, R>(chunks: T[], width: number, fn: (c: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(chunks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < chunks.length) {
+      const i = next++;
+      out[i] = await fn(chunks[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, chunks.length) }, worker));
+  return out;
 }
-interface NextPageResponse {
-  next_items_page: { cursor: string | null; items: MondayItem[] };
+
+/** Fetch the full rows for a page of ids, `ITEMS_CHUNK` at a time in parallel. */
+function fetchRows(ids: string[]): Promise<MondayItem[]> {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += ITEMS_CHUNK) chunks.push(ids.slice(i, i + ITEMS_CHUNK));
+  return mapLimited(chunks, ITEMS_CONCURRENCY, async (chunk) => {
+    const r = await mondayQuery<ItemsResponse>(ITEMS_QUERY, { ids: chunk, cols: READ_IDS });
+    return r.items ?? [];
+  }).then((pages) => pages.flat());
 }
 
 /** The two note columns whose last-written time decides the row's badge. */
@@ -616,23 +646,21 @@ export async function fetchSubscriptionPatients(): Promise<LiveSubscriptionPatie
   // it resolves to an empty map on failure, which simply means no note badges.
   const notesP = fetchNoteActivity(SUBSCRIPTION_BOARD_ID, NOTE_ACTIVITY_COLS);
 
-  const raw: MondayItem[] = [];
-  const first = await mondayQuery<PageResponse>(PAGE_QUERY, {
-    boardId: String(SUBSCRIPTION_BOARD_ID),
-    cols: READ_IDS,
-  });
-  raw.push(...(first.boards[0]?.items_page?.items ?? []));
-  let cursor = first.boards[0]?.items_page?.cursor ?? null;
-
-  while (cursor) {
-    const next = await mondayQuery<NextPageResponse>(NEXT_QUERY, {
-      cursor,
-      cols: READ_IDS,
-    });
-    raw.push(...(next.next_items_page?.items ?? []));
-    cursor = next.next_items_page?.cursor ?? null;
+  // Step 1: the id list, 500 per page. Step 2 starts for each page as soon as
+  // that page's ids arrive, so the row reads overlap the next id page.
+  const rowReads: Array<Promise<MondayItem[]>> = [];
+  const first = await mondayQuery<IdsFirstResponse>(IDS_FIRST_QUERY, { boardId: String(SUBSCRIPTION_BOARD_ID) });
+  let page: IdPage | null = first.boards[0]?.items_page ?? null;
+  while (page) {
+    const ids = page.items.map((i) => String(i.id));
+    if (ids.length) rowReads.push(fetchRows(ids));
+    const cursor: string | null = page.cursor;
+    if (!cursor) break;
+    const next = await mondayQuery<IdsNextResponse>(IDS_NEXT_QUERY, { cursor });
+    page = next.next_items_page ?? null;
   }
 
+  const raw = (await Promise.all(rowReads)).flat();
   const notes = await notesP;
   for (const it of raw) out.push(mapItem(it, notes.get(String(it.id)) ?? null));
   return out;

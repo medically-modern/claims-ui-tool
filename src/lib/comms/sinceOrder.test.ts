@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { callsSince, isAutomatedText, textsSince } from "./sinceOrder";
+import { callsSince, isAutomatedText, lastOrderDay, textsSince } from "./sinceOrder";
 import type { ConversationMessage } from "./messagingApi";
 import type { PatientCall } from "./callHistory";
 
@@ -30,5 +30,19 @@ describe("textsSince / callsSince", () => {
       { id: "b", direction: "Outbound", startTime: "2026-09-05T12:00:00Z" },
     ] as PatientCall[];
     expect(callsSince(calls, "2026-08-04").map((c) => c.id)).toEqual(["b"]);
+  });
+});
+
+describe("lastOrderDay", () => {
+  it("prefers the Order Board row", () => {
+    expect(lastOrderDay({ orderPlaced: "2026-07-21", nextOrderDate: "2026-09-19", orderFrequency: "30-Days" })).toEqual({ day: "2026-07-21", estimated: false });
+  });
+  it("estimates Next Order minus the frequency when there is no row", () => {
+    expect(lastOrderDay({ orderPlaced: null, nextOrderDate: "2026-09-19", orderFrequency: "90-Days" })).toEqual({ day: "2026-06-21", estimated: true });
+    expect(lastOrderDay({ orderPlaced: "", nextOrderDate: "2026-03-05", orderFrequency: "30 days" })).toEqual({ day: "2026-02-03", estimated: true });
+  });
+  it("counts everything when neither is known", () => {
+    expect(lastOrderDay({ nextOrderDate: "2026-09-19", orderFrequency: "" })).toEqual({ day: "", estimated: false });
+    expect(lastOrderDay({})).toEqual({ day: "", estimated: false });
   });
 });

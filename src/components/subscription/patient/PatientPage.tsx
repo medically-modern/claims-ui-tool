@@ -31,6 +31,7 @@ import { isBlocked, type LanePatient } from "@/lib/subscription/lanes";
 import { ProfileView } from "./ProfileView";
 import { OrdersView } from "./OrdersView";
 import { PatientRail } from "./PatientRail";
+import { lastOrderDay } from "@/lib/comms/sinceOrder";
 import { draftFrom, draftPatch, isDirty, type ProfileDraft } from "./draft";
 import { usDate } from "./atoms";
 
@@ -250,7 +251,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
         )}
       </div>
 
-      <PatientRail p={p} lastOrderDay={myOrders[0]?.placed ?? ""} />
+      <PatientRail p={p} since={lastOrderDay({ orderPlaced: myOrders[0]?.placed, nextOrderDate: p.nextOrderDate, orderFrequency: p.orderFrequency })} />
 
       {/* The save bar: exists only while something is unsaved, pinned to the
           bottom so it is reachable from any card without scrolling back up.
