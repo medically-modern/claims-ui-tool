@@ -54,11 +54,14 @@ import { PayerRulesTab } from "./PayerRulesTab";
 import { describeCircle } from "@/lib/subscription/circleDetail";
 import { fmtStamp, makeStamp } from "@/lib/subscription/orderStamps";
 import { operatorInitials } from "./patient/PatientRail";
+import { InactiveDialog } from "./patient/InactiveDialog";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { setDvsTrigger } from "@/api/setDvsTrigger";
 import { DvsQueue } from "./DvsQueue";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
+import { useOrderingCycleSync } from "@/hooks/subscription/useOrderingCycleSync";
+import { describeSync } from "@/lib/subscription/orderingCycleSync";
 import { runEligibilityCheck, saveSubscriptionPatient, sendToOrder, writeOrderStamps } from "@/api/setSubscriptionPatient";
 import { bulkTriggerDvs } from "@/api/setDvsTrigger";
 import { canRunDvs } from "@/lib/subscription/dvs";
@@ -254,10 +257,12 @@ const CheckpointCircle = forwardRef<HTMLButtonElement, CheckpointCircleProps>(
           className="absolute -top-2 -right-2 grid h-5 w-5 place-items-center rounded-full bg-emerald-50 text-emerald-700 ring-[1.5px] ring-emerald-500 shadow-sm"
           aria-label={check.reviewed}
         >
-          <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            <path d="m8.5 10.5 2.5 2.5 4.5-5" />
-          </svg>
+          {/* Same bubble as the unread badge, pixel for pixel; the check is
+              laid over its body rather than drawn into a different icon. */}
+          <span className="relative grid h-3 w-3 place-items-center">
+            <MessageSquare className="h-3 w-3" strokeWidth={2.5} />
+            <Check className="absolute left-[2.5px] top-[1.5px] h-[7px] w-[7px]" strokeWidth={3.5} />
+          </span>
         </span>
       )}
     </button>
@@ -291,6 +296,7 @@ function CircleEditPopover({
 }) {
   const [open, setOpen] = useState(false);
   const [advanceOpen, setAdvanceOpen] = useState(false);
+  const [inactiveOpen, setInactiveOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const { invalidate, markDvsRequested, markReviewed } = useInvalidateSubscription();
@@ -385,30 +391,35 @@ function CircleEditPopover({
             </div>
           )}
 
-          {/* A message on a green Confirm is the one case with two decisions:
-              read it, then pause or advance (Brandon, 2026-09-20). */}
-          {d.action === "pause" && kind === "confirmation" && check.needsRead ? (
-            <div className="grid grid-cols-2 gap-2">
-              <Button size="sm" variant="outline" className="text-rose-700 border-rose-200 hover:bg-rose-50"
-                onClick={() => { setOpen(false); onBlockRequest?.(patient); }} disabled={!onBlockRequest}>
-                <PauseCircle className="mr-1.5 h-3.5 w-3.5" /> Pause…
+          {/* Decisions, in the order they are made: read it (Mark reviewed,
+              only when a message is holding a green Confirm), then hold the
+              patient (Pause, amber) or take them out of the cycle (Inactive,
+              red) — Brandon, 2026-09-20. */}
+          {d.action === "pause" && (
+            <div className={cn("grid gap-2", kind === "confirmation" && check.needsRead ? "grid-cols-3" : "grid-cols-2")}>
+              {kind === "confirmation" && check.needsRead && (
+                <Button size="sm" variant="outline" className="border-emerald-300 bg-emerald-50 px-2 font-semibold text-emerald-800 hover:bg-emerald-700 hover:text-white" disabled={saving}
+                  onClick={() => void run(async () => {
+                    const initials = operatorInitials();
+                    await writeOrderStamps(patient.mondayItemId, { correspondenceReviewed: makeStamp({ initials, nextOrderDate: patient.nextOrderDate }) });
+                    markReviewed(patient.mondayItemId, `Reviewed by ${initials} ${fmtStamp({ at: Date.now(), iso: "", initials, forOrder: patient.nextOrderDate, reason: "" })}`);
+                  })}
+                  title="I read the texts, calls and notes since the last order">
+                  {saving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1 h-3.5 w-3.5" />} Mark reviewed
+                </Button>
+              )}
+              <Button size="sm" variant="outline" className="border-amber-300 bg-amber-50 px-2 text-amber-900 hover:bg-amber-100"
+                onClick={() => { setOpen(false); onBlockRequest?.(patient); }} disabled={!onBlockRequest}
+                title="Pause this patient — a reason and a check-in date">
+                <PauseCircle className="mr-1 h-3.5 w-3.5" /> Pause…
               </Button>
-              <Button size="sm" className="bg-sky-700 hover:bg-sky-800" disabled={saving}
-                onClick={() => void run(async () => {
-                  const initials = operatorInitials();
-                  await writeOrderStamps(patient.mondayItemId, { correspondenceReviewed: makeStamp({ initials, nextOrderDate: patient.nextOrderDate }) });
-                  markReviewed(patient.mondayItemId, `Reviewed by ${initials} ${fmtStamp({ at: Date.now(), iso: "", initials, forOrder: patient.nextOrderDate, reason: "" })}`);
-                })}
-                title="I read the texts, calls and notes since the last order">
-                {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />} Mark reviewed
+              <Button size="sm" variant="outline" className="border-rose-300 bg-rose-50 px-2 text-rose-800 hover:bg-rose-100"
+                onClick={() => { setOpen(false); setInactiveOpen(true); }}
+                title="Move this patient to Not Active — out of the Order Cycle until reactivated">
+                <UserX className="mr-1 h-3.5 w-3.5" /> Inactive…
               </Button>
             </div>
-          ) : d.action === "pause" && onBlockRequest ? (
-            <Button size="sm" variant="outline" className="w-full text-rose-700 border-rose-200 hover:bg-rose-50"
-              onClick={() => { setOpen(false); onBlockRequest(patient); }}>
-              <PauseCircle className="mr-1.5 h-3.5 w-3.5" /> Pause…
-            </Button>
-          ) : null}
+          )}
           {d.action === "advance" && (
             <Button size="sm" className="w-full bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}
               title="Override this circle for this order, with a reason">
@@ -437,6 +448,7 @@ function CircleEditPopover({
         </div>
       </PopoverContent>
       {kind === "confirmation" && <AdvanceDialog patient={advanceOpen ? patient : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />}
+      <InactiveDialog patient={inactiveOpen ? (patient as LiveSubscriptionPatient) : null} open={inactiveOpen} onClose={() => setInactiveOpen(false)} />
     </Popover>
   );
 }
@@ -1401,6 +1413,9 @@ function OrderCycleWorkflow() {
     data: liveAll, loading, isFetching, error, usingMock, refetch, dataUpdatedAt,
   } = useSubscriptionPatients();
   const all: SubscriptionPatient[] = liveAll ?? [];
+  // Monday's Ordering Cycle follows the tool's readiness (Order Prep ↔ Ready
+  // to Order) after every fresh read — see hooks/subscription/useOrderingCycleSync.
+  const sync = useOrderingCycleSync();
 
   const counts = useMemo(() => {
     // Tab membership is driven by the Monday Ordering Cycle column —
@@ -1872,6 +1887,17 @@ function OrderCycleWorkflow() {
         {loading && all.length === 0 && (
           <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700">
             <Loader2 className="h-3 w-3 animate-spin" /> Loading patients from Monday…
+          </span>
+        )}
+        {sync.syncing && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-800">
+            <Loader2 className="h-3 w-3 animate-spin" /> Updating Ordering Cycle on Monday…
+          </span>
+        )}
+        {!sync.syncing && sync.last && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-800"
+            title={sync.last.writes.map((w) => `${w.name}: ${w.from} → ${w.to}`).join("\n")}>
+            <Check className="h-3 w-3" /> Monday updated · {describeSync(sync.last.writes)}{sync.last.failed ? ` · ${sync.last.failed} failed` : ""}
           </span>
         )}
         {usingMock && (
