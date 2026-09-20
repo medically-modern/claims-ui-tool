@@ -94,14 +94,23 @@ const CAT_TAG: Record<string, string> = {
 /** Ground + signature required — shown as a small "GNDSR" flag on the order. */
 const isGndsr = (shipMethod: string) => /gndsr|signature/i.test(shipMethod);
 
-/** One category's line: the tag and its items (type ×qty). */
-function CategoryLine({ cat }: { cat: ReturnType<typeof orderCategories>[number] }) {
+/** Width of the leading GNDSR gutter, shared by every category line so the
+ *  category pills align across lines and rows (GNDSR or not). */
+const GNDSR_GUTTER = "w-[52px] shrink-0";
+
+/** One category's line: a fixed-width lead slot (GNDSR on the first line), the
+ *  tag, and its items (type ×qty). The lead sits in the SAME items-center row as
+ *  the tag pill, so the two pills are always vertically aligned. */
+function CategoryLine({ cat, lead }: { cat: ReturnType<typeof orderCategories>[number]; lead?: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px]">
-      <span className={cn("inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[11px] font-semibold", CAT_TAG[cat.category])}>{cat.category}</span>
-      {cat.items.length > 0 && (
-        <span className="font-medium">{cat.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(" · ")}</span>
-      )}
+    <div className="flex items-center gap-2 text-[13px]">
+      <div className={GNDSR_GUTTER}>{lead}</div>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className={cn("inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[11px] font-semibold", CAT_TAG[cat.category])}>{cat.category}</span>
+        {cat.items.length > 0 && (
+          <span className="font-medium">{cat.items.map((i) => `${i.name}${i.qty ? ` ${i.qty}` : ""}`).join(" · ")}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -162,19 +171,19 @@ function OrderList({ rows, onOpen, onOpenProfile, onMerge, mergingId, selected, 
               <div className="truncate">{r.primaryInsurance || "—"}</div>
               {pos && <Pill label="Office" tone="amber" />}
             </div>
-            <button type="button" onClick={() => onOpen(r)} className="flex items-start gap-2 text-left">
-              {/* Fixed-width GNDSR gutter: always reserved so the category pills
-                  line up across every row, GNDSR or not (Brandon, 2026-09-20). */}
-              <div className="w-[52px] shrink-0 pt-0.5">
-                {isGndsr(r.shipMethod) && (
-                  <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-semibold bg-slate-200 text-slate-600" title={r.shipMethod}>GNDSR</span>
-                )}
-              </div>
-              <div className="min-w-0 space-y-1">
-              {cats.length ? cats.map((c) => <CategoryLine key={c.category} cat={c} />)
-                : <span className="text-[12px] text-muted-foreground">No products on the order</span>}
+            {/* GNDSR rides in the first category line's lead slot, so it shares
+                that pill's items-center row and the two align exactly; every line
+                carries the same-width slot, so pills line up down the column. */}
+            <button type="button" onClick={() => onOpen(r)} className="min-w-0 space-y-1 text-left">
+              {cats.length ? cats.map((c, ci) => (
+                <CategoryLine key={c.category} cat={c}
+                  lead={ci === 0 && isGndsr(r.shipMethod)
+                    ? <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-semibold bg-slate-200 text-slate-600" title={r.shipMethod}>GNDSR</span>
+                    : undefined} />
+              ))
+                : <div className="pl-[60px] text-[12px] text-muted-foreground">No products on the order</div>}
               {monitorOnly && (
-                <div onClick={(e) => e.stopPropagation()}>
+                <div className="pl-[60px]" onClick={(e) => e.stopPropagation()}>
                   <Button size="sm" variant="outline" disabled={!mergeTarget || mergingId === r.id}
                     className="h-7 gap-1.5 border-teal-300 bg-teal-50 text-[12px] text-teal-800 hover:bg-teal-100 disabled:opacity-50"
                     title={mergeTarget ? `Move the monitor qty + auth onto ${mergeTarget.name}'s sensors order and delete this one` : "No sensors order on the board for this patient yet"}
@@ -184,7 +193,6 @@ function OrderList({ rows, onOpen, onOpenProfile, onMerge, mergingId, selected, 
                   </Button>
                 </div>
               )}
-              </div>
             </button>
             <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
               <Button size="sm" variant="ghost" className="h-8 px-2 text-[12px] text-muted-foreground hover:text-foreground"
