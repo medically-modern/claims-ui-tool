@@ -2487,6 +2487,13 @@ function OverviewTable({
           tabIndex={0}
           onClick={() => { if (Date.now() < swallowRowClicksUntil) return; onPatientClick(p); }}
           onKeyDown={(e) => {
+            // Only the row itself opens the profile on Enter/Space. React
+            // bubbles key events from portalled descendants (a circle popover,
+            // the Order-anyway dialog and its reason textarea) up through the
+            // component tree to here, so without this guard typing a space in
+            // the override reason fires "Space → open profile" and the dialog
+            // x's out (Brandon, 2026-09-21).
+            if (e.target !== e.currentTarget) return;
             if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPatientClick(p); }
           }}
           className={cn(grid, "border-b px-4 py-3.5 hover:bg-muted/30 transition-colors items-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset")}
@@ -2608,7 +2615,7 @@ function BlockedRow({
       role="button"
       tabIndex={0}
       onClick={() => { if (Date.now() < swallowRowClicksUntil) return; onPatientClick(p); }}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPatientClick(p); } }}
+      onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPatientClick(p); } }}
       className={cn(BLOCKED_GRID, "border-b px-4 py-3.5 hover:bg-muted/30 transition-colors items-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset")}
     >
       <button type="button" onClick={() => onPatientClick(p)} className="text-left">
