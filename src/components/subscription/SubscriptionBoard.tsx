@@ -454,7 +454,7 @@ function CircleEditPopover({
           )}
         </div>
       </PopoverContent>
-      {kind === "confirmation" && <AdvanceDialog patient={advanceOpen ? patient : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />}
+      {(kind === "confirmation" || kind === "auth") && <AdvanceDialog kind={kind} patient={advanceOpen ? patient : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />}
       <InactiveDialog patient={inactiveOpen ? (patient as LiveSubscriptionPatient) : null} open={inactiveOpen} onClose={() => setInactiveOpen(false)} />
     </Popover>
   );

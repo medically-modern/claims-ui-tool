@@ -83,6 +83,7 @@ export const SUB_COL = {
   // orderStamps.ts): "<ISO minute> <initials> for <Next Order>[ — reason]".
   correspondence_reviewed: "text_mm7czwqr",
   confirm_override:        "text_mm7cmkec",
+  auth_override:           "text_mm7dj1kf",
   // Insurance
   primary_insurance:   "color_mm254qxj",
   member_id_1:         "text_mkvp6zfg",
@@ -322,6 +323,7 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   insuranceChange: string;
   correspondenceReviewed: string;
   confirmOverride: string;
+  authOverride: string;
 }
 
 // ─── Monday types ───────────────────────────────────────────────────────────
@@ -448,6 +450,7 @@ function mapItem(
     correspondenceReviewed:   get(item, SUB_COL.correspondence_reviewed),
     orderFrequency:           get(item, SUB_COL.order_frequency),
     confirmOverride:          get(item, SUB_COL.confirm_override),
+    authOverride:             get(item, SUB_COL.auth_override),
     active:                   get(item, SUB_COL.active),
     runCheck:                 get(item, SUB_COL.run_check),
     lastEligibilityError:     get(item, SUB_COL.last_eligibility_error),
@@ -608,6 +611,7 @@ function mapItem(
     insuranceChange:     get(item, SUB_COL.insurance_change),
     correspondenceReviewed: get(item, SUB_COL.correspondence_reviewed),
     confirmOverride:     get(item, SUB_COL.confirm_override),
+    authOverride:        get(item, SUB_COL.auth_override),
     nextCheckIn:         get(item, SUB_COL.check_in_date) || undefined,
     stuckSince:          get(item, SUB_COL.blocked_date) || undefined,
     stuckReason:         (get(item, SUB_COL.block_note).split("\n")[0] || undefined),

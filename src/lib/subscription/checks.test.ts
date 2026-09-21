@@ -22,6 +22,7 @@ const CLEAN: CheckInputs = {
   totalGp: "300",
   correspondenceReviewed: "",
   confirmOverride: "",
+  authOverride: "",
   active: "Active",
   runCheck: "",
   lastEligibilityError: "",
@@ -207,6 +208,30 @@ describe("Authorization", () => {
     expect(cleared.tone).toBe("ok");
     expect(cleared.light).toBeUndefined();
     expect(run({ ...m, triggerDvs: "Failed" }).auth.tone).toBe("bad");
+  });
+
+  it("a Payment Incorrect Medicaid claim is a light-red overridable stop", () => {
+    const m = { primaryInsurance: "Medicaid", orderDate: "2026-09-18", subscriptionType: "Supplies" as const, suppliesAuthStatus: "Required" };
+    const pi = run({ ...m, triggerDvs: "Success", claimsStatus: "Payment Incorrect" }).auth;
+    expect(pi).toMatchObject({ tone: "bad", light: true, paymentIncorrect: true, medicaidDvs: true });
+  });
+
+  it("an Auth Override for this order clears a Payment Incorrect claim to light green", () => {
+    const m = { primaryInsurance: "Medicaid", orderDate: "2026-09-18", subscriptionType: "Supplies" as const, suppliesAuthStatus: "Required" };
+    const ov = run({ ...m, triggerDvs: "Success", claimsStatus: "Payment Incorrect", authOverride: "2026-09-20T14:05 BE for 2026-09-18 — payer paid the fee schedule, ship it" }).auth;
+    expect(ov).toMatchObject({ tone: "ok", light: true, ruleId: "auth.payment-override" });
+    // The per-code breakdown stays available behind the green check.
+    expect(ov.paymentIncorrect).toBe(true);
+    // A stamp for a DIFFERENT order does not apply.
+    const stale = run({ ...m, triggerDvs: "Success", claimsStatus: "Payment Incorrect", authOverride: "2026-09-20T14:05 BE for 2026-06-01 — old" }).auth;
+    expect(stale.tone).toBe("bad");
+  });
+
+  it("an Auth Override does NOT rescue a hard denial", () => {
+    const m = { primaryInsurance: "Medicaid", orderDate: "2026-09-18", subscriptionType: "Supplies" as const, suppliesAuthStatus: "Required" };
+    const denied = run({ ...m, triggerDvs: "Success", claimsStatus: "Claims Denied", authOverride: "2026-09-20T14:05 BE for 2026-09-18 — try anyway" }).auth;
+    expect(denied.tone).toBe("bad");
+    expect(denied.light).toBeUndefined();
   });
 });
 

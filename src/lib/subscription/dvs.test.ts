@@ -93,10 +93,16 @@ describe("dvsState", () => {
         expect(dvsState({ ...base, triggerDvs: label }).kind).toBe("failed");
       }
     });
-    it("covers a stopped claim after a clean DVS", () => {
-      for (const c of ["Claims Denied", "Claims Error", "Payment Incorrect"]) {
+    it("covers a hard-stopped claim after a clean DVS", () => {
+      for (const c of ["Claims Denied", "Claims Error"]) {
         expect(dvsState({ ...base, triggerDvs: "Success", claimsStatus: c }).kind).toBe("failed");
       }
+    });
+    it("treats a Payment Incorrect claim as a light-red overridable stop, not a hard fail", () => {
+      // The claim paid the wrong amount — the operator reads the per-code
+      // payments and can ship anyway, so this is "underpaid", not "failed".
+      expect(dvsState({ ...base, triggerDvs: "Success", claimsStatus: "Payment Incorrect" }))
+        .toEqual({ kind: "underpaid", label: "Medicaid paid the wrong amount" });
     });
     it("surfaces an unrecognised Trigger DVS label instead of passing it", () => {
       expect(dvsState({ ...base, triggerDvs: "Something New" }))

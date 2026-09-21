@@ -126,6 +126,7 @@ export type RuleId =
   | "elig.primary-mismatch"
   | "auth.medicare-never"
   | "auth.plan-change"
+  | "auth.payment-override"
   | "claims.medicare-secondary-open"
   | "mr.expired-order-anyway"
   | "mr.expired-hard-stop"
@@ -269,6 +270,14 @@ export const RULES: readonly RuleDef[] = [
     when: "Insurance Change? is Yes",
     verdict: "block",
     source: "Runbook step 6, extended to every column-auth payer 2026-09-21 (Brandon) — the plan changed since the last order; the sensor auth has to be re-evaluated under the new plan (Child Health Plus needs one on Fidelis).",
+  },
+  {
+    id: "auth.payment-override",
+    check: "auth",
+    applies: "Medicaid (DVS), claim paid the wrong amount",
+    when: "An operator recorded an Auth Override for this order",
+    verdict: "pass",
+    source: "Brandon, 2026-09-21 — a Payment Incorrect claim is a judgement call; the operator reads the per-code payments and can ship anyway. Per order.",
   },
   {
     id: "claims.medicare-secondary-open",

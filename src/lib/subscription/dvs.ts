@@ -35,14 +35,21 @@ const DVS_STOPPED: Record<string, string> = {
   "MLTC": "Managed long-term care plan — DVS does not apply, bill the plan",
 };
 
-/** Claims Status labels that mean the claim stopped short of paying. */
+/** Claims Status labels where the claim stopped hard — a denial or an error.
+ *  Nobody orders through these; they need a human on the claim, not a one-click
+ *  override. Renders dark red. */
 const CLAIM_STOPPED: Record<string, string> = {
   "Claims Denied": "Medicaid claim denied",
   "Claims Error": "Medicaid claim errored",
-  "Payment Incorrect": "Medicaid paid the wrong amount",
 };
 
-/** The one Claims Status that clears a Medicaid order to ship. */
+/** The claim paid, but not the amount we billed. Unlike a denial this is a
+ *  judgement call — the boxes shipped and Medicaid paid *something*, so the
+ *  operator can look at the per-code payments and decide to ship anyway. Light
+ *  red, overridable (Brandon, 2026-09-21, re Benedicto Camilo). */
+const CLAIM_UNDERPAID = "Payment Incorrect";
+
+/** The one Claims Status that clears a Medicaid order to ship on its own. */
 const CLAIM_PAID = "Claims Paid";
 
 export type DvsState =
@@ -55,7 +62,10 @@ export type DvsState =
   | { kind: "running"; label: string }
   /** DVS clean AND the claim paid. This is the only green. */
   | { kind: "cleared"; label: string }
-  /** The run or the claim stopped. Red X — somebody has to go look. */
+  /** The claim paid the wrong amount. Light red X — a judgement call the
+   *  operator can override to ship, after reading the per-code payments. */
+  | { kind: "underpaid"; label: string }
+  /** The run or the claim stopped hard. Red X — somebody has to go look. */
   | { kind: "failed"; label: string };
 
 export interface DvsInputs {
@@ -101,6 +111,7 @@ export function dvsState(p: DvsInputs): DvsState {
   // the claim first means a paid claim clears the circle instead of hanging on
   // "…" behind a trigger label the automation never tidied up.
   if (claim === CLAIM_PAID) return { kind: "cleared", label: "DVS clear, claim paid" };
+  if (claim === CLAIM_UNDERPAID) return { kind: "underpaid", label: "Medicaid paid the wrong amount" };
   const claimStopped = CLAIM_STOPPED[claim];
   if (claimStopped) return { kind: "failed", label: claimStopped };
 

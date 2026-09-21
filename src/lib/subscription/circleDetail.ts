@@ -118,12 +118,17 @@ function defaultAction(kind: CheckpointKind, c: Checkpoint): CircleAction {
   if (c.tone === "ok") return "pause";
   if (kind === "confirmation") return "advance";
   if (kind === "benefits") return c.tone === "pending" ? "none" : "run-eligibility";
-  if (kind === "auth") return c.dvsNeeded ? "run-dvs" : "none";
+  if (kind === "auth") {
+    // A Payment Incorrect Medicaid claim is overridable — the operator reads
+    // the per-code payments below and can ship anyway.
+    if (c.paymentIncorrect) return "advance";
+    return c.dvsNeeded ? "run-dvs" : "none";
+  }
   return "none";
 }
 
 function ruleVerdict(c: Checkpoint, text?: string): CircleDetail["verdict"] | undefined {
-  if (c.ruleId === "confirm.override") return { kind: "overridden", text: text ?? c.why ?? "" };
+  if (c.ruleId === "confirm.override" || c.ruleId === "auth.payment-override") return { kind: "overridden", text: text ?? c.why ?? "" };
   if (!c.light || !c.why) return undefined;
   if (c.tone === "ok") return { kind: "advanced", text: text ?? c.why };
   if (c.tone === "pending") return { kind: "waiting", text: text ?? c.why };
@@ -176,8 +181,15 @@ export function describeCircle(kind: CheckpointKind, c: Checkpoint, p: P, today:
         const t = p.triggerDvs || "";
         if (c.dvsNeeded) {
           // The headline says it all; no fact line (Brandon, 2026-09-20).
-        } else if (c.tone === "ok") {
-          // Cleared: what each code paid, with a check when it's the full amount.
+        } else if (c.tone === "ok" || c.paymentIncorrect) {
+          // Cleared, or a Payment Incorrect claim (with or without an
+          // override): what each code paid, with a check when it's the full
+          // amount and a red x when it's short — that mismatch is the whole
+          // reason the circle is light red, so it has to be legible before the
+          // operator decides to override (Brandon, 2026-09-21).
+          if (c.paymentIncorrect && c.tone !== "ok" && p.claimsStatusCol) {
+            facts.push({ label: "Medicaid claim", value: p.claimsStatusCol, tone: "bad" });
+          }
           for (const r of [parseCodeResult("A4230", p.a4230Claim, p.infusionSet1Qty), parseCodeResult("A4232", p.a4232Claim, p.cartridgeQty)]) {
             if (!r) continue;
             facts.push({

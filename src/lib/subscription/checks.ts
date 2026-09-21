@@ -60,6 +60,10 @@ export interface CheckInputs {
    *  order day, the floor for every "since the last order" test. */
   orderFrequency?: string;
   confirmOverride: string;
+  /** Auth Override cell (text_mm7dj1kf) — per-order operator override for the
+   *  Authorization circle, e.g. a Medicaid claim that paid the wrong amount but
+   *  is OK to ship. Same stamp shape as Confirm Override. */
+  authOverride: string;
   // Eligibility
   active: string;
   runCheck: string;
@@ -393,8 +397,27 @@ export function deriveAuthorization(i: CheckInputs, group: PayerGroup, firstOrde
       case "needed":  baseline = { ...columnAuth(labels), dvsNeeded: true, medicaidDvs: true }; break;
       case "running": baseline = { tone: "pending", awaiting: true, label: dvs.label, medicaidDvs: true }; break;
       case "cleared": baseline = { tone: "ok",  label: dvs.label, medicaidDvs: true }; break;
+      // Payment Incorrect: the claim paid, just not the amount billed. Light
+      // red — the operator reads the per-code payments in the popover and can
+      // override to ship (Brandon, 2026-09-21). paymentIncorrect drives the
+      // per-code breakdown + the Order-anyway action in circleDetail.
+      case "underpaid": baseline = { tone: "bad", light: true, label: "Payment incorrect", detail: dvs.label, medicaidDvs: true, paymentIncorrect: true }; break;
       case "failed":  baseline = { tone: "bad", label: dvs.label, medicaidDvs: true }; break;
       default:        baseline = columnAuth(labels);
+    }
+    // The per-order override for a Payment Incorrect claim: it turns the circle
+    // light green with the reason on it, exactly like the Confirm override. The
+    // stamp names the order, so it stops applying once the order ships.
+    if (dvs.kind === "underpaid") {
+      const ov = stampFor(i.authOverride, i.orderDate);
+      if (ov) {
+        baseline = {
+          ...baseline, tone: "ok", light: true, ruleId: "auth.payment-override",
+          label: "Overridden", detail: undefined,
+          why: `Overridden by ${ov.initials} ${fmtStamp(ov)}${ov.reason ? ` — ${ov.reason}` : ""}`,
+          overrideReason: ov.reason || `Overridden by ${ov.initials}`,
+        };
+      }
     }
     return firstOrder ? firstOrderPass(baseline) : baseline;
   }

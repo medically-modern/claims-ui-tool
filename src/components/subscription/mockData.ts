@@ -79,6 +79,12 @@ export type Checkpoint = {
    *  day", not a real action item. Renders a small "M" overlay on the Auth
    *  circle so ops can ignore it at a glance. */
   medicaidDvs?: boolean;
+  /** Auth only: the Medicaid claim paid the wrong amount ("Payment Incorrect").
+   *  Light red and overridable — the popover shows what each code paid vs the
+   *  expected amount, plus an Order-anyway action. Stays true after an override
+   *  so the per-code breakdown is still shown behind the green check. See
+   *  lib/subscription/dvs.ts and circleDetail.ts. */
+  paymentIncorrect?: boolean;
 };
 
 export type SubscriptionType = "Sensors" | "Supplies" | "Sensors & Supplies";
