@@ -126,16 +126,21 @@ describe("Confirm — operator decisions for this order", () => {
 });
 
 describe("Eligibility — facility flags, Active?, then the payer's conditions", () => {
-  it("Deceased and Hospital/SNF are dark red for everyone", () => {
-    expect(run({ facilityFlags: "Deceased" }).benefits).toMatchObject({ tone: "bad", label: "Deceased" });
-    expect(run({ facilityFlags: "Hospital/SNF" }).benefits).toMatchObject({ tone: "bad", label: "Hospital/SNF" });
-    expect(run({ active: "Hospital / SNF" }).benefits).toMatchObject({ tone: "bad", label: "Hospital/SNF" });
+  it("Deceased / Hospital / SNF are dark red on Medicare A&B, ignored on other payers", () => {
+    const m = { primaryInsurance: "Medicare A&B", suggestedPrimary: "Medicare A&B" };
+    expect(run({ ...m, facilityFlags: "Deceased" }).benefits).toMatchObject({ tone: "bad", label: "Deceased" });
+    expect(run({ ...m, facilityFlags: "Hospital/SNF" }).benefits).toMatchObject({ tone: "bad", label: "Hospital/SNF" });
+    expect(run({ ...m, active: "Hospital / SNF" }).benefits).toMatchObject({ tone: "bad", label: "Hospital/SNF" });
+    // On a commercial payer the same flags don't touch the circle.
+    expect(run({ facilityFlags: "Deceased" }).benefits.tone).toBe("ok");
+    expect(run({ facilityFlags: "Hospital/SNF" }).benefits.tone).toBe("ok");
   });
-  it("Hospice: light green on Medicare A&B, light red elsewhere", () => {
+  it("Hospice: light green on Medicare A&B, ignored on other payers", () => {
     const m = run({ facilityFlags: "Hospice", primaryInsurance: "Medicare A&B", suggestedPrimary: "Medicare A&B" }).benefits;
     expect(m).toMatchObject({ tone: "ok", light: true, ruleId: "elig.hospice-medicare" });
     const o = run({ facilityFlags: "Hospice" }).benefits;
-    expect(o).toMatchObject({ tone: "bad", light: true, ruleId: "elig.hospice-other" });
+    expect(o.tone).toBe("ok");
+    expect(o.ruleId).toBeUndefined();
   });
   it("Inactive / Medicare Advantage are dark red; Failed is amber", () => {
     expect(run({ active: "Inactive" }).benefits.tone).toBe("bad");
@@ -149,14 +154,17 @@ describe("Eligibility — facility flags, Active?, then the payer's conditions",
   });
   it("Medicare freshness: Active but checked 12 days before the order → light red; 3 days → dark green", () => {
     const stale = run({ primaryInsurance: "Medicare A&B", suggestedPrimary: "Medicare A&B", lastEligibilityCheck: "2026-09-13" }).benefits;
-    expect(stale).toMatchObject({ tone: "bad", light: true, ruleId: "elig.medicare-freshness" });
+    expect(stale).toMatchObject({ tone: "bad", light: true, ruleId: "elig.freshness" });
     expect(stale.why).toContain("7 days");
     const fresh = run({ primaryInsurance: "Medicare A&B", suggestedPrimary: "Medicare A&B", lastEligibilityCheck: "2026-09-22" }).benefits;
     expect(fresh).toMatchObject({ tone: "ok" });
     expect(fresh.light).toBeUndefined();
   });
-  it("freshness is Medicare's rule only — a 40-day-old commercial check is dark green", () => {
-    expect(run({ lastEligibilityCheck: "2026-08-10" }).benefits.light).toBeUndefined();
+  it("freshness now applies to every payer — a 12-day-old commercial check is light red", () => {
+    const stale = run({ lastEligibilityCheck: "2026-09-13" }).benefits;
+    expect(stale).toMatchObject({ tone: "bad", light: true, ruleId: "elig.freshness" });
+    // A 6-day-old check (the clean default) is still fresh.
+    expect(run({}).benefits.tone).toBe("ok");
   });
   it("COB Other Primary Reported → light red, except on Medicaid", () => {
     expect(run({ cobCheck: "Other Primary Reported" }).benefits).toMatchObject({ tone: "bad", light: true, ruleId: "elig.cob-other-primary" });
@@ -187,7 +195,7 @@ describe("Authorization", () => {
   });
   it("Fidelis Low-Cost with a plan change → light red on a sensors patient, nothing on supplies-only", () => {
     const f = { primaryInsurance: "Fidelis Low-Cost", suggestedPrimary: "Fidelis Low-Cost", insuranceChange: "Yes" };
-    expect(run(f).auth).toMatchObject({ tone: "bad", light: true, ruleId: "auth.fidelis-plan-change" });
+    expect(run(f).auth).toMatchObject({ tone: "bad", light: true, ruleId: "auth.plan-change" });
     expect(run({ ...f, subscriptionType: "Supplies" }).auth.tone).toBe("ok");
     expect(run({ ...f, insuranceChange: "No" }).auth.tone).toBe("ok");
   });
@@ -251,7 +259,8 @@ describe("First orders — nothing holds them", () => {
   it("a column that says no outright still stands: Cancel, Inactive, Deceased", () => {
     expect(run({ ...first, patientOrderResponse: "Cancel" }).confirmation.tone).toBe("bad");
     expect(run({ ...first, active: "Inactive" }).benefits.tone).toBe("bad");
-    expect(run({ ...first, facilityFlags: "Deceased" }).benefits.tone).toBe("bad");
+    // Deceased is a Medicare-A&B facility flag now, so assert it there.
+    expect(run({ ...first, primaryInsurance: "Medicare A&B", suggestedPrimary: "Medicare A&B", facilityFlags: "Deceased" }).benefits.tone).toBe("bad");
   });
   it("a Medicaid first order still shows the DVS tick as a hint, but does not block", () => {
     const d = run({ ...first, primaryInsurance: "Medicaid", orderDate: "2026-09-18", subscriptionType: "Supplies", suppliesAuthStatus: "Required" });

@@ -270,29 +270,30 @@ export function deriveEligibility(i: CheckInputs, group: PayerGroup, firstOrder:
   const ff = i.facilityFlags.toLowerCase();
   const active = i.active;
 
-  // Facility flags win before any Active value: they describe billing-impact
-  // states that hold regardless of the policy's verdict.
+  // Facility flags only matter on Medicare A&B — they come from the Medicare
+  // eligibility response and describe billing-impact states. On every other
+  // payer they're irrelevant, so they never touch the circle (Brandon,
+  // 2026-09-21):
   //   Deceased     — never ship, never bill (Allan Blaer, 2026-07-22: the flag
   //                  was on the board, nothing surfaced it, an order shipped
   //                  and the claim is unsubmittable).
   //   Hospital/SNF — DME can't be separately billed during the stay.
-  //   Hospice      — a payer rule: billable on Medicare A&B with the GW
-  //                  modifier, a stop everywhere else until the path is checked.
-  if (ff.includes("deceased")) {
-    return { tone: "bad", label: "Deceased", detail: "Payer reported a date of death (or flag set by ops). Do not ship or bill." };
-  }
-  if (ff.includes("hospital") || /\bsnf\b/.test(ff) || /hospital|snf/i.test(active)) {
-    return { tone: "bad", label: "Hospital/SNF", detail: "Active admission — DME can't be separately billed during the stay." };
-  }
-  if (ff.includes("hospice")) {
-    const baseline: Checkpoint = {
-      tone: "warn", label: "Hospice",
-      detail: "Active hospice election — Medicare A&B bills with the GW modifier; other payers may deny.",
-    };
-    if (firstOrder) return firstOrderPass(baseline);
-    return group.eligibility.hospiceOk
-      ? ruled(baseline, "elig.hospice-medicare", { tone: "ok",  why: "Hospice is billable on Medicare A&B with the GW modifier" })
-      : ruled(baseline, "elig.hospice-other",    { tone: "bad", why: `Hospice on ${group.name === "Everyone else" ? i.primaryInsurance || "this payer" : group.name} — verify the billing path before shipping` });
+  //   Hospice      — billable on Medicare A&B with the GW modifier (light green).
+  if (group.id === "medicare") {
+    if (ff.includes("deceased")) {
+      return { tone: "bad", label: "Deceased", detail: "Payer reported a date of death (or flag set by ops). Do not ship or bill." };
+    }
+    if (ff.includes("hospital") || /\bsnf\b/.test(ff) || /hospital|snf/i.test(active)) {
+      return { tone: "bad", label: "Hospital/SNF", detail: "Active admission — DME can't be separately billed during the stay." };
+    }
+    if (ff.includes("hospice")) {
+      const baseline: Checkpoint = {
+        tone: "warn", label: "Hospice",
+        detail: "Active hospice election — Medicare A&B bills with the GW modifier.",
+      };
+      if (firstOrder) return firstOrderPass(baseline);
+      return ruled(baseline, "elig.hospice-medicare", { tone: "ok", why: "Hospice is billable on Medicare A&B with the GW modifier" });
+    }
   }
 
   // ── Baseline: the Active? column ─────────────────────────────────────────
@@ -338,9 +339,9 @@ export function deriveEligibility(i: CheckInputs, group: PayerGroup, firstOrder:
       const when = i.lastEligibilityCheck
         ? `last checked ${i.lastEligibilityCheck.slice(0, 10)}${f.ageDays != null ? ` (${f.ageDays} days before the ${f.dos} date of service)` : ""}`
         : "no check date recorded";
-      return ruled(baseline, "elig.medicare-freshness", {
+      return ruled(baseline, "elig.freshness", {
         tone: "bad",
-        why: `${group.name}: the check must be within ${e.freshnessDays} days of the date of service${e.sameMonth ? " and in the same month" : ""} — ${when}`,
+        why: `The eligibility check must be within ${e.freshnessDays} days of the date of service${e.sameMonth ? " and in the same month" : ""} — ${when}`,
         detail: "Active, but the check is too old for this order — re-run eligibility",
       });
     }
@@ -410,9 +411,9 @@ export function deriveAuthorization(i: CheckInputs, group: PayerGroup, firstOrde
     });
   }
   if (group.auth === "column-plan-change" && sensorsServed && /^yes$/i.test(i.insuranceChange)) {
-    return ruled(baseline, "auth.fidelis-plan-change", {
+    return ruled(baseline, "auth.plan-change", {
       tone: "bad",
-      why: `${group.name}: the plan changed since the last order — re-evaluate the sensor auth under the new plan (Child Health Plus needs one)`,
+      why: `${group.name}: the plan changed since the last order — re-evaluate the sensor auth under the new plan${group.id === "fidelis" ? " (Child Health Plus needs one)" : ""}`,
       detail: `Board says ${baseline.label}, but Insurance Change? is Yes — the auth belongs to the old plan`,
     });
   }

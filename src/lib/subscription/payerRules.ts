@@ -65,7 +65,7 @@ export const PAYER_GROUPS: readonly PayerGroup[] = [
     id: "medicaid",
     name: "Medicaid",
     payers: ["Medicaid"],
-    eligibility: { freshnessDays: null, sameMonth: false, cobCheck: false, primaryMatch: false, hospiceOk: false },
+    eligibility: { freshnessDays: 7, sameMonth: false, cobCheck: false, primaryMatch: false, hospiceOk: false },
     auth: "dvs",
     claims: { secondaryOpenOk: false },
     source: "Runbook step 4 — DVS per order, the paid claim is the gate. Verified live 2026-09-19.",
@@ -83,7 +83,7 @@ export const PAYER_GROUPS: readonly PayerGroup[] = [
     id: "fidelis",
     name: "Fidelis Low-Cost",
     payers: ["Fidelis Low-Cost"],
-    eligibility: { freshnessDays: null, sameMonth: false, cobCheck: true, primaryMatch: true, hospiceOk: false },
+    eligibility: { freshnessDays: 7, sameMonth: false, cobCheck: true, primaryMatch: true, hospiceOk: false },
     auth: "column-plan-change",
     claims: { secondaryOpenOk: false },
     source: "Runbook step 6 — Child Health Plus plans need a sensor auth; re-check when the plan changes.",
@@ -92,10 +92,10 @@ export const PAYER_GROUPS: readonly PayerGroup[] = [
     id: "commercial",
     name: "Everyone else",
     payers: [],
-    eligibility: { freshnessDays: null, sameMonth: false, cobCheck: true, primaryMatch: true, hospiceOk: false },
-    auth: "column",
+    eligibility: { freshnessDays: 7, sameMonth: false, cobCheck: true, primaryMatch: true, hospiceOk: false },
+    auth: "column-plan-change",
     claims: { secondaryOpenOk: false },
-    source: "Runbook steps 7–8 — commercial, Medicare Advantage and the long tail. Confirm is decided per patient (below), not per payer.",
+    source: "Runbook steps 7–8 — commercial, Medicare Advantage and the long tail. Auth follows the column and re-checks on plan change (Brandon, 2026-09-21). Confirm is decided per patient (below), not per payer.",
   },
 ] as const;
 
@@ -121,12 +121,11 @@ export type RuleId =
   | "confirm.gp-unknown"
   | "confirm.override"
   | "elig.hospice-medicare"
-  | "elig.hospice-other"
-  | "elig.medicare-freshness"
+  | "elig.freshness"
   | "elig.cob-other-primary"
   | "elig.primary-mismatch"
   | "auth.medicare-never"
-  | "auth.fidelis-plan-change"
+  | "auth.plan-change"
   | "claims.medicare-secondary-open"
   | "mr.expired-order-anyway"
   | "mr.expired-hard-stop"
@@ -226,26 +225,18 @@ export const RULES: readonly RuleDef[] = [
   {
     id: "elig.hospice-medicare",
     check: "benefits",
-    applies: "Medicare A&B",
+    applies: "Medicare A&B only (facility flags are irrelevant on every other payer)",
     when: "SNF/Hospice/Hospital/Deceased contains Hospice",
     verdict: "pass",
-    source: "Runbook step 5 — hospice is billable on Medicare A&B with the GW modifier.",
+    source: "Runbook step 5 — hospice is billable on Medicare A&B with the GW modifier. Hospital/SNF/Deceased are red on Medicare; on other payers these flags don't apply (Brandon, 2026-09-21).",
   },
   {
-    id: "elig.hospice-other",
+    id: "elig.freshness",
     check: "benefits",
-    applies: "Every payer except Medicare A&B",
-    when: "SNF/Hospice/Hospital/Deceased contains Hospice",
+    applies: "Every payer",
+    when: "Active? is Active but Last Eligibility Check is more than 7 days before the date of service (Medicare A&B also requires the same calendar month)",
     verdict: "block",
-    source: "Proposed — the billing path has to be verified before shipping. Was a warning; now a stop.",
-  },
-  {
-    id: "elig.medicare-freshness",
-    check: "benefits",
-    applies: "Medicare A&B",
-    when: "Active? is Active but Last Eligibility Check is more than 7 days before the date of service, or in a different calendar month",
-    verdict: "block",
-    source: "Runbook step 5, decided 2026-09-14 — an Aug 31 check does not cover a Sep 1 order.",
+    source: "Runbook step 5 (decided 2026-09-14); extended to every payer 2026-09-21 (Brandon) — a check older than 7 days doesn't cover the order.",
   },
   {
     id: "elig.cob-other-primary",
@@ -272,12 +263,12 @@ export const RULES: readonly RuleDef[] = [
     source: "Runbook step 5 — an authorization is never required on Medicare A&B.",
   },
   {
-    id: "auth.fidelis-plan-change",
+    id: "auth.plan-change",
     check: "auth",
-    applies: "Fidelis Low-Cost, sensors served",
+    applies: "Fidelis Low-Cost and Everyone else, sensors served",
     when: "Insurance Change? is Yes",
     verdict: "block",
-    source: "Runbook step 6 — the plan changed since the last order; the sensor auth has to be re-evaluated under the new plan (Child Health Plus needs one).",
+    source: "Runbook step 6, extended to every column-auth payer 2026-09-21 (Brandon) — the plan changed since the last order; the sensor auth has to be re-evaluated under the new plan (Child Health Plus needs one on Fidelis).",
   },
   {
     id: "claims.medicare-secondary-open",
