@@ -5,6 +5,7 @@
  */
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { AddressAutocomplete } from "./AddressAutocomplete";
 
 export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cn("text-[10px] font-semibold uppercase tracking-[.08em] text-muted-foreground", className)}>{children}</div>;
@@ -95,6 +96,28 @@ export function EditField({ label, value, onChange, type = "text", disabled, pla
       <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">{label}</span>
       <input className={INPUT} type={type} value={value} min={min} placeholder={placeholder} disabled={disabled}
         onChange={(e) => onChange(e.target.value)} aria-label={label} />
+    </label>
+  );
+}
+
+/** An address field with Google Places type-ahead (AddressAutocomplete). Fills
+ *  one formatted address string; picking a suggestion or typing both flow the
+ *  text back through onChange, so it drops into the same draft field EditField
+ *  would have. Degrades to a plain text input when the Maps key isn't set. */
+export function AddressEditField({ label, value, onChange, disabled, placeholder }: {
+  label: string; value: string; onChange: (v: string) => void; disabled?: boolean; placeholder?: string;
+}) {
+  return (
+    <label className="block min-w-0">
+      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">{label}</span>
+      <AddressAutocomplete
+        className={INPUT}
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        aria-label={label}
+        onChange={(r) => onChange(r.address)}
+      />
     </label>
   );
 }

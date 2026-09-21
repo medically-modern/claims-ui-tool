@@ -36,6 +36,9 @@ jobs:
           # Stedi-Monday backend (Railway) — used by POST /claims/mark-paid etc.
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
           VITE_ADMIN_API_KEY: ${{ secrets.VITE_ADMIN_API_KEY }}
+          # Google Places address autocomplete. Public client-side key, so it
+          # MUST be HTTP-referrer-restricted to the Pages domain in Google Cloud.
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
           # Surface the deployed commit in the UI so it's easy to tell which
           # build is live after a deploy. Short SHA + timestamp.
           VITE_BUILD_SHA: ${{ github.sha }}

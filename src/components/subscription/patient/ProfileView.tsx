@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { PAYER_OPTIONS } from "../mockData";
 import {
-  Chip, EditField, EditSelect, Eyebrow, Fact, Section, daysText, daysUntil, money, usDate,
+  AddressEditField, Chip, EditField, EditSelect, Eyebrow, Fact, Section, daysText, daysUntil, money, usDate,
 } from "./atoms";
 import type { ProfileDraft } from "./draft";
 
@@ -120,7 +120,7 @@ export function ProfileView({
             <Fact label="Email" className="min-w-0">{p.email ? <a className="inline-flex max-w-full items-center gap-1 text-primary hover:underline" href={`mailto:${p.email}`}><Mail className="h-3 w-3 shrink-0" /><span className="truncate" title={p.email}>{p.email}</span></a> : ""}</Fact>
           </div>
           <div className="mt-3">
-            <EditField label="Address" value={draft.address} onChange={(v) => setField("address", v)} />
+            <AddressEditField label="Address" value={draft.address} onChange={(v) => setField("address", v)} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3">
             <Fact label="Referral source">{p.referralSource}</Fact>
@@ -264,7 +264,7 @@ export function ProfileView({
             <Fact label="NPI"><span className="font-mono text-[12px]">{p.doctorNpi}</span></Fact>
           </div>
           <div className="mt-3">
-            <EditField label="Doctor address" value={draft.doctorAddress} onChange={(v) => setField("doctorAddress", v)} />
+            <AddressEditField label="Doctor address" value={draft.doctorAddress} onChange={(v) => setField("doctorAddress", v)} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
             <Fact label="Doctor phone">{p.doctorPhone}</Fact>
