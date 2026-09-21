@@ -301,7 +301,7 @@ function CircleEditPopover({
   const [inactiveOpen, setInactiveOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const { invalidate, markDvsRequested, markReviewed } = useInvalidateSubscription();
+  const { invalidate, markDvsRequested, markEligibilityRequested, markReviewed } = useInvalidateSubscription();
 
   // What the popover says is derived per circle from the live fields
   // (lib/subscription/circleDetail.ts). The button follows the verdict:
@@ -432,7 +432,8 @@ function CircleEditPopover({
           )}
           {d.action === "run-eligibility" && (
             <Button size="sm" variant="outline" className="w-full" disabled={saving}
-              onClick={() => void run(() => runEligibilityCheck(patient.mondayItemId))}>
+              onClick={() => void run(async () => { await runEligibilityCheck(patient.mondayItemId); markEligibilityRequested([patient.mondayItemId]); })}
+              title="Sets Run Check to Run on the board; Stedi answers within a minute and writes the verdict back">
               {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
               Run eligibility check
             </Button>
@@ -1584,7 +1585,7 @@ function OrderCycleWorkflow() {
   };
 
   // ── Batch action state ──
-  const { invalidate: invalidateSubscription, markDvsRequested } = useInvalidateSubscription();
+  const { invalidate: invalidateSubscription, markDvsRequested, markEligibilityRequested } = useInvalidateSubscription();
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchMsg, setBatchMsg] = useState<string | null>(null);
   // Per-row Send Order feedback: the header batchMsg pill is invisible
@@ -1652,6 +1653,9 @@ function OrderCycleWorkflow() {
     );
     const ok = results.filter((r) => r.status === "fulfilled").length;
     const failed = results.length - ok;
+    // Flip the circles to "…" for the ones that landed; the refetch confirms.
+    const okIds = cohort.filter((_, i) => results[i].status === "fulfilled").map((p) => p.mondayItemId);
+    markEligibilityRequested(okIds);
     setBatchMsg(failed === 0
       ? `Triggered ${ok} eligibility check${ok === 1 ? "" : "s"} ✓`
       : `Triggered ${ok}, ${failed} failed`);

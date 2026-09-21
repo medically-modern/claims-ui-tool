@@ -27,6 +27,19 @@ export function useInvalidateSubscription() {
         : p));
     void invalidate();
   };
+  /** Optimistic half of Run eligibility: the Eligibility circle flips to the
+   *  gray "Checking…" now, mirroring Run DVS, so the operator isn't staring at
+   *  an unchanged amber circle while Stedi answers. The refetch replaces the
+   *  guess with the real verdict a moment later (Brandon, 2026-09-21). */
+  const markEligibilityRequested = (itemIds: string[]) => {
+    if (!itemIds.length) return;
+    const ids = new Set(itemIds.map(String));
+    qc.setQueryData<LiveSubscriptionPatient[]>(SUBSCRIPTION_PATIENTS_QUERY_KEY, (rows) =>
+      rows?.map((p) => ids.has(String(p.mondayItemId))
+        ? { ...p, benefits: { ...p.benefits, tone: "pending", awaiting: true, label: "Checking…", detail: "Real-time check in flight", light: undefined, why: undefined, ruleId: undefined } }
+        : p));
+    void invalidate();
+  };
   /** Optimistic half of Mark reviewed: the badge flips now, the refetch
    *  confirms. (Undo just refetches — the unread summary isn't kept.) */
   const markReviewed = (itemId: string, label: string) => {
@@ -36,5 +49,5 @@ export function useInvalidateSubscription() {
         : p));
     void invalidate();
   };
-  return { invalidate, markDvsRequested, markReviewed };
+  return { invalidate, markDvsRequested, markEligibilityRequested, markReviewed };
 }
