@@ -75,7 +75,7 @@ import {
 import {
   BLOCK_REASON_GROUPS, BLOCK_REASONS, DEAD_REASONS, DEFAULT_CHECK_IN_DAYS,
   FORCED_DECISION_MISSES, LanePatient, ReasonFamily, addDaysIso, blockReasons,
-  checkInDue, checkInRequiredFor, getLane, isBlocked, isReady, needsReason,
+  checkInDue, getLane, isBlocked, isReady, needsReason,
   possiblyResolved, reasonFamily, reasonResolved, shipCandidate, todayIso,
 } from "@/lib/subscription/lanes";
 import {
@@ -998,7 +998,7 @@ export function BlockDialog({
 }) {
   const [reasons, setReasons] = useState<Set<string>>(new Set());
   const [note, setNote] = useState("");
-  const [checkIn, setCheckIn] = useState<string>(addDaysIso(DEFAULT_CHECK_IN_DAYS));
+  const [checkIn, setCheckIn] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1010,14 +1010,14 @@ export function BlockDialog({
     setReasons(new Set(blockReasons(patient)));
     setNote("");
     setConfirming(false);
-    setCheckIn(patient.checkInDate || addDaysIso(DEFAULT_CHECK_IN_DAYS));
+    setCheckIn(patient.checkInDate || "");
     setErr(null);
   }
   if (!patient) return null;
 
-  const needsCheckIn = checkInRequiredFor([...reasons]);
+  // Check-in date is optional now (Brandon, 2026-09-21) — a paused patient can
+  // sit with no check-in date; it just won't resurface in Check-ins due.
   const canSave = reasons.size > 0 && !saving
-    && (!needsCheckIn || !!checkIn)
     && (!reasons.has("Other") || note.trim().length > 0);
 
   const toggle = (r: string) => setReasons((prev) => {
@@ -1093,9 +1093,7 @@ export function BlockDialog({
 
           <div>
             <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
-              Check-in date {needsCheckIn
-                ? <span className="text-rose-600">* required for Waiting on Patient</span>
-                : <span className="normal-case tracking-normal">(suggested)</span>}
+              Check-in date <span className="normal-case tracking-normal">(optional)</span>
             </div>
             <Input
               type="date"
