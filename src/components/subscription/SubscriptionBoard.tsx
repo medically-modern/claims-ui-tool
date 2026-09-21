@@ -63,6 +63,8 @@ import { useNewOrders } from "@/hooks/subscription/useNewOrders";
 import { ORDER_GROUP_ID } from "@/api/queries/newOrders";
 import { useInvalidateSubscription } from "@/hooks/subscription/useInvalidateSubscription";
 import { useOrderingCycleSync } from "@/hooks/subscription/useOrderingCycleSync";
+import { useOrderGate } from "@/hooks/subscription/useOrderGate";
+import { isFirstOrder } from "@/lib/subscription/payerRules";
 import { describeSync } from "@/lib/subscription/orderingCycleSync";
 import { runEligibilityCheck, saveSubscriptionPatient, sendToOrder, writeOrderStamps } from "@/api/setSubscriptionPatient";
 import { bulkTriggerDvs } from "@/api/setDvsTrigger";
@@ -690,33 +692,46 @@ function ReviewAndSubmit({ p, mode, onSubmit, onPromote, sending, sent }: {
 }) {
   const ready = allChecksPass(p);
   const blockers = ready ? [] : blockingChecks(p);
+  // A first order that fails the arrival audit can't be sent to Order until the
+  // profile is fixed — hard block, with the reason on the button (Brandon,
+  // 2026-09-21). Only gates the send; the Order Prep "Ready to Order" promote is
+  // unaffected.
+  const prep = mode === "prep";
+  const first = isFirstOrder(p.orderType);
+  const gate = useOrderGate(p.mondayItemId, first);
+  const gateBlocked = !prep && !!gate && !gate.orderable;
+  const gateReason = gate?.blocking_reason
+    || gate?.findings.filter((f) => f.blocks_order).map((f) => `${f.label}: ${f.message}`).join("\n")
+    || "The first-order profile audit is blocking this order";
   // Sending with non-green circles takes a second, explicit click — the
   // first arms the button ("Send anyway?") for 4s. Ready tab only.
   const [armed, setArmed] = useState(false);
   const handle = () => {
+    if (gateBlocked) return;
     if (mode === "prep") { if (ready) onPromote?.(); return; }
     if (ready || armed) { setArmed(false); onSubmit(); return; }
     setArmed(true);
     setTimeout(() => setArmed(false), 4000);
   };
-  const prep = mode === "prep";
   return (
     <div className="flex items-center justify-end pl-4" onClick={(e) => e.stopPropagation()}>
       <Button
         size="sm"
         onClick={handle}
-        disabled={sending || sent || (prep && !ready)}
+        disabled={sending || sent || (prep && !ready) || gateBlocked}
         className={cn(
           "h-7 whitespace-nowrap px-2.5 text-[11px] font-semibold text-white shadow-sm transition-colors disabled:opacity-100",
           sending ? "bg-blue-600"
           : sent  ? "bg-emerald-600"
+          : gateBlocked ? "bg-rose-300 text-rose-900"
           : armed ? "bg-rose-600 hover:bg-rose-700"
           : ready ? "bg-emerald-700 hover:bg-emerald-800"
           : prep  ? "bg-slate-300 text-slate-600"
                   : "bg-slate-400 hover:bg-slate-500",
         )}
         title={
-          sending ? (prep ? "Writing Ordering Cycle = Ready to Order on Monday…" : "Writing Ordering Cycle = Order on Monday…")
+          gateBlocked ? `Can't send — first-order profile isn't ready:\n  ${gateReason}`
+          : sending ? (prep ? "Writing Ordering Cycle = Ready to Order on Monday…" : "Writing Ordering Cycle = Order on Monday…")
           : sent   ? (prep ? "Moved to Ready to Order" : "Sent — Monday automation now spawns the order")
           : armed  ? "Not all five checks are green — click again to send anyway"
           : ready  ? (prep ? "All five checks green — move to Ready to Order" : "All five checks green — send to Order")
@@ -1810,7 +1825,7 @@ function OrderCycleWorkflow() {
   const dvsSelectable =
     primary !== "blocked" && (phase === "overview" || (phase === "auth" && !dvsView));
   const dvsCandidates = useMemo(
-    () => (dvsSelectable ? rows.filter((p) => !!p.auth.dvsNeeded) : []),
+    () => (dvsSelectable ? rows.filter((p) => !!p.auth.dvsNeeded && !isFirstOrder(p.orderType)) : []),
     [rows, dvsSelectable],
   );
   const dvsEligible   = useMemo(() => dvsCandidates.filter(canRunDvs), [dvsCandidates]);
@@ -2313,14 +2328,32 @@ function OrderCycleWorkflow() {
 
 function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
   const t = (patient.orderType ?? "").trim();
+  const first = isFirstOrder(t);
+  // First orders are audited on arrival (deterministic profile check). The pill
+  // is normally dark blue; it turns red when the audit says the row isn't safe
+  // to order against, amber for advisory-only findings (Brandon, 2026-09-21).
+  const gate = useOrderGate(patient.mondayItemId, first);
   if (!t) return <span className="text-[11px] text-muted-foreground">—</span>;
-  const first = /first/i.test(t);
+  if (!first) {
+    return (
+      <span className="inline-flex items-center whitespace-nowrap rounded-full bg-slate-200 px-3 py-1 text-[12px] font-semibold text-slate-700">
+        Reorder
+      </span>
+    );
+  }
+  const tone = gate && !gate.orderable ? "red" : gate && gate.pill === "amber" ? "amber" : "blue";
+  const cls =
+    tone === "red"   ? "bg-rose-600 text-white"
+    : tone === "amber" ? "bg-amber-100 text-amber-800"
+    :                    "bg-blue-700 text-white";
+  const title = gate && gate.findings.length
+    ? gate.findings
+        .map((f) => `${f.severity === "ERROR" ? "⛔" : f.severity === "WARN" ? "⚠️" : "•"} ${f.label}: ${f.message}`)
+        .join("\n")
+    : undefined;
   return (
-    <span className={cn(
-      "inline-flex items-center whitespace-nowrap rounded-full px-3 py-1 text-[12px] font-semibold",
-      first ? "bg-fuchsia-100 text-fuchsia-700" : "bg-slate-200 text-slate-700",
-    )}>
-      {first ? "First Order" : "Reorder"}
+    <span title={title} className={cn("inline-flex items-center whitespace-nowrap rounded-full px-3 py-1 text-[12px] font-semibold", cls)}>
+      First Order
     </span>
   );
 }
@@ -2411,7 +2444,9 @@ function DvsSelectBox({
   onToggle: (id: string) => void;
   disabled?: boolean;
 }) {
-  if (!p.auth.dvsNeeded) return null;
+  // First orders arrive with the DVS and paid claim already done, so they never
+  // need a DVS run — no tick (Brandon, 2026-09-21).
+  if (!p.auth.dvsNeeded || isFirstOrder(p.orderType)) return null;
   const blocked = !canRunDvs(p);
   return (
     <Checkbox
