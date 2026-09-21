@@ -85,14 +85,21 @@ export function checkInRequiredFor(reasons: string[]): boolean {
 /** Default check-in horizon (days) suggested when blocking. */
 export const DEFAULT_CHECK_IN_DAYS = 14;
 
-/** Dead Reason labels (existing Monday dropdown) offered on churn. */
+/** Dead Reason labels (Monday dropdown dropdown_mm27mdkh) offered on churn.
+ *  Consolidated 2026-09-21 (Brandon): the six legacy labels were renamed in
+ *  place on Monday — Out-of-network insurance → OON Insurance, Stopped using →
+ *  Stopped using product, Must go to pharmacy → Pharmacy only, Too expensive →
+ *  Too Expensive — the unused "Inactive coverage" was dropped, and
+ *  "Responded Canceled" (was "Responded Cancel") is offered here. Because the
+ *  renames kept each label's id, already-churned patients carry over. */
 export const DEAD_REASONS = [
-  "Stopped using",
+  "Stopped using product",
   "Using other supplier",
-  "Must go to pharmacy",
-  "Out-of-network insurance",
-  "Too expensive",
-  "deceased",
+  "Pharmacy only",
+  "OON Insurance",
+  "Deceased",
+  "Too Expensive",
+  "Responded Canceled",
 ] as const;
 
 /** Misses of consecutive check-ins that force the renew-or-churn decision. */
