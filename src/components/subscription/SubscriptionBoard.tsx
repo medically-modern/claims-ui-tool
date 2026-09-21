@@ -23,6 +23,7 @@ import {
   MessageSquare, PauseCircle, Pencil, Phone, RefreshCw, RefreshCw as ReloadIcon, Search, Send,
   Server, Shield, Stethoscope, UserCog, Unlock, UserX, X,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -1600,7 +1601,6 @@ function OrderCycleWorkflow() {
 
   // ── Order Cycle v2 dialogs (block / check-in) ──
   const [blockTarget, setBlockTarget]     = useState<LanePatient | null>(null);
-  const [checkInTarget, setCheckInTarget] = useState<LanePatient | null>(null);
   const onBlockDone = (msg: string) => {
     setBatchMsg(msg);
     invalidateSubscription();
@@ -2214,8 +2214,16 @@ function OrderCycleWorkflow() {
           <BlockedTable
             rows={rows as LanePatient[]}
             onPatientClick={openPatient}
-            onCheckIn={(p) => setCheckInTarget(p)}
-            onEditBlock={(p) => setBlockTarget(p)}
+            onUnpause={async (p) => {
+              try {
+                const r = await unblockPatient(p.mondayItemId, { existingNote: p.blockNote });
+                if (r.failed.length) throw new Error(r.failed[0].error);
+                toast.success(`${p.name} unpaused`, { description: "Back to Active in the Order Cycle." });
+                invalidateSubscription();
+              } catch (e) {
+                toast.error("Couldn't unpause", { description: e instanceof Error ? e.message : String(e) });
+              }
+            }}
             onBlock={(p) => setBlockTarget(p as LanePatient)}
             sortKey={sortKey}
             sortDir={sortDir}
@@ -2275,12 +2283,6 @@ function OrderCycleWorkflow() {
         patient={blockTarget}
         open={!!blockTarget}
         onClose={() => setBlockTarget(null)}
-        onDone={onBlockDone}
-      />
-      <CheckInDialog
-        patient={checkInTarget}
-        open={!!checkInTarget}
-        onClose={() => setCheckInTarget(null)}
         onDone={onBlockDone}
       />
     </div>
@@ -2587,12 +2589,11 @@ function OverviewTable({
 const BLOCKED_GRID = "grid grid-cols-[180px_84px_150px_minmax(150px,0.9fr)_minmax(210px,1.5fr)_minmax(92px,0.7fr)_minmax(92px,0.7fr)_minmax(104px,0.7fr)_minmax(92px,0.7fr)_minmax(92px,0.7fr)_150px] gap-2";
 
 function BlockedTable({
-  rows, onPatientClick, onCheckIn, onEditBlock, onBlock, sortKey, sortDir, onSort,
+  rows, onPatientClick, onUnpause, onBlock, sortKey, sortDir, onSort,
 }: {
   rows: LanePatient[];
   onPatientClick: (p: SubscriptionPatient) => void;
-  onCheckIn: (p: LanePatient) => void;
-  onEditBlock: (p: LanePatient) => void;
+  onUnpause: (p: LanePatient) => Promise<void>;
   onBlock?: (p: SubscriptionPatient) => void;
   sortKey: OverviewSortKey;
   sortDir: "asc" | "desc";
@@ -2614,22 +2615,22 @@ function BlockedTable({
         <div className="text-right pr-2 normal-case">Actions</div>
       </div>
       {rows.map((p) => (
-        <BlockedRow key={p.mondayItemId} p={p} onPatientClick={onPatientClick} onCheckIn={onCheckIn} onEditBlock={onEditBlock} onBlock={onBlock} />
+        <BlockedRow key={p.mondayItemId} p={p} onPatientClick={onPatientClick} onUnpause={onUnpause} onBlock={onBlock} />
       ))}
     </div>
   );
 }
 
 function BlockedRow({
-  p, onPatientClick, onCheckIn, onEditBlock, onBlock,
+  p, onPatientClick, onUnpause, onBlock,
 }: {
   p: LanePatient;
   onPatientClick: (p: SubscriptionPatient) => void;
-  onCheckIn: (p: LanePatient) => void;
-  onEditBlock: (p: LanePatient) => void;
+  onUnpause: (p: LanePatient) => Promise<void>;
   onBlock?: (p: SubscriptionPatient) => void;
 }) {
   const missed = p.missedCheckIns ?? 0;
+  const [unpausing, setUnpausing] = useState(false);
   return (
     <div
       role="button"
@@ -2684,22 +2685,15 @@ function BlockedRow({
           <CheckpointCircle check={mrOf(p)} />
         </CircleEditPopover>
       </div>
-      <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
         <Button
           variant="outline" size="sm"
-          className="h-7 px-2.5 text-[11px] font-semibold"
-          onClick={() => onCheckIn(p)}
-          title="Record a check-in, unblock, or move to Not Active"
+          className="h-7 px-3 text-[11px] font-semibold border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+          disabled={unpausing}
+          onClick={async () => { setUnpausing(true); try { await onUnpause(p); } finally { setUnpausing(false); } }}
+          title="Unpause — move this patient back to Active in the Order Cycle"
         >
-          <CalendarClock className="mr-1 h-3 w-3" />Check-in
-        </Button>
-        <Button
-          variant="outline" size="sm"
-          className="h-7 px-2.5 text-[11px] font-semibold"
-          onClick={() => onEditBlock(p)}
-          title="Edit the block reason / note / check-in date"
-        >
-          <Pencil className="mr-1 h-3 w-3" />Edit
+          {unpausing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Unlock className="mr-1 h-3 w-3" />}Unpause
         </Button>
       </div>
     </div>
