@@ -229,11 +229,15 @@ function apiTone(s: string): Parameters<typeof pillClass>[0] {
 const numOf = (s: string) => { const n = Number(String(s).replace(/[^\d.-]/g, "")); return Number.isFinite(n) ? n : 0; };
 
 const OVERVIEW_HEADER = "sticky top-0 z-10 rounded-t-lg border-b bg-slate-100 px-4 py-2.5 text-[13px] font-bold tracking-normal text-slate-700 items-end";
-// Fixed / content-hugging tracks so the columns pack together left-to-right with
-// even gaps (no fr tracks ballooning the middle). Order Details, Shipment Status
-// and Courier Status sit close since they belong to the same sub-row; the extra
-// width falls off the right edge (Brandon, 2026-09-21).
-const OVERVIEW_GRID = "grid grid-cols-[160px_104px_fit-content(280px)_116px_fit-content(300px)_132px] gap-x-5";
+// Every column except Courier is a FIXED width, so each column starts at the
+// same x on every row and the Shipment / Cardinal pills line up in clean
+// vertical columns. Courier is the one flexible track (1fr) that absorbs the
+// slack, which fills the table to full width and pins Cardinal Status to the
+// right edge (Brandon, 2026-09-21).
+const OVERVIEW_GRID = "grid grid-cols-[168px_112px_300px_132px_minmax(220px,1fr)_150px] gap-x-6";
+// One sub-row inside the per-item columns: fixed height + vertical centering so
+// every sub-row is the same height and its pill/text aligns across columns.
+const CELL_ROW = "flex min-h-[26px] items-center";
 
 /** Title-case a category ("Infusion set" → "Infusion Set"). */
 const catLabel = (c: string) => c.replace(/\b\w/g, (m) => m.toUpperCase());
@@ -287,11 +291,15 @@ function overviewRows(r: NewOrderRow): OvRow[] {
       status: prodStatus(p, delivered), ship: p.ship,
     }));
   }
-  return orderCategories(r).map((c, idx) => ({
-    key: `c${idx}`, cat: c.category,
-    name: c.items.map((it) => `${it.name}${it.qty ? ` ${it.qty}` : ""}`).join(", ") || "—",
-    status: { label: "Pending", tone: "slate" },
-  }));
+  return orderCategories(r).flatMap((c, ci) =>
+    c.items.length
+      ? c.items.map((it, ii) => ({
+          key: `c${ci}-${ii}`, cat: c.category,
+          name: `${it.name}${it.qty ? ` ${it.qty}` : ""}`,
+          status: { label: "Pending", tone: "slate" as Tone },
+        }))
+      : [{ key: `c${ci}`, cat: c.category, name: "—", status: { label: "Pending", tone: "slate" as Tone } }],
+  );
 }
 
 /**
@@ -318,30 +326,43 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
             {r.deliveryDate && <div className="text-[11px] tabular-nums text-emerald-700">Delivered {fmtDate(r.deliveryDate)}</div>}
           </div>
         );
+        // Each column is one cell; the three per-item columns are stacks of
+        // fixed-height rows (CELL_ROW) with the same gap, so every sub-row is
+        // evenly spaced and item i lines up across Details / Shipment / Courier.
         return (
-          <div key={r.id} className={cn(OVERVIEW_GRID, "cursor-pointer border-b px-4 py-2.5 gap-y-1.5 items-center hover:bg-muted/40")} onClick={() => onOpen(r)}>
-            {detail.map((row, i) => (
-              <div key={row.key} className="contents">
-                {i === 0 ? patientCell : <div />}
-                {i === 0 ? dateCell : <div />}
-                {/* Order Details — "Category: Name ×qty", one line */}
-                <div className="text-[12px] leading-snug">
-                  {row.cat ? <><span className="font-semibold">{catLabel(row.cat)}:</span> {row.name}</> : row.name}
+          <div key={r.id} className={cn(OVERVIEW_GRID, "cursor-pointer border-b px-4 py-3 items-start hover:bg-muted/40")} onClick={() => onOpen(r)}>
+            {patientCell}
+            {dateCell}
+            {/* Order Details — "Category: Name ×qty", one line each, truncates */}
+            <div className="flex flex-col gap-y-2">
+              {detail.map((row) => (
+                <div key={row.key} className={cn(CELL_ROW, "min-w-0 truncate text-[12px]")} title={row.cat ? `${catLabel(row.cat)}: ${row.name}` : row.name}>
+                  {row.cat ? <span className="truncate"><span className="font-semibold">{catLabel(row.cat)}:</span> {row.name}</span> : row.name}
                 </div>
-                {/* Shipment Status — one blue DDP pill for DDP / pre-cutover orders */}
-                <div>{ddp ? (i === 0 ? <Pill label="DDP" tone="blue" /> : null) : <Pill label={row.status.label} tone={row.status.tone} />}</div>
-                {/* Courier Status — "Shipped <date>: <tracking>", one line */}
-                <div className="text-[12px] whitespace-nowrap">
+              ))}
+            </div>
+            {/* Shipment Status — one blue DDP pill for DDP / pre-cutover orders */}
+            <div className="flex flex-col gap-y-2">
+              {detail.map((row, i) => (
+                <div key={row.key} className={CELL_ROW}>
+                  {ddp ? (i === 0 ? <Pill label="DDP" tone="blue" /> : null) : <Pill label={row.status.label} tone={row.status.tone} />}
+                </div>
+              ))}
+            </div>
+            {/* Courier Status — "Shipped <date>: <tracking>", one line each */}
+            <div className="flex flex-col gap-y-2">
+              {detail.map((row) => (
+                <div key={row.key} className={cn(CELL_ROW, "text-[12px] whitespace-nowrap")}>
                   {!ddp && row.ship ? (
-                    <>
+                    <span>
                       <span className="tabular-nums text-muted-foreground">Shipped {fmtDate(row.ship.date)}: </span>
                       <a href={`https://www.google.com/search?q=${encodeURIComponent(row.ship.tracking)}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-primary hover:underline">{row.ship.carrier} {row.ship.tracking}</a>
-                    </>
+                    </span>
                   ) : null}
                 </div>
-                {i === 0 ? cardinalCell : <div />}
-              </div>
-            ))}
+              ))}
+            </div>
+            {cardinalCell}
           </div>
         );
       })}
