@@ -66,13 +66,16 @@ function isoPlusMonths(iso: string, months: number): string {
 }
 
 export function ProfileView({
-  p, draft, setField, firstOrderDate, ordersCount, runningElig, onRunEligibility, mondayUrl, files, filesLoading,
+  p, draft, setField, onAddressCoords, firstOrderDate, ordersCount, runningElig, onRunEligibility, mondayUrl, files, filesLoading,
 }: {
   p: LiveSubscriptionPatient;
   files: PatientFile[];
   filesLoading: boolean;
   draft: ProfileDraft;
   setField: <K extends keyof ProfileDraft>(k: K, v: ProfileDraft[K]) => void;
+  /** Report the coordinates of an address pick, so the save can set the Monday
+   *  pin (provenance). Manual typing reports 0/0. */
+  onAddressCoords?: (field: "address" | "doctorAddress", coords: { lat: number; lng: number }) => void;
   firstOrderDate: string;
   ordersCount: number;
   runningElig: boolean;
@@ -120,7 +123,7 @@ export function ProfileView({
             <Fact label="Email" className="min-w-0">{p.email ? <a className="inline-flex max-w-full items-center gap-1 text-primary hover:underline" href={`mailto:${p.email}`}><Mail className="h-3 w-3 shrink-0" /><span className="truncate" title={p.email}>{p.email}</span></a> : ""}</Fact>
           </div>
           <div className="mt-3">
-            <AddressEditField label="Address" value={draft.address} onChange={(v) => setField("address", v)} />
+            <AddressEditField label="Address" value={draft.address} onChange={(v, c) => { setField("address", v); onAddressCoords?.("address", c); }} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3">
             <Fact label="Referral source">{p.referralSource}</Fact>
@@ -264,7 +267,7 @@ export function ProfileView({
             <Fact label="NPI"><span className="font-mono text-[12px]">{p.doctorNpi}</span></Fact>
           </div>
           <div className="mt-3">
-            <AddressEditField label="Doctor address" value={draft.doctorAddress} onChange={(v) => setField("doctorAddress", v)} />
+            <AddressEditField label="Doctor address" value={draft.doctorAddress} onChange={(v, c) => { setField("doctorAddress", v); onAddressCoords?.("doctorAddress", c); }} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
             <Fact label="Doctor phone">{p.doctorPhone}</Fact>

@@ -59,6 +59,10 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
   const boardBase = useMemo(() => draftFrom(p), [p]);
   const base = savedBase ?? boardBase;
   const [draft, setDraft] = useState<ProfileDraft>(boardBase);
+  // Coordinates from an address pick, keyed by field. A Google Places pick sets
+  // real lat/lng; manual typing sets 0/0. Passed to the save so a confirmed
+  // address writes a Monday pin (provenance — Josh, 2026-09-21).
+  const [addrCoords, setAddrCoords] = useState<Record<string, { lat: number; lng: number }>>({});
   const [saving, setSaving] = useState(false);
   const [runningElig, setRunningElig] = useState(false);
   const [editPhone, setEditPhone] = useState(false);
@@ -69,6 +73,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
   useEffect(() => {
     setSavedBase(null);
     setDraft((d) => (isDirty(draftFrom(p), d) ? d : draftFrom(p)));
+    setAddrCoords({});
   }, [p]);
 
   const dirty = isDirty(base, draft);
@@ -92,7 +97,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
     if (!Object.keys(patch).length) { toast.message("Nothing to save."); return; }
     setSaving(true);
     try {
-      const r = await saveSubscriptionPatient(p.mondayItemId, patch);
+      const r = await saveSubscriptionPatient(p.mondayItemId, patch, addrCoords);
       if (r.failed.length === 0) toast.success(`Saved ${r.ok.length} field${r.ok.length === 1 ? "" : "s"} to Monday`);
       else toast.error(`Saved ${r.ok.length}, ${r.failed.length} failed`, { description: r.failed.map((f) => `${f.field}: ${f.error}`).slice(0, 3).join("\n"), duration: 12_000 });
       // What landed is the new baseline; fields that failed stay dirty.
@@ -101,6 +106,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
       for (const k of r.ok) landed[k] = written[k];
       setSavedBase({ ...(landed as unknown as ProfileDraft), visitDate: "" });
       setDraft((d) => ({ ...d, visitDate: "" }));
+      setAddrCoords({});
       setEditPhone(false);
       // Address fixed on the profile (Subscription Board) → also push whichever
       // address(es) changed onto the patient's open Order-group row and re-trigger
@@ -122,7 +128,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
       setSaving(false);
     }
   };
-  const reset = () => { setDraft(base); setEditPhone(false); };
+  const reset = () => { setDraft(base); setAddrCoords({}); setEditPhone(false); };
 
   // Run eligibility: blank → Run on the column, then poll the board every 10s
   // (up to 2 min) until the check lands — the answer shows up here without a
@@ -257,7 +263,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
 
         {view === "profile" && (
           <>
-            <ProfileView p={p} draft={draft} setField={setField} firstOrderDate={firstOrderDate} ordersCount={myOrders.length}
+            <ProfileView p={p} draft={draft} setField={setField} onAddressCoords={(f, c) => setAddrCoords((a) => ({ ...a, [f]: c }))} firstOrderDate={firstOrderDate} ordersCount={myOrders.length}
               runningElig={runningElig || !!eligWatch} onRunEligibility={() => void runElig()} mondayUrl={mondayUrl}
               files={files.files} filesLoading={files.loading} />
           </>

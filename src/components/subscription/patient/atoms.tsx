@@ -105,7 +105,11 @@ export function EditField({ label, value, onChange, type = "text", disabled, pla
  *  text back through onChange, so it drops into the same draft field EditField
  *  would have. Degrades to a plain text input when the Maps key isn't set. */
 export function AddressEditField({ label, value, onChange, disabled, placeholder }: {
-  label: string; value: string; onChange: (v: string) => void; disabled?: boolean; placeholder?: string;
+  label: string;
+  /** Fires with the address text and its coordinates. A Google Places pick
+   *  carries real lat/lng; manual typing gives 0/0 — the caller uses that as a
+   *  "human confirmed" signal (see writeLocation). */
+  value: string; onChange: (v: string, coords: { lat: number; lng: number }) => void; disabled?: boolean; placeholder?: string;
 }) {
   return (
     <label className="block min-w-0">
@@ -116,7 +120,7 @@ export function AddressEditField({ label, value, onChange, disabled, placeholder
         disabled={disabled}
         placeholder={placeholder}
         aria-label={label}
-        onChange={(r) => onChange(r.address)}
+        onChange={(r) => onChange(r.address, { lat: r.lat, lng: r.lng })}
       />
     </label>
   );

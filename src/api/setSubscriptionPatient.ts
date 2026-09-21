@@ -41,18 +41,29 @@ async function writeStatus(itemId: string, columnId: string, label: string) {
 const READ_COL = `query ReadCol($itemId: [ID!], $colId: [String!]) { items(ids: $itemId) { column_values(ids: $colId) { id value } } }`;
 /**
  * Location columns can't take plain text — Monday needs {lat, lng, address}.
- * An address fix is a reformat of the SAME place, so we keep the existing
- * coordinates and only swap the address text (Brandon, 2026-09-20). If the
- * column has no coordinates yet, we send the address alone as a best effort.
+ *
+ * Coordinates are a PROVENANCE signal, not decoration (Josh, 2026-09-21): a
+ * Google Places pick carries the real lat/lng, and downstream (Cardinal) reads
+ * "has a pin" as proof a human confirmed the address. So when the caller hands
+ * us fresh coords from a pick, we write those. A manual edit has no pick, so we
+ * keep the existing coordinates and only swap the address text (Brandon,
+ * 2026-09-20 — a manual fix is usually a reformat of the same place). If the
+ * column has no coordinates and none were picked, we send the address alone.
  */
-async function writeLocation(itemId: string, columnId: string, address: string) {
+async function writeLocation(itemId: string, columnId: string, address: string, coords?: { lat: number; lng: number }) {
   let lat: string | undefined, lng: string | undefined;
-  try {
-    const r = await mondayQuery<{ items: Array<{ column_values: Array<{ id: string; value: string | null }> }> }>(
-      READ_COL, { itemId: [itemId], colId: [columnId] });
-    const raw = r?.items?.[0]?.column_values?.[0]?.value;
-    if (raw) { const v = JSON.parse(raw); if (v && v.lat != null && v.lng != null) { lat = String(v.lat); lng = String(v.lng); } }
-  } catch { /* no current coords — fall through to address-only */ }
+  // A real US address is never at 0,0 — the component emits 0/0 for manual
+  // typing, so treat that as "no pick" and fall back to the existing pin.
+  if (coords && (coords.lat !== 0 || coords.lng !== 0)) {
+    lat = String(coords.lat); lng = String(coords.lng);
+  } else {
+    try {
+      const r = await mondayQuery<{ items: Array<{ column_values: Array<{ id: string; value: string | null }> }> }>(
+        READ_COL, { itemId: [itemId], colId: [columnId] });
+      const raw = r?.items?.[0]?.column_values?.[0]?.value;
+      if (raw) { const v = JSON.parse(raw); if (v && v.lat != null && v.lng != null) { lat = String(v.lat); lng = String(v.lng); } }
+    } catch { /* no current coords — fall through to address-only */ }
+  }
   const payload: Record<string, unknown> = { address };
   if (lat && lng) { payload.lat = lat; payload.lng = lng; }
   await mondayQuery(STATUS_MUT, { itemId, boardId: String(SUBSCRIPTION_BOARD_ID), columnId, value: JSON.stringify(payload) });
@@ -144,6 +155,10 @@ export interface SaveSummary {
 export async function saveSubscriptionPatient(
   mondayItemId: string,
   patch: Record<string, string>,
+  /** Fresh coordinates for location fields, keyed by field name (address,
+   *  doctorAddress). Present only when the operator picked a Google Places
+   *  suggestion; a manual edit passes none, so the existing pin is kept. */
+  coords?: Record<string, { lat: number; lng: number }>,
 ): Promise<SaveSummary> {
   const ok: string[] = [];
   const failed: SaveSummary["failed"] = [];
@@ -158,7 +173,7 @@ export async function saveSubscriptionPatient(
         const cfg = FIELD_MAP[field];
         if (!cfg) throw new Error(`No Monday column wired for field '${field}'`);
         if (cfg.mut === "status") await writeStatus(mondayItemId, cfg.col, value);
-        else if (cfg.mut === "location") await writeLocation(mondayItemId, cfg.col, value);
+        else if (cfg.mut === "location") await writeLocation(mondayItemId, cfg.col, value, coords?.[field]);
         else                       await writeSimple(mondayItemId, cfg.col, value);
       }
       ok.push(field);
