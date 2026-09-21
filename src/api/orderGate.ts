@@ -45,15 +45,19 @@ export function isOrderGateConfigured(): boolean {
   return !!(API_BASE && ADMIN_KEY);
 }
 
-export async function fetchOrderGate(itemId: string): Promise<OrderGate> {
+export async function fetchOrderGate(itemId: string, opts: { fresh?: boolean } = {}): Promise<OrderGate> {
   if (!API_BASE || !ADMIN_KEY) {
     throw new OrderGateError(
       "Order gate is not configured. Set VITE_API_BASE_URL and VITE_ADMIN_API_KEY at build time.",
     );
   }
+  // fresh=1 recomputes the audit and overwrites the stored verdict, instead of
+  // serving the cached one — the way to clear a stale red after the profile has
+  // been fixed (Brandon, 2026-09-21).
+  const qs = opts.fresh ? "?fresh=1" : "";
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/subscription/${encodeURIComponent(itemId)}/order-gate`, {
+    res = await fetch(`${API_BASE}/subscription/${encodeURIComponent(itemId)}/order-gate${qs}`, {
       headers: { "X-Admin-Key": ADMIN_KEY },
     });
   } catch (e) {

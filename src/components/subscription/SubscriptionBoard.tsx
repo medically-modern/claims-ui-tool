@@ -698,7 +698,7 @@ function ReviewAndSubmit({ p, mode, onSubmit, onPromote, sending, sent }: {
   // unaffected.
   const prep = mode === "prep";
   const first = isFirstOrder(p.orderType);
-  const gate = useOrderGate(p.mondayItemId, first);
+  const { gate } = useOrderGate(p.mondayItemId, first);
   const gateBlocked = !prep && !!gate && !gate.orderable;
   const gateReason = gate?.blocking_reason
     || gate?.findings.filter((f) => f.blocks_order).map((f) => `${f.label}: ${f.message}`).join("\n")
@@ -2293,7 +2293,7 @@ function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
   // First orders are audited on arrival (deterministic profile check). The pill
   // is normally dark blue; it turns red when the audit says the row isn't safe
   // to order against, amber for advisory-only findings (Brandon, 2026-09-21).
-  const gate = useOrderGate(patient.mondayItemId, first);
+  const { gate, recheck, rechecking } = useOrderGate(patient.mondayItemId, first);
   if (!t) return <span className="text-[11px] text-muted-foreground">—</span>;
   if (!first) {
     return (
@@ -2312,9 +2312,27 @@ function OrderTypePill({ patient }: { patient: SubscriptionPatient }) {
         .map((f) => `${f.severity === "ERROR" ? "⛔" : f.severity === "WARN" ? "⚠️" : "•"} ${f.label}: ${f.message}`)
         .join("\n")
     : undefined;
+  // A flagged pill (red/amber) can be stale — the audit's verdict is cached and
+  // only recomputes on a watched-column change or a forced re-check. So when the
+  // audit is holding the row, offer a re-check the operator can hit once they've
+  // fixed the profile, instead of waiting for a webhook (Brandon, 2026-09-21).
+  const flagged = tone !== "blue";
   return (
-    <span title={title} className={cn("inline-flex items-center whitespace-nowrap rounded-full px-3 py-1 text-[12px] font-semibold", cls)}>
-      First Order
+    <span className="inline-flex items-center gap-1">
+      <span title={title} className={cn("inline-flex items-center whitespace-nowrap rounded-full px-3 py-1 text-[12px] font-semibold", cls)}>
+        First Order
+      </span>
+      {flagged && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); recheck(); }}
+          disabled={rechecking}
+          title="Re-check the profile audit — use this after you've fixed what it flagged"
+          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", rechecking && "animate-spin")} />
+        </button>
+      )}
     </span>
   );
 }
