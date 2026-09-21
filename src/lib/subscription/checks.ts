@@ -64,6 +64,10 @@ export interface CheckInputs {
    *  Authorization circle, e.g. a Medicaid claim that paid the wrong amount but
    *  is OK to ship. Same stamp shape as Confirm Override. */
   authOverride: string;
+  /** Last Claim Paid Override cell (text_mm7djd06) — per-order operator override
+   *  for the Last Claim Paid circle, e.g. the last claim isn't recorded on the
+   *  board but is settled. Same stamp shape. */
+  lastPaidOverride: string;
   // Eligibility
   active: string;
   runCheck: string;
@@ -502,6 +506,22 @@ export function deriveLastPaid(i: CheckInputs, group: PayerGroup, firstOrder: bo
       tone: "ok",
       why: `${group.name}: the primary paid; an open secondary does not hold a reorder`,
     });
+  }
+
+  // ── The per-order override: the operator advances Last Claim Paid anyway ──
+  // (e.g. the claim posted in the PM but hasn't been recorded on the board).
+  // Scoped like the Auth override — clears just this circle, per order. Brandon,
+  // 2026-09-21.
+  if (baseline.tone !== "ok") {
+    const ov = stampFor(i.lastPaidOverride, i.orderDate);
+    if (ov) {
+      return {
+        ...baseline, tone: "ok", light: true, ruleId: "lastPaid.override",
+        label: "Overridden", detail: undefined,
+        why: `Overridden by ${ov.initials} ${fmtStamp(ov)}${ov.reason ? ` — ${ov.reason}` : ""}`,
+        overrideReason: ov.reason || `Overridden by ${ov.initials}`,
+      };
+    }
   }
   return baseline;
 }

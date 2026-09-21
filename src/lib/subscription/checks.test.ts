@@ -23,6 +23,7 @@ const CLEAN: CheckInputs = {
   correspondenceReviewed: "",
   confirmOverride: "",
   authOverride: "",
+  lastPaidOverride: "",
   active: "Active",
   runCheck: "",
   lastEligibilityError: "",
@@ -249,6 +250,20 @@ describe("Last claim paid", () => {
     expect(run({ primaryClaimPaid: "Partial" }).lastPaid.tone).toBe("warn");
     expect(run({ primaryClaimPaid: "Outstanding" }).lastPaid.tone).toBe("warn");
     expect(run({ primaryClaimPaid: "" }).lastPaid).toMatchObject({ tone: "warn", label: "Not recorded" });
+  });
+
+  it("a Last Claim Paid Override for this order clears the circle to light green", () => {
+    const ov = "2026-09-20T14:05 BE for 2026-09-25 — claim posted in the PM, not on the board yet";
+    // A not-recorded (amber) claim is advanced by the override.
+    expect(run({ primaryClaimPaid: "", lastPaidOverride: ov }).lastPaid)
+      .toMatchObject({ tone: "ok", light: true, ruleId: "lastPaid.override" });
+    // So is an amber outstanding one.
+    expect(run({ primaryClaimPaid: "Outstanding", lastPaidOverride: ov }).lastPaid.tone).toBe("ok");
+    // A stamp for a different order does not apply.
+    const stale = "2026-09-20T14:05 BE for 2026-01-01 — old";
+    expect(run({ primaryClaimPaid: "", lastPaidOverride: stale }).lastPaid.tone).toBe("warn");
+    // A clean claim needs no override and stays a plain dark green.
+    expect(run({ primaryClaimPaid: "Fully Paid", lastPaidOverride: ov }).lastPaid.light).toBeUndefined();
   });
 });
 

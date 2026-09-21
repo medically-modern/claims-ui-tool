@@ -128,6 +128,7 @@ export type RuleId =
   | "auth.plan-change"
   | "auth.payment-override"
   | "claims.medicare-secondary-open"
+  | "lastPaid.override"
   | "mr.expired-order-anyway"
   | "mr.expired-hard-stop"
   | "mr.blank";
@@ -278,6 +279,14 @@ export const RULES: readonly RuleDef[] = [
     when: "An operator recorded an Auth Override for this order",
     verdict: "pass",
     source: "Brandon, 2026-09-21 — a Payment Incorrect claim is a judgement call; the operator reads the per-code payments and can ship anyway. Per order.",
+  },
+  {
+    id: "lastPaid.override",
+    check: "lastPaid",
+    applies: "Any payer, last claim not settled on the board",
+    when: "An operator recorded a Last Claim Paid Override for this order",
+    verdict: "pass",
+    source: "Brandon, 2026-09-21 — the operator advances Last Claim Paid for this order (e.g. the claim posted in the PM but isn't on the board yet). Per order.",
   },
   {
     id: "claims.medicare-secondary-open",

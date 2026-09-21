@@ -124,11 +124,14 @@ function defaultAction(kind: CheckpointKind, c: Checkpoint): CircleAction {
     if (c.paymentIncorrect) return "advance";
     return c.dvsNeeded ? "run-dvs" : "none";
   }
+  // Last Claim Paid is overridable when it hasn't settled on the board — the
+  // operator advances just that circle with a reason (Brandon, 2026-09-21).
+  if (kind === "lastPaid") return "advance";
   return "none";
 }
 
 function ruleVerdict(c: Checkpoint, text?: string): CircleDetail["verdict"] | undefined {
-  if (c.ruleId === "confirm.override" || c.ruleId === "auth.payment-override") return { kind: "overridden", text: text ?? c.why ?? "" };
+  if (c.ruleId === "confirm.override" || c.ruleId === "auth.payment-override" || c.ruleId === "lastPaid.override") return { kind: "overridden", text: text ?? c.why ?? "" };
   if (!c.light || !c.why) return undefined;
   if (c.tone === "ok") return { kind: "advanced", text: text ?? c.why };
   if (c.tone === "pending") return { kind: "waiting", text: text ?? c.why };

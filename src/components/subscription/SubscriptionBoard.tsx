@@ -428,8 +428,10 @@ function CircleEditPopover({
           )}
           {d.action === "advance" && (
             <Button size="sm" className="w-full bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}
-              title="Override this circle for this order, with a reason">
-              <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Order anyway
+              title={kind === "auth" || kind === "lastPaid"
+                ? `Advance just the ${PHASE_LABELS[kind]} circle for this order, with a reason`
+                : "Override this circle for this order, with a reason"}>
+              <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> {kind === "auth" ? "Advance Authorization" : kind === "lastPaid" ? "Advance Last Claim Paid" : "Order anyway"}
             </Button>
           )}
           {d.action === "run-eligibility" && (
@@ -454,7 +456,7 @@ function CircleEditPopover({
           )}
         </div>
       </PopoverContent>
-      {(kind === "confirmation" || kind === "auth") && <AdvanceDialog kind={kind} patient={advanceOpen ? patient : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />}
+      {(kind === "confirmation" || kind === "auth" || kind === "lastPaid") && <AdvanceDialog kind={kind} patient={advanceOpen ? patient : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />}
       <InactiveDialog patient={inactiveOpen ? (patient as LiveSubscriptionPatient) : null} open={inactiveOpen} onClose={() => setInactiveOpen(false)} />
     </Popover>
   );

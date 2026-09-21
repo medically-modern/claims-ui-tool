@@ -247,9 +247,10 @@ export async function addSubscriptionNote(
  */
 export async function writeOrderStamps(
   mondayItemId: string,
-  stamps: { correspondenceReviewed?: string; confirmOverride?: string; authOverride?: string },
+  stamps: { correspondenceReviewed?: string; confirmOverride?: string; authOverride?: string; lastPaidOverride?: string },
 ): Promise<void> {
   if (stamps.correspondenceReviewed != null) await writeSimple(mondayItemId, SUB_COL.correspondence_reviewed, stamps.correspondenceReviewed);
   if (stamps.confirmOverride != null) await writeSimple(mondayItemId, SUB_COL.confirm_override, stamps.confirmOverride);
   if (stamps.authOverride != null) await writeSimple(mondayItemId, SUB_COL.auth_override, stamps.authOverride);
+  if (stamps.lastPaidOverride != null) await writeSimple(mondayItemId, SUB_COL.last_paid_override, stamps.lastPaidOverride);
 }
