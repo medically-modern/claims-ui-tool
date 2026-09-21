@@ -76,7 +76,7 @@ import {
   BLOCK_REASON_GROUPS, BLOCK_REASONS, DEAD_REASONS, DEFAULT_CHECK_IN_DAYS,
   FORCED_DECISION_MISSES, LanePatient, ReasonFamily, addDaysIso, blockReasons,
   checkInDue, getLane, isBlocked, isReady, needsReason,
-  possiblyResolved, reasonFamily, reasonResolved, shipCandidate, todayIso,
+  possiblyResolved, reasonFamily, shipCandidate, todayIso,
 } from "@/lib/subscription/lanes";
 import {
   BLOCKED_BY_OPTIONS, BlockedParty, CHECKPOINT_GATE, Checkpoint, CheckpointKind,
@@ -885,39 +885,6 @@ function ShipCandidateBadge({ patient }: { patient: SubscriptionPatient }) {
   );
 }
 
-/** Watching / Looks-resolved pill for the Blocked table (client-side watcher). */
-function ResolutionPill({ patient }: { patient: LanePatient }) {
-  if (needsReason(patient)) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
-        <AlertTriangle className="h-3 w-3" /> No reason set
-      </span>
-    );
-  }
-  if (possiblyResolved(patient)) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
-        <Bell className="h-3 w-3" /> Looks resolved
-      </span>
-    );
-  }
-  const signals = [...new Set(
-    blockReasons(patient)
-      .filter((r) => !reasonResolved(patient, r))
-      .map((r) => FAMILY_SIGNAL[reasonFamily(r)]),
-  )];
-  return (
-    <div className="space-y-0.5">
-      <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
-        <Clock className="h-3 w-3" /> Watching
-      </span>
-      {signals.length > 0 && (
-        <div className="text-[10px] text-muted-foreground leading-tight">{signals.join(" · ")}</div>
-      )}
-    </div>
-  );
-}
-
 /** Family display metadata — the explicit "which bucket" indicator. */
 const FAMILY_NAME: Record<ReasonFamily, string> = {
   insurance: "Insurance",
@@ -925,13 +892,6 @@ const FAMILY_NAME: Record<ReasonFamily, string> = {
   money:     "Money",
   patient:   "Patient",
   other:     "Manual",
-};
-const FAMILY_SIGNAL: Record<ReasonFamily, string> = {
-  insurance: "elig active?",
-  auth:      "auth valid?",
-  money:     "claims paid?",
-  patient:   "contact / check-in",
-  other:     "manual only",
 };
 function FamilyIcon({ fam, className }: { fam: ReasonFamily; className?: string }) {
   const cls = className ?? "h-3 w-3";
@@ -2251,10 +2211,13 @@ function OrderCycleWorkflow() {
         ) : primary === "blocked" ? (
           <BlockedTable
             rows={rows as LanePatient[]}
-            todayStr={todayStr}
             onPatientClick={openPatient}
             onCheckIn={(p) => setCheckInTarget(p)}
             onEditBlock={(p) => setBlockTarget(p)}
+            onBlock={(p) => setBlockTarget(p as LanePatient)}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={toggleSort}
           />
         ) : phase === "overview" ? (
           <OverviewTable
@@ -2583,116 +2546,118 @@ function OverviewTable({
  *   ⚠ No reason set  — Paused with no reason (data hygiene / triage)
  * Remainder sorted by check-in date (soonest first), then order date.
  */
+// The Paused tab mirrors the Order Prep table exactly (same header style, the
+// same five checkpoint circles, the row opens the profile), with ONE column
+// added before Confirm: Paused Reason, the reason pills tinted and prefixed by
+// family (ReasonChips) — Brandon, 2026-09-21. The parent sorts the rows before
+// they arrive, so the sortable headers work through the shared sort props. The
+// Check-in / Edit actions stay in a trailing column because managing paused
+// patients is the whole job of this tab.
+//
+// ⚠️ Grid written out in full, never interpolated (see OVERVIEW_GRID). Columns:
+// Patient · Order · Subscription · Primary Payer · Paused Reason · the five
+// checks · Actions.
+const BLOCKED_GRID = "grid grid-cols-[180px_84px_150px_minmax(150px,0.9fr)_minmax(210px,1.5fr)_minmax(92px,0.7fr)_minmax(92px,0.7fr)_minmax(104px,0.7fr)_minmax(92px,0.7fr)_minmax(92px,0.7fr)_150px] gap-2";
+
 function BlockedTable({
-  rows, todayStr, onPatientClick, onCheckIn, onEditBlock,
+  rows, onPatientClick, onCheckIn, onEditBlock, onBlock, sortKey, sortDir, onSort,
 }: {
   rows: LanePatient[];
-  todayStr: string;
   onPatientClick: (p: SubscriptionPatient) => void;
   onCheckIn: (p: LanePatient) => void;
   onEditBlock: (p: LanePatient) => void;
+  onBlock?: (p: SubscriptionPatient) => void;
+  sortKey: OverviewSortKey;
+  sortDir: "asc" | "desc";
+  onSort: (k: OverviewSortKey) => void;
 }) {
-  const resolved = rows.filter((p) => possiblyResolved(p));
-  const resolvedIds = new Set(resolved.map((p) => p.mondayItemId));
-  const dueCheck = rows.filter((p) => !resolvedIds.has(p.mondayItemId) && checkInDue(p, todayStr));
-  const dueIds = new Set(dueCheck.map((p) => p.mondayItemId));
-  const noReason = rows.filter((p) =>
-    !resolvedIds.has(p.mondayItemId) && !dueIds.has(p.mondayItemId) && needsReason(p));
-  const noReasonIds = new Set(noReason.map((p) => p.mondayItemId));
-  const rest = rows
-    .filter((p) => !resolvedIds.has(p.mondayItemId) && !dueIds.has(p.mondayItemId) && !noReasonIds.has(p.mondayItemId))
-    .sort((a, b) => (a.checkInDate || "9999").localeCompare(b.checkInDate || "9999")
-      || (a.nextOrderDate || "9999").localeCompare(b.nextOrderDate || "9999"));
-
-  const Section = ({ title, icon, tone, list }: {
-    title: string; icon: JSX.Element; tone: string; list: LanePatient[];
-  }) => list.length === 0 ? null : (
-    <>
-      <div className={cn("flex items-center gap-2 px-6 py-2 text-[11px] font-bold uppercase tracking-wider border-b", tone)}>
-        {icon}{title}<span className="tabular-nums">({list.length})</span>
-      </div>
-      {list.map((p) => <BlockedRow key={p.mondayItemId} p={p} onPatientClick={onPatientClick} onCheckIn={onCheckIn} onEditBlock={onEditBlock} />)}
-    </>
-  );
-
   return (
-    <div className="text-[13px]">
-      <div className={cn(BLOCKED_GRID, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground items-end")}>
-        <div>Patient</div>
-        <div>Order</div>
-        <div>Reason</div>
-        <div>Latest note</div>
-        <div>Check-in</div>
-        <div>Watcher</div>
-        <div className="text-right pr-2">Actions</div>
+    <div className="text-[13px] overflow-x-auto">
+      <div className={cn(BLOCKED_GRID, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[15px] font-bold tracking-normal text-slate-700 items-end")}>
+        <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
+        <div><SortableLabel label="Order"          k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
+        <div><SortableLabel label="Subscription"   k="subscriptionType" sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
+        <div><SortableLabel label="Primary Payer"  k="primaryPayer"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
+        <div>Paused Reason</div>
+        <div className="text-center"><SortableLabel label="Confirm"         k="confirmation" sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Eligibility"     k="benefits"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Authorization"   k="auth"         sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Last Claim Paid" k="lastPaid"     sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-center"><SortableLabel label="Medical Records" k="mr"           sortKey={sortKey} sortDir={sortDir} onClick={onSort} align="center" /></div>
+        <div className="text-right pr-2 normal-case">Actions</div>
       </div>
-      <Section
-        title="Looks resolved — review + unblock"
-        icon={<Bell className="h-3.5 w-3.5" />}
-        tone="bg-emerald-50 text-emerald-800 border-emerald-100"
-        list={resolved}
-      />
-      <Section
-        title="Check-ins due"
-        icon={<CalendarClock className="h-3.5 w-3.5" />}
-        tone="bg-amber-50 text-amber-800 border-amber-100"
-        list={dueCheck}
-      />
-      <Section
-        title="No reason set — triage"
-        icon={<AlertTriangle className="h-3.5 w-3.5" />}
-        tone="bg-rose-50 text-rose-700 border-rose-100"
-        list={noReason}
-      />
-      {rest.length > 0 && (resolved.length + dueCheck.length + noReason.length > 0) && (
-        <div className="flex items-center gap-2 px-6 py-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground bg-muted/40 border-b">
-          <Clock className="h-3.5 w-3.5" />Watching<span className="tabular-nums">({rest.length})</span>
-        </div>
-      )}
-      {rest.map((p) => <BlockedRow key={p.mondayItemId} p={p} onPatientClick={onPatientClick} onCheckIn={onCheckIn} onEditBlock={onEditBlock} />)}
+      {rows.map((p) => (
+        <BlockedRow key={p.mondayItemId} p={p} onPatientClick={onPatientClick} onCheckIn={onCheckIn} onEditBlock={onEditBlock} onBlock={onBlock} />
+      ))}
     </div>
   );
 }
 
-const BLOCKED_GRID = "grid grid-cols-[220px_110px_210px_minmax(160px,1fr)_150px_130px_210px] gap-4";
-
 function BlockedRow({
-  p, onPatientClick, onCheckIn, onEditBlock,
+  p, onPatientClick, onCheckIn, onEditBlock, onBlock,
 }: {
   p: LanePatient;
   onPatientClick: (p: SubscriptionPatient) => void;
   onCheckIn: (p: LanePatient) => void;
   onEditBlock: (p: LanePatient) => void;
+  onBlock?: (p: SubscriptionPatient) => void;
 }) {
-  // First line of the block note = the newest entry (append-prepends).
-  const latestNote = (p.blockNote ?? "").split("\n")[0] || "—";
   const missed = p.missedCheckIns ?? 0;
   return (
-    <div className={cn(BLOCKED_GRID, "border-b px-6 py-3.5 hover:bg-muted/30 transition-colors items-center")}>
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => { if (Date.now() < swallowRowClicksUntil) return; onPatientClick(p); }}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPatientClick(p); } }}
+      className={cn(BLOCKED_GRID, "border-b px-4 py-3.5 hover:bg-muted/30 transition-colors items-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset")}
+    >
       <button type="button" onClick={() => onPatientClick(p)} className="text-left">
-        <div className="text-[14px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">
-          {p.name}<OopBadge patient={p} /><FlagBadges patient={p} />
-        </div>
-        <div className="text-[11px] text-muted-foreground tabular-nums mt-0.5">
-          {p.phone}{p.blockedDate ? ` · blocked ${fmtDate(p.blockedDate)}` : ""}
+        <div className="text-[15px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">{p.name}<OopBadge patient={p} /><FlagBadges patient={p} /></div>
+        <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">
+          {p.blockedDate ? `blocked ${fmtDate(p.blockedDate)}` : ""}
           {missed > 0 && <span className="ml-1 text-rose-600 font-semibold">· {missed} missed</span>}
         </div>
       </button>
       <div>
         {p.nextOrderDate ? (
           <>
-            <div className="text-[13px] font-semibold tabular-nums">{fmtDate(p.nextOrderDate)}</div>
-            <div className="text-[11px] text-muted-foreground tabular-nums">
+            <div className="text-[15px] font-semibold tabular-nums">{fmtDate(p.nextOrderDate)}</div>
+            <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">
               {daysBetween(p.nextOrderDate) < 0 ? `${-daysBetween(p.nextOrderDate)}d ago` : `in ${daysBetween(p.nextOrderDate)}d`}
             </div>
           </>
-        ) : <span className="text-[11px] text-muted-foreground">—</span>}
+        ) : <span className="text-[12px] text-muted-foreground">—</span>}
       </div>
-      <div><ReasonChips patient={p} /></div>
-      <div className="text-[11px] text-muted-foreground truncate" title={p.blockNote || undefined}>{latestNote}</div>
-      <div><CheckInCell iso={p.checkInDate || undefined} /></div>
-      <div><ResolutionPill patient={p} /></div>
-      <div className="flex items-center justify-end gap-1.5">
+      <div><span className={SUB_TYPE_PILLS[p.subscriptionType]}>{p.subscriptionType}</span></div>
+      <div className="text-[14px] truncate">{p.primaryPayer}</div>
+      <div onClick={(e) => e.stopPropagation()}><ReasonChips patient={p} /></div>
+      <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+        <CircleEditPopover check={p.confirmation} kind="confirmation" patient={p} onBlockRequest={onBlock}>
+          <CheckpointCircle check={p.confirmation} />
+        </CircleEditPopover>
+      </div>
+      <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+        <CircleEditPopover check={p.benefits} kind="benefits" patient={p} onBlockRequest={onBlock}>
+          <CheckpointCircle check={p.benefits} />
+        </CircleEditPopover>
+      </div>
+      <div className="relative flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+        <CircleEditPopover check={p.auth} kind="auth" patient={p} onBlockRequest={onBlock}>
+          <CheckpointCircle check={p.auth} />
+        </CircleEditPopover>
+        <MetaPill check={p.auth} />
+      </div>
+      <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+        <CircleEditPopover check={p.lastPaid} kind="lastPaid" patient={p} onBlockRequest={onBlock}>
+          <CheckpointCircle check={p.lastPaid} />
+        </CircleEditPopover>
+      </div>
+      <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+        <CircleEditPopover check={mrOf(p)} kind="mr" patient={p} onBlockRequest={onBlock}>
+          <CheckpointCircle check={mrOf(p)} />
+        </CircleEditPopover>
+      </div>
+      <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
         <Button
           variant="outline" size="sm"
           className="h-7 px-2.5 text-[11px] font-semibold"
