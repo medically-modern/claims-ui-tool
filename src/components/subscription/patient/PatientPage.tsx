@@ -141,6 +141,13 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
   }, [eligWatch, p.lastEligibilityCheck, p.active, invalidate]);
 
   const runElig = async () => {
+    // The eligibility check runs against what's on Monday, not the local draft —
+    // so unsaved edits (e.g. a corrected insurance/member ID) wouldn't be used.
+    // Make the operator save first (Brandon, 2026-09-21).
+    if (dirty) {
+      toast.warning("Save your changes first", { description: "The eligibility check runs against Monday — save your unsaved edits before running it." });
+      return;
+    }
     setRunningElig(true);
     try {
       await runEligibilityCheck(p.mondayItemId);

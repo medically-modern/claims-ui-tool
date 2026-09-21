@@ -36,6 +36,7 @@ export const REASON_FAMILY: Record<string, ReasonFamily> = {
   // Auth/clinical — resolves when auth is valid for served categories
   "Need new auth":             "auth",
   "Patient needs dr appt":     "auth",
+  "Need updated MR":           "auth",
   // Money — resolves via the claim mirror columns
   "Last claim denied":         "money",
   "Still owes last invoice":   "money",
@@ -47,6 +48,8 @@ export const REASON_FAMILY: Record<string, ReasonFamily> = {
   "Hasn't received pump yet":  "patient",
   "OOP too expensive":         "patient",
   "Not using currently":       "patient",
+  "Changing addresses":        "patient",
+  "Other supplier has auth":   "patient",     // paused, not churned — we may pull the auth to us
   "Waiting on Patient":        "patient",     // legacy generic
   // Escape hatch — never auto-resolves, requires a note
   "Other":                     "other",
@@ -55,11 +58,12 @@ export const REASON_FAMILY: Record<string, ReasonFamily> = {
 /** Reasons offered in the Block dialog, grouped by family for display. */
 export const BLOCK_REASON_GROUPS: Array<{ family: ReasonFamily; label: string; reasons: string[] }> = [
   { family: "insurance", label: "Insurance", reasons: ["Inactive Insurance"] },
-  { family: "auth",      label: "Auth / Clinical", reasons: ["Need new auth", "Patient needs dr appt"] },
+  { family: "auth",      label: "Auth / Clinical", reasons: ["Need new auth", "Patient needs dr appt", "Need updated MR"] },
   { family: "money",     label: "Last Order Money", reasons: ["Last claim denied", "Still owes last invoice", "Last Order Unpaid"] },
   { family: "patient",   label: "Waiting on Patient", reasons: [
     "No confirmation", "Has enough supplies", "Hospital/SNF",
     "Hasn't received pump yet", "OOP too expensive", "Not using currently",
+    "Changing addresses", "Other supplier has auth",
   ] },
   { family: "other",     label: "Other", reasons: ["Other"] },
 ];
