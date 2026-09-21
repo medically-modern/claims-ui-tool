@@ -2530,7 +2530,7 @@ function OverviewTable({
         >
           <button type="button" onClick={() => onPatientClick(p)} className="text-left">
             <div className="text-[15px] font-semibold text-foreground flex items-center flex-wrap gap-y-0.5">{p.name}<PauseBadge patient={p} /><OopBadge patient={p} /><FlagBadges patient={p} /><ShipCandidateBadge patient={p} /></div>
-            <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">{p.phone}</div>
+            {(() => { const dob = (p as Partial<LiveSubscriptionPatient>).dob; return <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">{dob ? `DOB ${dob}` : ""}</div>; })()}
           </button>
           <div>
             <div className="text-[15px] font-semibold tabular-nums">{fmtDate(p.nextOrderDate)}</div>
