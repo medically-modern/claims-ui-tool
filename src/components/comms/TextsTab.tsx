@@ -16,12 +16,14 @@
  * memoises per number for the session — see lib/comms/cache.ts.
  */
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, CalendarClock, Loader2, PauseCircle, RefreshCw, Bell, Bot } from "lucide-react";
+import { AlertTriangle, CalendarClock, Loader2, PauseCircle, RefreshCw, Bell, Bot, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { isAuthed, onAuthChange } from "@/lib/comms/auth";
 import { SignInRequiredError } from "@/lib/comms/gateway";
 import { clearCommsCache, fetchedAt, getConversation } from "@/lib/comms/cache";
-import type { ConversationMessage, ConversationResult } from "@/lib/comms/messagingApi";
+import { sendMessage, type ConversationMessage, type ConversationResult } from "@/lib/comms/messagingApi";
 import { etDay, fmtDayLabel, fmtWhenET, senderColor, senderName } from "@/lib/comms/format";
 import { MessageAttachments } from "./MessageAttachments";
 import { SmsDeliveryNote } from "./SmsDeliveryNote";
@@ -139,13 +141,23 @@ function Bubble({ m }: { m: ConversationMessage }) {
   );
 }
 
-export function TextsTab({ phone, markers }: { phone: string; markers: TimelineMarker[] }) {
+export function TextsTab({ phone, markers, mondayItemId, canText = true }: {
+  phone: string;
+  markers: TimelineMarker[];
+  /** The patient's Monday item id, tied to the send for attribution (optional). */
+  mondayItemId?: string;
+  /** Board "Can Text" — when false, the composer is disabled (opted out). */
+  canText?: boolean;
+}) {
   const [authed, setAuthed] = useState(isAuthed());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [needSignIn, setNeedSignIn] = useState<string | null>(null);
   const [data, setData] = useState<ConversationResult | null>(null);
   const [at, setAt] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendErr, setSendErr] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => onAuthChange(() => setAuthed(isAuthed())), []);
@@ -172,6 +184,29 @@ export function TextsTab({ phone, markers }: { phone: string; markers: TimelineM
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setSendErr(null);
+    try {
+      await sendMessage(phone, text, mondayItemId);
+      setDraft("");
+      // A 200 means RingCentral accepted it, not that it arrived — so don't
+      // claim "sent". Refetch the thread; the new bubble's delivery note shows
+      // Queued / Sent / Delivered / SendingFailed as RingCentral reports it.
+      await load(true);
+    } catch (e) {
+      if (e instanceof SignInRequiredError) {
+        setNeedSignIn("The gateway didn't accept the current sign-in. Sign in again with your @medicallymodern.com account.");
+      } else {
+        setSendErr(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setSending(false);
     }
   };
 
@@ -252,6 +287,38 @@ export function TextsTab({ phone, markers }: { phone: string; markers: TimelineM
         )}
         <div ref={bottomRef} />
       </div>
+
+      {/* Composer. Enter sends; Shift+Enter is a newline. Disabled when the
+          board says Can Text = No — that's a patient opt-out, not a UI state. */}
+      {canText ? (
+        <div className="shrink-0 border-t bg-card p-2">
+          {sendErr && (
+            <div className="mb-1.5 flex items-start gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              <div>{sendErr}</div>
+            </div>
+          )}
+          <div className="flex items-end gap-2">
+            <Textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
+              placeholder="Write a text… (Enter to send, Shift+Enter for a new line)"
+              disabled={sending}
+              rows={1}
+              className="max-h-32 min-h-[38px] flex-1 resize-none text-[13px]"
+            />
+            <Button size="sm" className="h-9 px-3" onClick={() => void send()} disabled={sending || !draft.trim()} title="Send text">
+              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="shrink-0 border-t bg-rose-50 px-4 py-2 text-[11px] font-medium text-rose-800">
+          Can Text = No on the board — texting is disabled for this patient. Call instead.
+        </div>
+      )}
+
       <div className="flex shrink-0 items-center justify-between border-t bg-card px-4 py-2">
         <button
           type="button"

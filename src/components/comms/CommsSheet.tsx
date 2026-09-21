@@ -171,7 +171,7 @@ export function CommsSheet({
               </TabsTrigger>
             </TabsList>
             <TabsContent value="texts" className="mt-3 min-h-0 flex-1 data-[state=inactive]:hidden">
-              <TextsTab phone={phone} markers={markers} />
+              <TextsTab phone={phone} markers={markers} mondayItemId={patient.mondayItemId} canText={!/^no$/i.test((patient as { canText?: string }).canText || "")} />
             </TabsContent>
             <TabsContent value="calls" className="mt-3 min-h-0 flex-1 data-[state=inactive]:hidden">
               <CallsTab phone={phone} />

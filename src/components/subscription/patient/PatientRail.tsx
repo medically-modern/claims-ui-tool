@@ -180,7 +180,7 @@ export function PatientRail({ p, since }: { p: LiveSubscriptionPatient; since: S
         ) : !phone ? (
           <div className="grid h-full place-items-center p-6 text-center text-[12px] text-muted-foreground">Phone on file isn't a usable number: "{p.phone || "—"}".</div>
         ) : tab === "texts" ? (
-          <div className="h-full min-h-0"><TextsTab phone={phone} markers={markers} /></div>
+          <div className="h-full min-h-0"><TextsTab phone={phone} markers={markers} mondayItemId={p.mondayItemId} canText={!cannotText} /></div>
         ) : tab === "calls" ? (
           <div className="h-full min-h-0"><CallsTab phone={phone} sinceDay={lastOrderDay} sinceLabel={sinceLabel} /></div>
         ) : (
