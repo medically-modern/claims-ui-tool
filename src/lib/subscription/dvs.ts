@@ -93,6 +93,17 @@ export function dvsState(p: DvsInputs): DvsState {
   const trigger = String(p.triggerDvs ?? "").trim();
   const claim   = String(p.claimsStatus ?? "").trim();
 
+  // The claim is the end of the ladder: DVS runs, the claim goes out, the claim
+  // PAYS, then the order ships. Once the claim has actually paid, the order is
+  // cleared no matter what the Trigger DVS column still reads. The bot leaves
+  // stale in-flight labels behind — a row can sit at "Retry Queued" while its
+  // claim has already come back "Claims Paid" (Yameen Ali, 2026-09-21). Reading
+  // the claim first means a paid claim clears the circle instead of hanging on
+  // "…" behind a trigger label the automation never tidied up.
+  if (claim === CLAIM_PAID) return { kind: "cleared", label: "DVS clear, claim paid" };
+  const claimStopped = CLAIM_STOPPED[claim];
+  if (claimStopped) return { kind: "failed", label: claimStopped };
+
   if (!trigger) return { kind: "needed" };
   if (DVS_IN_FLIGHT.has(trigger)) {
     return { kind: "running", label: trigger === "Running" ? "DVS running" : "DVS requested" };
@@ -105,13 +116,10 @@ export function dvsState(p: DvsInputs): DvsState {
     return { kind: "failed", label: `Trigger DVS = "${trigger}"` };
   }
 
-  // DVS came back clean. For Medicaid that is only half the gate: the claim
-  // goes out on the DVS and has to PAY before the order ships (Brandon:
-  // "we get the dvs, we get paid, then we order"). So a clean DVS with a
-  // claim still out is "…", not a green light.
-  const claimStopped = CLAIM_STOPPED[claim];
-  if (claimStopped) return { kind: "failed", label: claimStopped };
-  if (claim === CLAIM_PAID) return { kind: "cleared", label: "DVS clear, claim paid" };
+  // DVS came back clean but the claim hasn't paid yet. For Medicaid that is
+  // only half the gate: the claim goes out on the DVS and has to PAY before the
+  // order ships (Brandon: "we get the dvs, we get paid, then we order"). So a
+  // clean DVS with a claim still out is "…", not a green light.
   return {
     kind: "running",
     label: claim ? `DVS clear — claim ${claim.toLowerCase()}` : "DVS clear — waiting on the claim",

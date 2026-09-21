@@ -76,6 +76,17 @@ describe("dvsState", () => {
       .toEqual({ kind: "cleared", label: "DVS clear, claim paid" });
   });
 
+  // Yameen Ali, 2026-09-21: the claim came back "Claims Paid" but the bot left
+  // Trigger DVS parked at "Retry Queued". The claim is the end of the ladder,
+  // so a paid claim clears the circle regardless of a stale in-flight trigger
+  // label — otherwise the row hangs on "…" for an order that's already good.
+  it("goes green on a paid claim even when Trigger DVS is a stale in-flight label", () => {
+    for (const t of ["Retry Queued", "Trigger DVS", "Running"]) {
+      expect(dvsState({ ...base, triggerDvs: t, claimsStatus: "Claims Paid" }))
+        .toEqual({ kind: "cleared", label: "DVS clear, claim paid" });
+    }
+  });
+
   describe("red X — somebody has to go look", () => {
     it("covers a stopped DVS", () => {
       for (const label of ["Failed", "Manual Review", "MLTC"]) {
