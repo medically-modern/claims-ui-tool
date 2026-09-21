@@ -31,7 +31,7 @@ import {
   monitorMergeTarget, orderCategories, orderStatusBorder, pillClass, posLabel, preCheckTone,
 } from "@/lib/subscription/orderBoard";
 import { mergeMonitorIntoSensors, placeOrder } from "@/api/setNewOrder";
-import { orderProductLines, orderProgress, type OrderStage, type ProductLine } from "@/lib/subscription/orderFulfillment";
+import { orderProductLines, type ProductLine } from "@/lib/subscription/orderFulfillment";
 import { useOpenPatient } from "./patient/openPatient";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -229,15 +229,17 @@ function apiTone(s: string): Parameters<typeof pillClass>[0] {
 const numOf = (s: string) => { const n = Number(String(s).replace(/[^\d.-]/g, "")); return Number.isFinite(n) ? n : 0; };
 
 const OVERVIEW_HEADER = "sticky top-0 z-10 rounded-t-lg border-b bg-slate-100 px-4 py-2.5 text-[13px] font-bold tracking-normal text-slate-700 items-end";
-// Every column except Courier is a FIXED width, so each column starts at the
-// same x on every row and the Shipment / Cardinal pills line up in clean
-// vertical columns. Courier is the one flexible track (1fr) that absorbs the
-// slack, which fills the table to full width and pins Cardinal Status to the
-// right edge (Brandon, 2026-09-21).
-const OVERVIEW_GRID = "grid grid-cols-[168px_112px_300px_132px_minmax(220px,1fr)_150px] gap-x-6";
+// Fixed-width columns so each starts at the same x on every row (pills line up
+// in clean vertical columns). Two flexible spacer tracks — one after Order Date,
+// one before Cardinal Status — split the leftover width evenly, so the
+// Details / Shipment / Courier group sits centered between Order Date and
+// Cardinal Status, and Cardinal is pinned to the right edge (Brandon,
+// 2026-09-21). Tracks: Patient, Date, spacer, Details, Shipment, Courier,
+// spacer, Cardinal.
+const OVERVIEW_GRID = "grid grid-cols-[176px_116px_1fr_300px_132px_300px_1fr_150px] gap-x-6";
 // One sub-row inside the per-item columns: fixed height + vertical centering so
 // every sub-row is the same height and its pill/text aligns across columns.
-const CELL_ROW = "flex min-h-[26px] items-center";
+const CELL_ROW = "flex min-h-[24px] items-center";
 
 /** Title-case a category ("Infusion set" → "Infusion Set"). */
 const catLabel = (c: string) => c.replace(/\b\w/g, (m) => m.toUpperCase());
@@ -263,22 +265,6 @@ function prodStatus(p: ProductLine, delivered: boolean): { label: string; tone: 
 const DDP_CUTOVER = "2026-06-30";
 const isDdpOrder = (r: NewOrderRow) => /ddp/i.test(r.ddpOrder) || (!!r.orderDate && r.orderDate < DDP_CUTOVER);
 
-/** Order-level shipment bucket, for the Shipment-status filter and sort. Ranked
- *  problems-first so "Shipment status" sort surfaces what needs attention. */
-const SHIP_BUCKET: Record<OrderStage, { label: string; rank: number }> = {
-  error:       { label: "Error", rank: 0 },
-  backordered: { label: "Backordered", rank: 1 },
-  partial:     { label: "Partially shipped", rank: 2 },
-  accepted:    { label: "Accepted", rank: 3 },
-  sent:        { label: "Sent", rank: 4 },
-  shipped:     { label: "Shipped", rank: 5 },
-  delivered:   { label: "Delivered", rank: 6 },
-};
-function shipBucket(r: NewOrderRow): { label: string; rank: number } {
-  if (isDdpOrder(r)) return { label: "DDP", rank: 8 };
-  return SHIP_BUCKET[orderProgress(r.lineItemDetail, r.apiStatus, r.deliveryDate).stage];
-}
-
 /** The order's detail rows: one per line item from the Line Item Detail (real
  *  SKU names + shipment), or — before Cardinal writes any detail — one per
  *  ordered category from the board. */
@@ -302,6 +288,23 @@ function overviewRows(r: NewOrderRow): OvRow[] {
   );
 }
 
+// The only real shipment statuses (the per-product pills), ranked problems-first
+// for the Shipment-status sort. An order matches a shipment filter if ANY of its
+// products has that status (Brandon, 2026-09-21).
+const SHIP_STATUSES = ["Backordered", "Pending", "Swapped", "Shipped", "Delivered", "DDP"] as const;
+const SHIP_RANK: Record<string, number> = Object.fromEntries(SHIP_STATUSES.map((s, i) => [s, i]));
+/** The set of shipment statuses present across an order's products. */
+function shipStatusSet(r: NewOrderRow): Set<string> {
+  if (isDdpOrder(r)) return new Set(["DDP"]);
+  return new Set(overviewRows(r).map((row) => row.status.label));
+}
+/** The order's most-urgent (lowest-rank) shipment status, for sorting. */
+function shipRank(r: NewOrderRow): number {
+  let best = 99;
+  for (const s of shipStatusSet(r)) best = Math.min(best, SHIP_RANK[s] ?? 99);
+  return best;
+}
+
 /**
  * One placed-orders list, one row PER line item. Columns read left→right as:
  * who + when, what the item is, its shipment status, its courier tracking, and
@@ -309,9 +312,9 @@ function overviewRows(r: NewOrderRow): OvRow[] {
  */
 function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOrderRow) => void }) {
   return (
-    <div className="text-[13px] overflow-x-auto">
+    <div className="text-[13px] max-h-[calc(100vh-215px)] overflow-auto">
       <div className={cn(OVERVIEW_GRID, OVERVIEW_HEADER)}>
-        <div>Patient</div><div>Order Date</div><div>Order Details</div><div>Shipment Status</div><div>Courier Status</div><div>Cardinal Status</div>
+        <div>Patient</div><div>Order Date</div><div /><div>Order Details</div><div>Shipment Status</div><div>Courier Status</div><div /><div>Cardinal Status</div>
       </div>
       {rows.map((r) => {
         const detail = overviewRows(r);
@@ -330,11 +333,12 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
         // fixed-height rows (CELL_ROW) with the same gap, so every sub-row is
         // evenly spaced and item i lines up across Details / Shipment / Courier.
         return (
-          <div key={r.id} className={cn(OVERVIEW_GRID, "cursor-pointer border-b px-4 py-3 items-start hover:bg-muted/40")} onClick={() => onOpen(r)}>
+          <div key={r.id} className={cn(OVERVIEW_GRID, "cursor-pointer border-b px-4 py-2.5 items-center hover:bg-muted/40")} onClick={() => onOpen(r)}>
             {patientCell}
             {dateCell}
+            <div />
             {/* Order Details — "Category: Name ×qty", one line each, truncates */}
-            <div className="flex flex-col gap-y-2">
+            <div className="flex flex-col gap-y-1">
               {detail.map((row) => (
                 <div key={row.key} className={cn(CELL_ROW, "min-w-0 truncate text-[12px]")} title={row.cat ? `${catLabel(row.cat)}: ${row.name}` : row.name}>
                   {row.cat ? <span className="truncate"><span className="font-semibold">{catLabel(row.cat)}:</span> {row.name}</span> : row.name}
@@ -342,7 +346,7 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
               ))}
             </div>
             {/* Shipment Status — one blue DDP pill for DDP / pre-cutover orders */}
-            <div className="flex flex-col gap-y-2">
+            <div className="flex flex-col gap-y-1">
               {detail.map((row, i) => (
                 <div key={row.key} className={CELL_ROW}>
                   {ddp ? (i === 0 ? <Pill label="DDP" tone="blue" /> : null) : <Pill label={row.status.label} tone={row.status.tone} />}
@@ -350,7 +354,7 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
               ))}
             </div>
             {/* Courier Status — "Shipped <date>: <tracking>", one line each */}
-            <div className="flex flex-col gap-y-2">
+            <div className="flex flex-col gap-y-1">
               {detail.map((row) => (
                 <div key={row.key} className={cn(CELL_ROW, "text-[12px] whitespace-nowrap")}>
                   {!ddp && row.ship ? (
@@ -362,6 +366,7 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
                 </div>
               ))}
             </div>
+            <div />
             {cardinalCell}
           </div>
         );
@@ -479,11 +484,11 @@ export function NewOrders() {
     for (const r of data) if (isPlaced(r) && r.apiStatus.trim()) set.add(r.apiStatus.trim());
     return [...set].sort();
   }, [data]);
-  // Shipment-status buckets present, ordered by their rank (problems first).
+  // Shipment statuses actually present, in rank order (problems first).
   const shipStatuses = useMemo(() => {
-    const seen = new Map<string, number>();
-    for (const r of data) if (isPlaced(r)) { const b = shipBucket(r); seen.set(b.label, b.rank); }
-    return [...seen.entries()].sort((a, b) => a[1] - b[1]).map(([label]) => label);
+    const present = new Set<string>();
+    for (const r of data) if (isPlaced(r)) for (const s of shipStatusSet(r)) present.add(s);
+    return SHIP_STATUSES.filter((s) => present.has(s));
   }, [data]);
 
   const rows = useMemo(() => {
@@ -494,7 +499,7 @@ export function NewOrders() {
     else if (view === "overview") {
       list = list.filter(isPlaced);
       if (apiFilter !== "all") list = list.filter((r) => r.apiStatus.trim() === apiFilter);
-      if (shipFilter !== "all") list = list.filter((r) => shipBucket(r).label === shipFilter);
+      if (shipFilter !== "all") list = list.filter((r) => shipStatusSet(r).has(shipFilter));
     }
     if (q) list = list.filter((r) => r.name.toLowerCase().includes(q) || r.memberId.toLowerCase().includes(q) || r.id.includes(q));
     if (view === "order" && preCheckFilter === "ready") list = list.filter((r) => r.preCheck.trim().toLowerCase().startsWith("good to go"));
@@ -511,7 +516,7 @@ export function NewOrders() {
       switch (sortKey) {
         case "date-asc":  return byDate(a, b, 1);
         case "name":      return a.name.localeCompare(b.name);
-        case "ship":      return shipBucket(a).rank - shipBucket(b).rank || byDate(a, b, -1);
+        case "ship":      return shipRank(a) - shipRank(b) || byDate(a, b, -1);
         case "cardinal":  return a.apiStatus.trim().localeCompare(b.apiStatus.trim()) || byDate(a, b, -1);
         default:          return byDate(a, b, -1);
       }
