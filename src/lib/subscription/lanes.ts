@@ -39,8 +39,10 @@ export const REASON_FAMILY: Record<string, ReasonFamily> = {
   "Need updated MR":           "auth",
   // Money — resolves via the claim mirror columns
   "Last claim denied":         "money",
-  "Still owes last invoice":   "money",
-  "Last Order Unpaid":         "money",       // generic (e.g. claim unresolved)
+  "Patient co-insurance unpaid": "money",
+  "Last claim outstanding":    "money",
+  "Still owes last invoice":   "money",       // legacy label, renamed → Patient co-insurance unpaid
+  "Last Order Unpaid":         "money",       // legacy label, renamed → Last claim outstanding
   // Waiting on patient — resolves via inbound contact or check-in date
   "No confirmation":           "patient",
   "Has enough supplies":       "patient",
@@ -59,7 +61,7 @@ export const REASON_FAMILY: Record<string, ReasonFamily> = {
 export const BLOCK_REASON_GROUPS: Array<{ family: ReasonFamily; label: string; reasons: string[] }> = [
   { family: "insurance", label: "Insurance", reasons: ["Inactive Insurance"] },
   { family: "auth",      label: "Auth / Clinical", reasons: ["Need new auth", "Patient needs dr appt", "Need updated MR"] },
-  { family: "money",     label: "Last Order Money", reasons: ["Last claim denied", "Still owes last invoice", "Last Order Unpaid"] },
+  { family: "money",     label: "Last Order Money", reasons: ["Last claim denied", "Patient co-insurance unpaid", "Last claim outstanding"] },
   { family: "patient",   label: "Waiting on Patient", reasons: [
     "No confirmation", "Has enough supplies", "Hospital/SNF",
     "Hasn't received pump yet", "OOP too expensive", "Not using currently",
