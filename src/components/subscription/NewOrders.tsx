@@ -31,7 +31,7 @@ import {
   monitorMergeTarget, orderCategories, orderStatusBorder, pillClass, posLabel, preCheckTone,
 } from "@/lib/subscription/orderBoard";
 import { mergeMonitorIntoSensors, placeOrder } from "@/api/setNewOrder";
-import { fulfillmentOf, orderProductLines, type ProductLine } from "@/lib/subscription/orderFulfillment";
+import { orderProductLines, orderProgress, type OrderStage, type ProductLine } from "@/lib/subscription/orderFulfillment";
 import { useOpenPatient } from "./patient/openPatient";
 import { useSubscriptionPatients } from "@/hooks/subscription/useSubscriptionPatients";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -228,8 +228,12 @@ function apiTone(s: string): Parameters<typeof pillClass>[0] {
 }
 const numOf = (s: string) => { const n = Number(String(s).replace(/[^\d.-]/g, "")); return Number.isFinite(n) ? n : 0; };
 
-const OVERVIEW_HEADER = "sticky top-0 z-10 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[13px] font-bold tracking-normal text-slate-700 items-end";
-const OVERVIEW_GRID = "grid grid-cols-[168px_82px_minmax(210px,1.2fr)_118px_minmax(240px,1.4fr)_128px] gap-x-3";
+const OVERVIEW_HEADER = "sticky top-0 z-10 rounded-t-lg border-b bg-slate-100 px-4 py-2.5 text-[13px] font-bold tracking-normal text-slate-700 items-end";
+// Fixed / content-hugging tracks so the columns pack together left-to-right with
+// even gaps (no fr tracks ballooning the middle). Order Details, Shipment Status
+// and Courier Status sit close since they belong to the same sub-row; the extra
+// width falls off the right edge (Brandon, 2026-09-21).
+const OVERVIEW_GRID = "grid grid-cols-[160px_104px_fit-content(280px)_116px_fit-content(300px)_132px] gap-x-5";
 
 /** Title-case a category ("Infusion set" → "Infusion Set"). */
 const catLabel = (c: string) => c.replace(/\b\w/g, (m) => m.toUpperCase());
@@ -247,6 +251,28 @@ function prodStatus(p: ProductLine, delivered: boolean): { label: string; tone: 
   if (p.state === "backordered") return { label: "Backordered", tone: "red" };
   if (p.state === "shipped") return delivered ? { label: "Delivered", tone: "green" } : { label: "Shipped", tone: "blue" };
   return { label: "Pending", tone: "slate" };
+}
+
+// Orders placed before Cardinal went live, and any DDP order, have no Cardinal
+// shipment tracking — they show a single blue "DDP" pill instead of per-product
+// shipment statuses (Brandon, 2026-09-21).
+const DDP_CUTOVER = "2026-06-30";
+const isDdpOrder = (r: NewOrderRow) => /ddp/i.test(r.ddpOrder) || (!!r.orderDate && r.orderDate < DDP_CUTOVER);
+
+/** Order-level shipment bucket, for the Shipment-status filter and sort. Ranked
+ *  problems-first so "Shipment status" sort surfaces what needs attention. */
+const SHIP_BUCKET: Record<OrderStage, { label: string; rank: number }> = {
+  error:       { label: "Error", rank: 0 },
+  backordered: { label: "Backordered", rank: 1 },
+  partial:     { label: "Partially shipped", rank: 2 },
+  accepted:    { label: "Accepted", rank: 3 },
+  sent:        { label: "Sent", rank: 4 },
+  shipped:     { label: "Shipped", rank: 5 },
+  delivered:   { label: "Delivered", rank: 6 },
+};
+function shipBucket(r: NewOrderRow): { label: string; rank: number } {
+  if (isDdpOrder(r)) return { label: "DDP", rank: 8 };
+  return SHIP_BUCKET[orderProgress(r.lineItemDetail, r.apiStatus, r.deliveryDate).stage];
 }
 
 /** The order's detail rows: one per line item from the Line Item Detail (real
@@ -281,6 +307,7 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
       </div>
       {rows.map((r) => {
         const detail = overviewRows(r);
+        const ddp = isDdpOrder(r);
         const patientCell = (
           <div className="min-w-0"><div className="font-semibold truncate">{r.name}</div>{r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}</div>
         );
@@ -292,7 +319,7 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
           </div>
         );
         return (
-          <div key={r.id} className={cn(OVERVIEW_GRID, "cursor-pointer border-b px-4 py-3 gap-y-2 items-start hover:bg-muted/40")} onClick={() => onOpen(r)}>
+          <div key={r.id} className={cn(OVERVIEW_GRID, "cursor-pointer border-b px-4 py-2.5 gap-y-1.5 items-center hover:bg-muted/40")} onClick={() => onOpen(r)}>
             {detail.map((row, i) => (
               <div key={row.key} className="contents">
                 {i === 0 ? patientCell : <div />}
@@ -301,11 +328,11 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
                 <div className="text-[12px] leading-snug">
                   {row.cat ? <><span className="font-semibold">{catLabel(row.cat)}:</span> {row.name}</> : row.name}
                 </div>
-                {/* Shipment Status */}
-                <div><Pill label={row.status.label} tone={row.status.tone} /></div>
+                {/* Shipment Status — one blue DDP pill for DDP / pre-cutover orders */}
+                <div>{ddp ? (i === 0 ? <Pill label="DDP" tone="blue" /> : null) : <Pill label={row.status.label} tone={row.status.tone} />}</div>
                 {/* Courier Status — "Shipped <date>: <tracking>", one line */}
                 <div className="text-[12px] whitespace-nowrap">
-                  {row.ship ? (
+                  {!ddp && row.ship ? (
                     <>
                       <span className="tabular-nums text-muted-foreground">Shipped {fmtDate(row.ship.date)}: </span>
                       <a href={`https://www.google.com/search?q=${encodeURIComponent(row.ship.tracking)}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-primary hover:underline">{row.ship.carrier} {row.ship.tracking}</a>
@@ -392,10 +419,11 @@ export function NewOrders() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [orderingId, setOrderingId] = useState<string | null>(null);
   const [bulkOrdering, setBulkOrdering] = useState(false);
-  // Overview is one placed-orders list (both post-send groups), filterable by
-  // API status and backordered (Brandon, 2026-09-20).
+  // Overview is one placed-orders list (both post-send groups), filterable and
+  // sortable by shipment status and Cardinal (API) status (Brandon, 2026-09-21).
   const [apiFilter, setApiFilter] = useState("all");
-  const [boOnly, setBoOnly] = useState(false);
+  const [shipFilter, setShipFilter] = useState("all");
+  const [sortKey, setSortKey] = useState<"date-desc" | "date-asc" | "name" | "ship" | "cardinal">("date-desc");
   const [createOpen, setCreateOpen] = useState(false);
   const lastIdx = useRef<number | null>(null);
 
@@ -423,11 +451,18 @@ export function NewOrders() {
 
   const returnsCount = useMemo(() => data.filter((r) => r.groupId === RETURNS_GROUP_ID).length, [data]);
   const overviewCount = useMemo(() => data.filter((r) => r.groupId === ACCEPTED_PARTIAL_GROUP_ID || r.groupId === SHIPPED_DELIVERED_GROUP_ID).length, [data]);
-  // The API-status values actually present in the placed-orders universe.
+  // The status values actually present in the placed-orders universe.
+  const isPlaced = (r: NewOrderRow) => r.groupId === ACCEPTED_PARTIAL_GROUP_ID || r.groupId === SHIPPED_DELIVERED_GROUP_ID;
   const apiStatuses = useMemo(() => {
     const set = new Set<string>();
-    for (const r of data) if ((r.groupId === ACCEPTED_PARTIAL_GROUP_ID || r.groupId === SHIPPED_DELIVERED_GROUP_ID) && r.apiStatus.trim()) set.add(r.apiStatus.trim());
+    for (const r of data) if (isPlaced(r) && r.apiStatus.trim()) set.add(r.apiStatus.trim());
     return [...set].sort();
+  }, [data]);
+  // Shipment-status buckets present, ordered by their rank (problems first).
+  const shipStatuses = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const r of data) if (isPlaced(r)) { const b = shipBucket(r); seen.set(b.label, b.rank); }
+    return [...seen.entries()].sort((a, b) => a[1] - b[1]).map(([label]) => label);
   }, [data]);
 
   const rows = useMemo(() => {
@@ -436,20 +471,31 @@ export function NewOrders() {
     if (view === "order") list = list.filter((r) => r.groupId === ORDER_GROUP_ID);
     else if (view === "returns") list = list.filter((r) => r.groupId === RETURNS_GROUP_ID);
     else if (view === "overview") {
-      list = list.filter((r) => r.groupId === ACCEPTED_PARTIAL_GROUP_ID || r.groupId === SHIPPED_DELIVERED_GROUP_ID);
+      list = list.filter(isPlaced);
       if (apiFilter !== "all") list = list.filter((r) => r.apiStatus.trim() === apiFilter);
-      if (boOnly) list = list.filter((r) => r.backordered.trim() || fulfillmentOf(r.lineItemDetail).backorderedSkus.length > 0);
+      if (shipFilter !== "all") list = list.filter((r) => shipBucket(r).label === shipFilter);
     }
     if (q) list = list.filter((r) => r.name.toLowerCase().includes(q) || r.memberId.toLowerCase().includes(q) || r.id.includes(q));
     if (view === "order" && preCheckFilter === "ready") list = list.filter((r) => r.preCheck.trim().toLowerCase().startsWith("good to go"));
-    // Order: always earliest order date first; the others: most recent first.
-    return [...list].sort((a, b) => {
+    const byDate = (a: NewOrderRow, b: NewOrderRow, dir: 1 | -1) => {
       if (!a.orderDate && !b.orderDate) return 0;
       if (!a.orderDate) return 1;
       if (!b.orderDate) return -1;
-      return view === "order" ? a.orderDate.localeCompare(b.orderDate) : b.orderDate.localeCompare(a.orderDate);
+      return dir * a.orderDate.localeCompare(b.orderDate);
+    };
+    // Order view is always earliest-first; Overview honors the sort control.
+    if (view === "order") return [...list].sort((a, b) => byDate(a, b, 1));
+    if (view !== "overview") return [...list].sort((a, b) => byDate(a, b, -1));
+    return [...list].sort((a, b) => {
+      switch (sortKey) {
+        case "date-asc":  return byDate(a, b, 1);
+        case "name":      return a.name.localeCompare(b.name);
+        case "ship":      return shipBucket(a).rank - shipBucket(b).rank || byDate(a, b, -1);
+        case "cardinal":  return a.apiStatus.trim().localeCompare(b.apiStatus.trim()) || byDate(a, b, -1);
+        default:          return byDate(a, b, -1);
+      }
     });
-  }, [data, view, search, preCheckFilter, apiFilter, boOnly]);
+  }, [data, view, search, preCheckFilter, apiFilter, shipFilter, sortKey]);
 
   const selectable = useMemo(() => rows.filter(canOrderRow), [rows]);
   const allSelectableChecked = selectable.length > 0 && selectable.every((r) => selected.has(r.id));
@@ -549,18 +595,30 @@ export function NewOrders() {
 
         {view === "overview" && (
           <>
-            <Select value={apiFilter} onValueChange={setApiFilter}>
-              <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
+            <Select value={shipFilter} onValueChange={setShipFilter}>
+              <SelectTrigger className="w-[190px]"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All API statuses</SelectItem>
+                <SelectItem value="all">All shipment statuses</SelectItem>
+                {shipStatuses.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={apiFilter} onValueChange={setApiFilter}>
+              <SelectTrigger className="w-[190px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Cardinal statuses</SelectItem>
                 {apiStatuses.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
               </SelectContent>
             </Select>
-            <button type="button" aria-pressed={boOnly} onClick={() => setBoOnly((v) => !v)}
-              className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-semibold transition-colors",
-                boOnly ? "border-rose-600 bg-rose-600 text-white" : "border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100")}>
-              Backordered only
-            </button>
+            <Select value={sortKey} onValueChange={(v) => setSortKey(v as typeof sortKey)}>
+              <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="date-desc">Newest first</SelectItem>
+                <SelectItem value="date-asc">Oldest first</SelectItem>
+                <SelectItem value="name">Patient A–Z</SelectItem>
+                <SelectItem value="ship">Shipment status</SelectItem>
+                <SelectItem value="cardinal">Cardinal status</SelectItem>
+              </SelectContent>
+            </Select>
             <Button size="sm" className="h-9 gap-1.5 text-[12px]" onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" /> New order
             </Button>
@@ -596,7 +654,7 @@ export function NewOrders() {
             {search ? "No orders match the search."
               : view === "order" ? (preCheckFilter === "ready" ? "No orders are Good to Go right now." : "Nothing in the Order group right now.")
               : view === "returns" ? "No returns."
-              : view === "overview" ? (boOnly ? "No backordered orders right now." : apiFilter !== "all" ? "No orders with that API status." : "No placed orders yet.")
+              : view === "overview" ? (shipFilter !== "all" || apiFilter !== "all" ? "No orders match those filters." : "No placed orders yet.")
               : "No orders on the board yet."}
           </div>
         )}
