@@ -182,7 +182,7 @@ export function PatientRail({ p, since }: { p: LiveSubscriptionPatient; since: S
         ) : tab === "texts" ? (
           <div className="h-full min-h-0"><TextsTab phone={phone} markers={markers} mondayItemId={p.mondayItemId} canText={!cannotText} /></div>
         ) : tab === "calls" ? (
-          <div className="h-full min-h-0"><CallsTab phone={phone} sinceDay={lastOrderDay} sinceLabel={sinceLabel} /></div>
+          <div className="h-full min-h-0"><CallsTab phone={phone} sinceDay={lastOrderDay} sinceLabel={sinceLabel} mondayItemId={p.mondayItemId} /></div>
         ) : (
           <div className="h-full min-h-0 overflow-y-auto bg-muted/20 p-3">
             {notes.length ? (

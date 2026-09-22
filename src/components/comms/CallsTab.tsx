@@ -7,13 +7,18 @@
  * token-gated. Fetches when mounted, memoised per number for the session.
  */
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Loader2, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, RefreshCw, Voicemail } from "lucide-react";
+import { AlertTriangle, Loader2, PhoneCall, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, RefreshCw, Voicemail } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { fetchRecordingBlobUrl, fetchVoicemail } from "@/lib/comms/gateway";
+import { Button } from "@/components/ui/button";
+import { fetchRecordingBlobUrl, fetchVoicemail, SignInRequiredError } from "@/lib/comms/gateway";
+import { isAuthed } from "@/lib/comms/auth";
+import { placeCall } from "@/lib/comms/callApi";
 import { fetchedAt, getCalls } from "@/lib/comms/cache";
 import { callsSince } from "@/lib/comms/sinceOrder";
 import { callOutcomeLabel, summarizeCalls, type PatientCall } from "@/lib/comms/callHistory";
 import { fmtWhenET } from "@/lib/comms/format";
+import { SignInGate } from "./SignInGate";
 
 interface AudioState {
   loading?: boolean;
@@ -40,14 +45,33 @@ function CallIcon({ call }: { call: PatientCall }) {
  * conversation and not a year of history (Brandon, 2026-09-20). Older calls
  * stay one click away. No `sinceDay` = the whole year, as in the Claims sheet.
  */
-export function CallsTab({ phone, sinceDay = "", sinceLabel }: { phone: string; sinceDay?: string; sinceLabel?: string }) {
+export function CallsTab({ phone, sinceDay = "", sinceLabel, mondayItemId }: { phone: string; sinceDay?: string; sinceLabel?: string; mondayItemId?: string }) {
   const [loading, setLoading] = useState(false);
   const [showOlder, setShowOlder] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [calls, setCalls] = useState<PatientCall[] | null>(null);
   const [at, setAt] = useState<number | null>(null);
   const [audio, setAudio] = useState<Record<string, AudioState>>({});
+  const [calling, setCalling] = useState(false);
+  const [needSignIn, setNeedSignIn] = useState(false);
   const blobs = useRef<string[]>([]);
+
+  // Placing a call rings the operator's own RingCentral phone first (RingOut),
+  // so it needs the signed-in identity — unlike reading the call log.
+  const call = async () => {
+    if (calling) return;
+    if (!isAuthed()) { setNeedSignIn(true); return; }
+    setCalling(true);
+    try {
+      await placeCall(phone, mondayItemId);
+      toast.success("Calling…", { description: "Your RingCentral phone rings first, then we connect the patient." });
+    } catch (e) {
+      if (e instanceof SignInRequiredError) setNeedSignIn(true);
+      else toast.error("Couldn't place the call", { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setCalling(false);
+    }
+  };
 
   const load = async (force: boolean) => {
     setLoading(true);
@@ -107,6 +131,17 @@ export function CallsTab({ phone, sinceDay = "", sinceLabel }: { phone: string; 
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b bg-card px-4 py-2">
+        <span className="text-[12px] font-medium text-muted-foreground">Call history</span>
+        <Button size="sm" className="h-8 gap-1.5" disabled={calling} onClick={() => void call()} title="Call the patient — RingCentral rings your phone first, then connects them">
+          {calling ? <Loader2 className="h-4 w-4 animate-spin" /> : <PhoneCall className="h-4 w-4" />} Call patient
+        </Button>
+      </div>
+      {needSignIn && (
+        <div className="shrink-0 border-b p-3">
+          <SignInGate reason="Sign in with your @medicallymodern.com account to place calls." onSignedIn={() => setNeedSignIn(false)} />
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto bg-muted/20 p-4">
         {loading && !calls ? (
           <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">

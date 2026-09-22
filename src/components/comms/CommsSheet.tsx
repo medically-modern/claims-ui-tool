@@ -174,7 +174,7 @@ export function CommsSheet({
               <TextsTab phone={phone} markers={markers} mondayItemId={patient.mondayItemId} canText={!/^no$/i.test((patient as { canText?: string }).canText || "")} />
             </TabsContent>
             <TabsContent value="calls" className="mt-3 min-h-0 flex-1 data-[state=inactive]:hidden">
-              <CallsTab phone={phone} />
+              <CallsTab phone={phone} mondayItemId={patient.mondayItemId} />
             </TabsContent>
           </Tabs>
         )}
