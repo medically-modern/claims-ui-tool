@@ -53,7 +53,8 @@ export const REASON_FAMILY: Record<string, ReasonFamily> = {
   "Changing addresses":        "patient",
   "Other supplier has auth":   "patient",     // paused, not churned — we may pull the auth to us
   "Waiting on Patient":        "patient",     // legacy generic
-  // Escape hatch — never auto-resolves, requires a note
+  // Escape hatch / operational — never auto-resolves, requires a note
+  "Can't serve product":       "other",       // we can't source the product they want right now
   "Other":                     "other",
 };
 
@@ -67,7 +68,7 @@ export const BLOCK_REASON_GROUPS: Array<{ family: ReasonFamily; label: string; r
     "Hasn't received pump yet", "OOP too expensive", "Not using currently",
     "Changing addresses", "Other supplier has auth",
   ] },
-  { family: "other",     label: "Other", reasons: ["Other"] },
+  { family: "other",     label: "Other", reasons: ["Can't serve product", "Other"] },
 ];
 
 export const BLOCK_REASONS = BLOCK_REASON_GROUPS.flatMap((g) => g.reasons);
