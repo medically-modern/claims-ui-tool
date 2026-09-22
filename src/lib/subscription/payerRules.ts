@@ -124,6 +124,8 @@ export type RuleId =
   | "elig.freshness"
   | "elig.cob-other-primary"
   | "elig.primary-mismatch"
+  | "elig.override"
+  | "mr.override"
   | "auth.medicare-never"
   | "auth.plan-change"
   | "auth.payment-override"
@@ -279,6 +281,22 @@ export const RULES: readonly RuleDef[] = [
     when: "An operator recorded an Auth Override for this order",
     verdict: "pass",
     source: "Brandon, 2026-09-21 — a Payment Incorrect claim is a judgement call; the operator reads the per-code payments and can ship anyway. Per order.",
+  },
+  {
+    id: "elig.override",
+    check: "benefits",
+    applies: "Any payer, eligibility not confirmed on the board",
+    when: "An operator recorded an Eligibility Override for this order",
+    verdict: "pass",
+    source: "Brandon, 2026-09-22 — the operator advances Eligibility for this order with a reason. Per order.",
+  },
+  {
+    id: "mr.override",
+    check: "mr",
+    applies: "Any patient, medical records not valid on the board",
+    when: "An operator recorded a Medical Records Override for this order",
+    verdict: "pass",
+    source: "Brandon, 2026-09-22 — the operator advances Medical Records for this order with a reason. Per order.",
   },
   {
     id: "lastPaid.override",

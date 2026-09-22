@@ -429,19 +429,24 @@ function CircleEditPopover({
           )}
           {d.action === "advance" && (
             <Button size="sm" className="w-full bg-emerald-700 hover:bg-emerald-800" onClick={() => { setOpen(false); setAdvanceOpen(true); }}
-              title={kind === "auth" || kind === "lastPaid"
-                ? `Advance just the ${PHASE_LABELS[kind]} circle for this order, with a reason`
-                : "Override this circle for this order, with a reason"}>
-              <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> {kind === "auth" ? "Advance Authorization" : kind === "lastPaid" ? "Advance Last Claim Paid" : "Order anyway"}
+              title={`Advance just the ${PHASE_LABELS[kind]} circle for this order, with a reason`}>
+              <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Advance {PHASE_LABELS[kind]}
             </Button>
           )}
           {d.action === "run-eligibility" && (
-            <Button size="sm" variant="outline" className="w-full" disabled={saving}
-              onClick={() => void run(async () => { await runEligibilityCheck(patient.mondayItemId); markEligibilityRequested([patient.mondayItemId]); })}
-              title="Sets Run Check to Run on the board; Stedi answers within a minute and writes the verdict back">
-              {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
-              Run eligibility check
-            </Button>
+            <>
+              <Button size="sm" variant="outline" className="w-full" disabled={saving}
+                onClick={() => void run(async () => { await runEligibilityCheck(patient.mondayItemId); markEligibilityRequested([patient.mondayItemId]); })}
+                title="Sets Run Check to Run on the board; Stedi answers within a minute and writes the verdict back">
+                {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+                Run eligibility check
+              </Button>
+              {/* …or advance Eligibility manually, scoped to this one circle. */}
+              <Button size="sm" variant="ghost" className="w-full text-emerald-800 hover:bg-emerald-50" onClick={() => { setOpen(false); setAdvanceOpen(true); }}
+                title="Advance just the Eligibility circle for this order, with a reason">
+                <ArrowRight className="mr-1.5 h-3.5 w-3.5" /> Advance Eligibility
+              </Button>
+            </>
           )}
           {d.action === "run-dvs" && (
             <Button size="sm" className="w-full bg-sky-700 hover:bg-sky-800" disabled={saving}
@@ -457,7 +462,7 @@ function CircleEditPopover({
           )}
         </div>
       </PopoverContent>
-      {(kind === "confirmation" || kind === "auth" || kind === "lastPaid") && <AdvanceDialog kind={kind} patient={advanceOpen ? patient : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />}
+      <AdvanceDialog kind={kind} patient={advanceOpen ? patient : null} open={advanceOpen} onClose={() => setAdvanceOpen(false)} />
       <InactiveDialog patient={inactiveOpen ? (patient as LiveSubscriptionPatient) : null} open={inactiveOpen} onClose={() => setInactiveOpen(false)} />
     </Popover>
   );

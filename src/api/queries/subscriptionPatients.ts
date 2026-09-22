@@ -85,6 +85,8 @@ export const SUB_COL = {
   confirm_override:        "text_mm7cmkec",
   auth_override:           "text_mm7dj1kf",
   last_paid_override:      "text_mm7djd06",
+  benefits_override:       "text_mm7e5jv",
+  mr_override:             "text_mm7edb",
   // Insurance
   primary_insurance:   "color_mm254qxj",
   member_id_1:         "text_mkvp6zfg",
@@ -326,6 +328,8 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   confirmOverride: string;
   authOverride: string;
   lastPaidOverride: string;
+  benefitsOverride: string;
+  mrOverride: string;
 }
 
 // ─── Monday types ───────────────────────────────────────────────────────────
@@ -454,6 +458,8 @@ function mapItem(
     confirmOverride:          get(item, SUB_COL.confirm_override),
     authOverride:             get(item, SUB_COL.auth_override),
     lastPaidOverride:         get(item, SUB_COL.last_paid_override),
+    benefitsOverride:         get(item, SUB_COL.benefits_override),
+    mrOverride:               get(item, SUB_COL.mr_override),
     active:                   get(item, SUB_COL.active),
     runCheck:                 get(item, SUB_COL.run_check),
     lastEligibilityError:     get(item, SUB_COL.last_eligibility_error),
@@ -616,6 +622,8 @@ function mapItem(
     confirmOverride:     get(item, SUB_COL.confirm_override),
     authOverride:        get(item, SUB_COL.auth_override),
     lastPaidOverride:    get(item, SUB_COL.last_paid_override),
+    benefitsOverride:    get(item, SUB_COL.benefits_override),
+    mrOverride:          get(item, SUB_COL.mr_override),
     nextCheckIn:         get(item, SUB_COL.check_in_date) || undefined,
     stuckSince:          get(item, SUB_COL.blocked_date) || undefined,
     stuckReason:         (get(item, SUB_COL.block_note).split("\n")[0] || undefined),

@@ -31,7 +31,7 @@ import {
   payerGroupFor,
   type PatientFlag, type PayerGroup, type PayerGroupId, type RuleId,
 } from "./payerRules";
-import { fmtStamp, stampFor } from "./orderStamps";
+import { fmtStamp, stampFor, type OrderStamp } from "./orderStamps";
 
 // ─── Inputs ─────────────────────────────────────────────────────────────────
 
@@ -68,6 +68,11 @@ export interface CheckInputs {
    *  for the Last Claim Paid circle, e.g. the last claim isn't recorded on the
    *  board but is settled. Same stamp shape. */
   lastPaidOverride: string;
+  /** Eligibility Override (text_mm7e5jv) and Medical Records Override
+   *  (text_mm7edb) — per-order operator overrides for those two circles. Same
+   *  stamp shape; every circle is overridable now (Brandon, 2026-09-22). */
+  benefitsOverride: string;
+  mrOverride: string;
   // Eligibility
   active: string;
   runCheck: string;
@@ -142,6 +147,20 @@ function firstOrderPass(baseline: Checkpoint): Checkpoint {
     tone: "ok",
     why: "First order — nothing holds a first order; it goes straight to Ready to Order",
   });
+}
+
+/**
+ * A per-order operator override: flip this one circle to a light-green check,
+ * with the reason on its hover. Scoped — it never touches another circle or the
+ * order (Brandon, 2026-09-21/22). Every circle uses the same shape.
+ */
+function overrideToGreen(baseline: Checkpoint, ruleId: RuleId, ov: OrderStamp): Checkpoint {
+  return {
+    ...baseline, tone: "ok", light: true, ruleId,
+    label: "Overridden", detail: undefined,
+    why: `Overridden by ${ov.initials} ${fmtStamp(ov)}${ov.reason ? ` — ${ov.reason}` : ""}`,
+    overrideReason: ov.reason || `Overridden by ${ov.initials}`,
+  };
 }
 
 // ─── Check 1 — Confirm ──────────────────────────────────────────────────────
@@ -334,42 +353,52 @@ export function deriveEligibility(i: CheckInputs, group: PayerGroup, firstOrder:
   }
 
   if (firstOrder) return firstOrderPass(baseline);
-  if (baseline.tone !== "ok") return baseline;
 
-  // ── Ruled: the payer's own conditions, each can only turn Active red ──────
-  const e = group.eligibility;
-  if (e.freshnessDays != null) {
-    const f = eligibilityIsFresh({
-      lastCheck: i.lastEligibilityCheck, orderDate: i.orderDate, today: i.today,
-      days: e.freshnessDays, sameMonth: e.sameMonth,
-    });
-    if (!f.fresh) {
-      const when = i.lastEligibilityCheck
-        ? `last checked ${i.lastEligibilityCheck.slice(0, 10)}${f.ageDays != null ? ` (${f.ageDays} days before the ${f.dos} date of service)` : ""}`
-        : "no check date recorded";
-      return ruled(baseline, "elig.freshness", {
+  // Compute the ruled result (payer conditions can turn an Active check red);
+  // a not-ok baseline — Not run / Failed / Inactive — carries straight through.
+  let result = baseline;
+  if (baseline.tone === "ok") {
+    // ── Ruled: the payer's own conditions, each can only turn Active red ────
+    const e = group.eligibility;
+    if (result.tone === "ok" && e.freshnessDays != null) {
+      const f = eligibilityIsFresh({
+        lastCheck: i.lastEligibilityCheck, orderDate: i.orderDate, today: i.today,
+        days: e.freshnessDays, sameMonth: e.sameMonth,
+      });
+      if (!f.fresh) {
+        const when = i.lastEligibilityCheck
+          ? `last checked ${i.lastEligibilityCheck.slice(0, 10)}${f.ageDays != null ? ` (${f.ageDays} days before the ${f.dos} date of service)` : ""}`
+          : "no check date recorded";
+        result = ruled(baseline, "elig.freshness", {
+          tone: "bad",
+          why: `The eligibility check must be within ${e.freshnessDays} days of the date of service${e.sameMonth ? " and in the same month" : ""} — ${when}`,
+          detail: "Active, but the check is too old for this order — re-run eligibility",
+        });
+      }
+    }
+    if (result.tone === "ok" && e.cobCheck && /other primary/i.test(i.cobCheck)) {
+      result = ruled(baseline, "elig.cob-other-primary", {
         tone: "bad",
-        why: `The eligibility check must be within ${e.freshnessDays} days of the date of service${e.sameMonth ? " and in the same month" : ""} — ${when}`,
-        detail: "Active, but the check is too old for this order — re-run eligibility",
+        why: "COB Check reads Other Primary Reported — another payer is primary and the claim would deny",
+        detail: "Active, but the payer reports a different primary — resolve COB before ordering",
+      });
+    }
+    if (result.tone === "ok" && e.primaryMatch && i.suggestedPrimary && !/^(unknown|failed)$/i.test(i.suggestedPrimary)
+        && i.suggestedPrimary !== i.primaryInsurance) {
+      result = ruled(baseline, "elig.primary-mismatch", {
+        tone: "bad",
+        why: `Suggested Primary reads ${i.suggestedPrimary}; Primary Insurance is ${i.primaryInsurance || "blank"} — fix the payer or review`,
+        detail: "Active, but under a different payer than the one on file",
       });
     }
   }
-  if (e.cobCheck && /other primary/i.test(i.cobCheck)) {
-    return ruled(baseline, "elig.cob-other-primary", {
-      tone: "bad",
-      why: "COB Check reads Other Primary Reported — another payer is primary and the claim would deny",
-      detail: "Active, but the payer reports a different primary — resolve COB before ordering",
-    });
+
+  // Per-order override: advance the Eligibility circle anyway (scoped).
+  if (result.tone !== "ok") {
+    const ov = stampFor(i.benefitsOverride, i.orderDate);
+    if (ov) return overrideToGreen(result, "elig.override", ov);
   }
-  if (e.primaryMatch && i.suggestedPrimary && !/^(unknown|failed)$/i.test(i.suggestedPrimary)
-      && i.suggestedPrimary !== i.primaryInsurance) {
-    return ruled(baseline, "elig.primary-mismatch", {
-      tone: "bad",
-      why: `Suggested Primary reads ${i.suggestedPrimary}; Primary Insurance is ${i.primaryInsurance || "blank"} — fix the payer or review`,
-      detail: "Active, but under a different payer than the one on file",
-    });
-  }
-  return baseline;
+  return result;
 }
 
 // ─── Check 3 — Authorization ────────────────────────────────────────────────
@@ -530,7 +559,13 @@ export function deriveLastPaid(i: CheckInputs, group: PayerGroup, firstOrder: bo
 
 export function deriveMedicalRecords(i: CheckInputs, firstOrder: boolean): Checkpoint {
   const baseline = deriveMr({ mnExpiry: i.mnExpiry, referralSource: i.referralSource, today: i.today });
-  return firstOrder ? firstOrderPass(baseline) : baseline;
+  if (firstOrder) return firstOrderPass(baseline);
+  // Per-order override: advance the Medical Records circle anyway (scoped).
+  if (baseline.tone !== "ok") {
+    const ov = stampFor(i.mrOverride, i.orderDate);
+    if (ov) return overrideToGreen(baseline, "mr.override", ov);
+  }
+  return baseline;
 }
 
 // ─── All five ───────────────────────────────────────────────────────────────

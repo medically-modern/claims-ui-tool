@@ -24,6 +24,8 @@ const CLEAN: CheckInputs = {
   confirmOverride: "",
   authOverride: "",
   lastPaidOverride: "",
+  benefitsOverride: "",
+  mrOverride: "",
   active: "Active",
   runCheck: "",
   lastEligibilityError: "",
@@ -179,6 +181,17 @@ describe("Eligibility — facility flags, Active?, then the payer's conditions",
     for (const s of ["Unknown", "Failed", ""]) expect(run({ suggestedPrimary: s }).benefits.tone).toBe("ok");
     expect(run({ suggestedPrimary: "Fidelis Medicaid", primaryInsurance: "Medicaid" }).benefits.tone).toBe("ok");
   });
+  it("an Eligibility Override for this order clears the circle to light green", () => {
+    const ov = "2026-09-20T14:05 BE for 2026-09-25 — verified active in the payer portal";
+    // A not-run (amber) check is advanced by the override.
+    expect(run({ active: "", runCheck: "", benefitsOverride: ov }).benefits)
+      .toMatchObject({ tone: "ok", light: true, ruleId: "elig.override" });
+    // So is a stale-freshness (light-red) check.
+    expect(run({ suggestedPrimary: "Anthem BCBS Commercial", benefitsOverride: ov }).benefits.tone).toBe("ok");
+    // A stamp for a different order does not apply.
+    const stale = "2026-09-20T14:05 BE for 2026-01-01 — old";
+    expect(run({ active: "", runCheck: "", benefitsOverride: stale }).benefits.tone).not.toBe("ok");
+  });
 });
 
 describe("Authorization", () => {
@@ -272,6 +285,15 @@ describe("Medical records", () => {
     expect(run({ mnExpiry: "2026-01-01" }).mr).toMatchObject({ tone: "ok", light: true, ruleId: "mr.expired-order-anyway" });
     expect(run({ mnExpiry: "2026-01-01", referralSource: "District Endochrine" }).mr).toMatchObject({ tone: "bad", light: true, ruleId: "mr.expired-hard-stop" });
     expect(run({ mnExpiry: "" }).mr).toMatchObject({ tone: "bad", light: true, ruleId: "mr.blank" });
+  });
+  it("a Medical Records Override for this order clears the circle to light green", () => {
+    const ov = "2026-09-20T14:05 BE for 2026-09-25 — valid MR on file in the chart";
+    // District Endochrine hard-stop (dark red) is advanced by the override.
+    expect(run({ mnExpiry: "2026-01-01", referralSource: "District Endochrine", mrOverride: ov }).mr)
+      .toMatchObject({ tone: "ok", light: true, ruleId: "mr.override" });
+    // A stamp for a different order does not apply.
+    const stale = "2026-09-20T14:05 BE for 2026-01-01 — old";
+    expect(run({ mnExpiry: "2026-01-01", referralSource: "District Endochrine", mrOverride: stale }).mr.tone).toBe("bad");
   });
 });
 
