@@ -54,6 +54,28 @@ function Pill({ label, tone }: { label: string; tone: Parameters<typeof pillClas
   return <span className={cn("inline-flex w-fit items-center rounded-full px-2.5 py-0.5 text-[12px] font-semibold ring-1", pillClass(tone))}>{label}</span>;
 }
 
+/** The Order ID cell — Cardinal's CAH order number. When Cardinal substituted
+ *  the order, the original number is struck through and the substitution order
+ *  number follows it: "1121561143 1121706627" (Brandon, 2026-09-25). */
+function OrderIdCell({ r }: { r: NewOrderRow }) {
+  const orig = r.cahOrderNumber.trim();
+  const sub = r.substitutionCah.trim();
+  const has = orig || sub;
+  const substituted = !!sub && sub !== orig;
+  const title = substituted ? `Original ${orig || "—"} · substituted → ${sub}` : (orig || sub || undefined);
+  return (
+    <div className="min-w-0 font-mono text-[12px] leading-tight tabular-nums" title={has ? title : undefined}>
+      {!has ? <span className="font-sans text-muted-foreground">—</span>
+        : substituted ? (
+          <span className="inline-flex flex-wrap items-baseline gap-x-1">
+            {orig && <span className="text-muted-foreground line-through">{orig}</span>}
+            <span>{sub}</span>
+          </span>
+        ) : (orig || sub)}
+    </div>
+  );
+}
+
 function FreshnessPill({ isFetching, dataUpdatedAt, onRefresh }: {
   isFetching: boolean; dataUpdatedAt: number; onRefresh: () => void;
 }) {
@@ -165,9 +187,7 @@ function OrderList({ rows, onOpen, onOpenProfile, onMerge, mergingId, selected, 
               {r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}
             </button>
             <div className="tabular-nums">{fmtDate(r.orderDate)}</div>
-            <div className="min-w-0 truncate font-mono text-[12px] tabular-nums" title={r.cahOrderNumber || undefined}>
-              {r.cahOrderNumber || <span className="font-sans text-muted-foreground">—</span>}
-            </div>
+            <OrderIdCell r={r} />
             <div>{r.preCheck
               ? <span title={r.preCheckDetail || undefined}><Pill label={r.preCheck} tone={preCheckTone(r.preCheck)} /></span>
               : <span className="text-[12px] text-muted-foreground">—</span>}</div>
@@ -327,11 +347,7 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
           <div className="min-w-0"><div className="font-semibold truncate">{r.name}</div>{r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}</div>
         );
         const dateCell = <div className="tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</div>;
-        const orderIdCell = (
-          <div className="min-w-0 truncate self-start font-mono text-[12px] tabular-nums" title={r.cahOrderNumber || undefined}>
-            {r.cahOrderNumber || <span className="font-sans text-muted-foreground">—</span>}
-          </div>
-        );
+        const orderIdCell = <OrderIdCell r={r} />;
         const cardinalCell = (
           <div className="space-y-1">
             {r.apiStatus ? <span title={r.apiMessage || undefined}><Pill label={r.apiStatus} tone={apiTone(r.apiStatus)} /></span> : <span className="text-muted-foreground">—</span>}
@@ -529,6 +545,7 @@ export function NewOrders() {
       r.name.toLowerCase().includes(q)
       || r.memberId.toLowerCase().includes(q)
       || r.cahOrderNumber.toLowerCase().includes(q)
+      || r.substitutionCah.toLowerCase().includes(q)
       || r.id.includes(q));
     if (view === "order" && preCheckFilter === "ready") list = list.filter((r) => r.preCheck.trim().toLowerCase().startsWith("good to go"));
     const byDate = (a: NewOrderRow, b: NewOrderRow, dir: 1 | -1) => {

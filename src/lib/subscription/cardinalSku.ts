@@ -38,7 +38,8 @@ export const CARDINAL_SKUS: Record<string, SkuInfo> = {
   BBIBB4110IM: { name: "Inset 6 mm 32\"", cat: "Infusion set" },
   MNMMT394AI: { name: "QuickSet 18\"", cat: "Infusion set" },
   // Insulin pumps
-  TN1017899I: { name: "Mobi", cat: "Pump" },
+  TN1018388I: { name: "Mobi", cat: "Pump" }, // Cardinal's new Mobi SKU going forward (Brandon, 2026-09-25)
+  TN1017899I: { name: "Mobi", cat: "Pump" }, // prior Mobi SKU — kept for historical orders on the board
   BBIBB1003G: { name: "iLet", cat: "Pump" },
   TN1019458I: { name: "t:slim", cat: "Pump" },
   MNMMT1894I: { name: "Minimed 780G", cat: "Pump" },
