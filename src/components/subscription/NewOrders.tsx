@@ -28,7 +28,7 @@ import {
   ACCEPTED_PARTIAL_GROUP_ID, ORDER_GROUP_ID, RETURNS_GROUP_ID, SHIPPED_DELIVERED_GROUP_ID, type NewOrderRow,
 } from "@/api/queries/newOrders";
 import {
-  monitorMergeTarget, orderCategories, orderStatusBorder, pillClass, posLabel, preCheckTone,
+  monitorMergeTarget, orderCategories, orderProducts, orderStatusBorder, pillClass, posLabel, preCheckTone,
 } from "@/lib/subscription/orderBoard";
 import { mergeMonitorIntoSensors, placeOrder } from "@/api/setNewOrder";
 import { orderProductLines, type ProductLine } from "@/lib/subscription/orderFulfillment";
@@ -83,7 +83,7 @@ function FreshnessPill({ isFetching, dataUpdatedAt, onRefresh }: {
   );
 }
 
-const ORDER_GRID = "grid grid-cols-[36px_minmax(190px,1fr)_120px_140px_minmax(160px,0.9fr)_minmax(170px,0.9fr)_minmax(300px,1.7fr)_120px] gap-4";
+const ORDER_GRID = "grid grid-cols-[36px_minmax(190px,1fr)_120px_130px_140px_minmax(160px,0.9fr)_minmax(170px,0.9fr)_minmax(300px,1.7fr)_120px] gap-4";
 
 const CAT_TAG: Record<string, string> = {
   Sensors:  "bg-sky-100 text-sky-800",
@@ -131,6 +131,7 @@ function OrderList({ rows, onOpen, onOpenProfile, onMerge, mergingId, selected, 
         <div className="flex items-center"><Checkbox checked={allSelectableChecked} onCheckedChange={onToggleAll} aria-label="Select all orderable" /></div>
         <div>Patient</div>
         <div>Order Date</div>
+        <div>Order ID</div>
         <div>Pre-Check</div>
         <div>Subscription</div>
         <div>Insurance</div>
@@ -164,6 +165,9 @@ function OrderList({ rows, onOpen, onOpenProfile, onMerge, mergingId, selected, 
               {r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}
             </button>
             <div className="tabular-nums">{fmtDate(r.orderDate)}</div>
+            <div className="min-w-0 truncate font-mono text-[12px] tabular-nums" title={r.cahOrderNumber || undefined}>
+              {r.cahOrderNumber || <span className="font-sans text-muted-foreground">—</span>}
+            </div>
             <div>{r.preCheck
               ? <span title={r.preCheckDetail || undefined}><Pill label={r.preCheck} tone={preCheckTone(r.preCheck)} /></span>
               : <span className="text-[12px] text-muted-foreground">—</span>}</div>
@@ -236,7 +240,7 @@ const OVERVIEW_HEADER = "sticky top-0 z-10 rounded-t-lg border-b bg-slate-100 px
 // Cardinal Status, and Cardinal is pinned to the right edge (Brandon,
 // 2026-09-21). Tracks: Patient, Date, spacer, Details, Shipment, Courier,
 // spacer, Cardinal.
-const OVERVIEW_GRID = "grid grid-cols-[176px_116px_1fr_300px_132px_300px_1fr_150px] gap-x-6";
+const OVERVIEW_GRID = "grid grid-cols-[176px_116px_140px_1fr_300px_132px_300px_1fr_150px] gap-x-6";
 // One sub-row inside the per-item columns: fixed height + vertical centering so
 // every sub-row is the same height and its pill/text aligns across columns.
 const CELL_ROW = "flex min-h-[24px] items-center";
@@ -314,7 +318,7 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
   return (
     <div className="text-[13px] max-h-[calc(100vh-215px)] overflow-auto">
       <div className={cn(OVERVIEW_GRID, OVERVIEW_HEADER)}>
-        <div>Patient</div><div>Order Date</div><div /><div>Order Details</div><div>Shipment Status</div><div>Courier Status</div><div /><div>Cardinal Status</div>
+        <div>Patient</div><div>Order Date</div><div>Order ID</div><div /><div>Order Details</div><div>Shipment Status</div><div>Courier Status</div><div /><div>Cardinal Status</div>
       </div>
       {rows.map((r) => {
         const detail = overviewRows(r);
@@ -323,6 +327,11 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
           <div className="min-w-0"><div className="font-semibold truncate">{r.name}</div>{r.dob && <div className="text-[11px] text-muted-foreground tabular-nums">DOB {r.dob}</div>}</div>
         );
         const dateCell = <div className="tabular-nums whitespace-nowrap">{fmtDate(r.orderDate)}</div>;
+        const orderIdCell = (
+          <div className="min-w-0 truncate self-start font-mono text-[12px] tabular-nums" title={r.cahOrderNumber || undefined}>
+            {r.cahOrderNumber || <span className="font-sans text-muted-foreground">—</span>}
+          </div>
+        );
         const cardinalCell = (
           <div className="space-y-1">
             {r.apiStatus ? <span title={r.apiMessage || undefined}><Pill label={r.apiStatus} tone={apiTone(r.apiStatus)} /></span> : <span className="text-muted-foreground">—</span>}
@@ -336,6 +345,7 @@ function OverviewList({ rows, onOpen }: { rows: NewOrderRow[]; onOpen: (r: NewOr
           <div key={r.id} className={cn(OVERVIEW_GRID, "cursor-pointer border-b px-4 py-2.5 items-center hover:bg-muted/40")} onClick={() => onOpen(r)}>
             {patientCell}
             {dateCell}
+            {orderIdCell}
             <div />
             {/* Order Details — "Category: Name ×qty", one line each, truncates */}
             <div className="flex flex-col gap-y-1">
@@ -442,6 +452,7 @@ export function NewOrders() {
   const [detail, setDetail] = useState<NewOrderRow | null>(null);
   const [mergingId, setMergingId] = useState<string | null>(null);
   const [preCheckFilter, setPreCheckFilter] = useState<"all" | "ready">("all");
+  const [productFilter, setProductFilter] = useState("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [orderingId, setOrderingId] = useState<string | null>(null);
   const [bulkOrdering, setBulkOrdering] = useState(false);
@@ -490,6 +501,18 @@ export function NewOrders() {
     for (const r of data) if (isPlaced(r)) for (const s of shipStatusSet(r)) present.add(s);
     return SHIP_STATUSES.filter((s) => present.has(s));
   }, [data]);
+  // The distinct products present in the current view's universe, for the
+  // product filter (Brandon, 2026-09-25). Order → the Order group; Overview →
+  // placed orders; Returns → the Returns group.
+  const productOptions = useMemo(() => {
+    const base =
+      view === "order"   ? data.filter((r) => r.groupId === ORDER_GROUP_ID)
+      : view === "returns" ? data.filter((r) => r.groupId === RETURNS_GROUP_ID)
+      :                      data.filter(isPlaced);
+    const m = new Map<string, string>();
+    for (const r of base) for (const p of orderProducts(r)) if (!m.has(p.value)) m.set(p.value, p.label);
+    return [...m.entries()].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
+  }, [data, view]);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -501,7 +524,12 @@ export function NewOrders() {
       if (apiFilter !== "all") list = list.filter((r) => r.apiStatus.trim() === apiFilter);
       if (shipFilter !== "all") list = list.filter((r) => shipStatusSet(r).has(shipFilter));
     }
-    if (q) list = list.filter((r) => r.name.toLowerCase().includes(q) || r.memberId.toLowerCase().includes(q) || r.id.includes(q));
+    if (productFilter !== "all") list = list.filter((r) => orderProducts(r).some((p) => p.value === productFilter));
+    if (q) list = list.filter((r) =>
+      r.name.toLowerCase().includes(q)
+      || r.memberId.toLowerCase().includes(q)
+      || r.cahOrderNumber.toLowerCase().includes(q)
+      || r.id.includes(q));
     if (view === "order" && preCheckFilter === "ready") list = list.filter((r) => r.preCheck.trim().toLowerCase().startsWith("good to go"));
     const byDate = (a: NewOrderRow, b: NewOrderRow, dir: 1 | -1) => {
       if (!a.orderDate && !b.orderDate) return 0;
@@ -521,7 +549,7 @@ export function NewOrders() {
         default:          return byDate(a, b, -1);
       }
     });
-  }, [data, view, search, preCheckFilter, apiFilter, shipFilter, sortKey]);
+  }, [data, view, search, preCheckFilter, productFilter, apiFilter, shipFilter, sortKey]);
 
   const selectable = useMemo(() => rows.filter(canOrderRow), [rows]);
   const allSelectableChecked = selectable.length > 0 && selectable.every((r) => selected.has(r.id));
@@ -590,7 +618,7 @@ export function NewOrders() {
           ] as const).map(([v, label]) => {
             const on = view === v;
             return (
-              <button key={v} type="button" onClick={() => setView(v)}
+              <button key={v} type="button" onClick={() => { setView(v); setProductFilter("all"); }}
                 className={cn("rounded-md px-2.5 py-1.5 transition-colors", on ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                 {label}
               </button>
@@ -615,6 +643,16 @@ export function NewOrders() {
             <SelectContent>
               <SelectItem value="all">All pre-checks</SelectItem>
               <SelectItem value="ready">Good to Go only</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+
+        {(view === "order" || view === "overview") && productOptions.length > 0 && (
+          <Select value={productFilter} onValueChange={setProductFilter}>
+            <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All products</SelectItem>
+              {productOptions.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
             </SelectContent>
           </Select>
         )}
@@ -653,7 +691,7 @@ export function NewOrders() {
 
         <div className="relative ml-auto w-[240px]">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search patient, member ID" className="pl-9" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search patient, member ID, order ID" className="pl-9" />
         </div>
       </div>
 
@@ -678,6 +716,7 @@ export function NewOrders() {
         {rows.length === 0 && !loading && (
           <div className="px-4 py-12 text-center text-sm text-muted-foreground">
             {search ? "No orders match the search."
+              : productFilter !== "all" ? "No orders match that product."
               : view === "order" ? (preCheckFilter === "ready" ? "No orders are Good to Go right now." : "Nothing in the Order group right now.")
               : view === "returns" ? "No returns."
               : view === "overview" ? (shipFilter !== "all" || apiFilter !== "all" ? "No orders match those filters." : "No placed orders yet.")

@@ -155,6 +155,35 @@ export function orderCategories(row: NewOrderRow): OrderCategory[] {
   return out;
 }
 
+/** A product actually on the order: a stable filter value + a human label. */
+export interface OrderProduct { value: string; label: string }
+
+/**
+ * The distinct products on an order — a type column that names something real
+ * AND a quantity > 0 (the type columns are populated as reference even when
+ * nothing is ordered, so quantity is the gate, same as orderCategories). Each
+ * carries a category-qualified label ("Mobi Pump", "Dexcom G7 CGM") so the
+ * product filter reads naturally and a pump "Mobi" never collides with a
+ * cartridge "Mobi" (Brandon, 2026-09-25).
+ */
+export function orderProducts(row: NewOrderRow): OrderProduct[] {
+  const out: OrderProduct[] = [];
+  const add = (slot: string, type: string, qty: string, suffix: string) => {
+    if (num(qty) <= 0 || !serving(type)) return;
+    const t = type.trim();
+    out.push({ value: `${slot}:${t.toLowerCase()}`, label: `${t} ${suffix}` });
+  };
+  add("pump", row.pumpType, row.qtyPump, "Pump");
+  add("cgm", row.cgmType, row.qtyCgmSensors, "CGM");
+  add("cart", row.cartridgeType, row.qtyCartridge, "Cartridges");
+  add("inf", row.infusionSet1Type, row.qtyInfusionSet1, "Infusion set");
+  add("inf", row.infusionSet2Type, row.qtyInfusionSet2, "Infusion set");
+  if (num(row.qtyCgmMonitor) > 0) out.push({ value: "monitor", label: "Monitor" });
+  // Dedupe (infusion set 1 & 2 can be the same type).
+  const seen = new Set<string>();
+  return out.filter((p) => (seen.has(p.value) ? false : (seen.add(p.value), true)));
+}
+
 function normName(s: string): string { return String(s || "").toLowerCase().replace(/[^a-z]/g, ""); }
 
 /** Is this row a monitor-only order (the merge candidate)? */
