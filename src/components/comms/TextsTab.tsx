@@ -16,7 +16,7 @@
  * memoises per number for the session — see lib/comms/cache.ts.
  */
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, CalendarClock, Loader2, PauseCircle, RefreshCw, Bell, Bot, Send } from "lucide-react";
+import { AlertTriangle, CalendarClock, Loader2, Maximize2, Minimize2, PauseCircle, RefreshCw, Bell, Bot, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -159,6 +159,20 @@ export function TextsTab({ phone, markers, mondayItemId, canText = true }: {
   const [sending, setSending] = useState(false);
   const [sendErr, setSendErr] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Composer sizing: grows with the draft up to ~8 lines; the expand toggle
+  // opens a tall editor for long texts. Height is set from scrollHeight so a
+  // pasted paragraph is visible without scrolling inside a one-line box.
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const cap = composerExpanded ? Math.round(window.innerHeight * 0.5) : 168;
+    const floor = composerExpanded ? Math.min(cap, 240) : 38;
+    el.style.height = `${Math.max(floor, Math.min(el.scrollHeight + 2, cap))}px`;
+    el.style.overflowY = el.scrollHeight + 2 > cap ? "auto" : "hidden";
+  }, [draft, composerExpanded]);
 
   useEffect(() => onAuthChange(() => setAuthed(isAuthed())), []);
 
@@ -195,6 +209,7 @@ export function TextsTab({ phone, markers, mondayItemId, canText = true }: {
     try {
       await sendMessage(phone, text, mondayItemId);
       setDraft("");
+      setComposerExpanded(false);
       // A 200 means RingCentral accepted it, not that it arrived — so don't
       // claim "sent". Refetch the thread; the new bubble's delivery note shows
       // Queued / Sent / Delivered / SendingFailed as RingCentral reports it.
@@ -300,17 +315,31 @@ export function TextsTab({ phone, markers, mondayItemId, canText = true }: {
           )}
           <div className="flex items-end gap-2">
             <Textarea
+              ref={composerRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
               placeholder="Write a text… (Enter to send, Shift+Enter for a new line)"
               disabled={sending}
               rows={1}
-              className="max-h-32 min-h-[38px] flex-1 resize-none text-[13px]"
+              className="min-h-[38px] flex-1 resize-none text-[13px] leading-snug"
             />
-            <Button size="sm" className="h-9 px-3" onClick={() => void send()} disabled={sending || !draft.trim()} title="Send text">
-              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            </Button>
+            <div className="flex flex-col gap-1">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-muted-foreground"
+                onClick={() => { setComposerExpanded((v) => !v); composerRef.current?.focus(); }}
+                title={composerExpanded ? "Shrink the text box" : "Expand the text box"}
+                aria-label={composerExpanded ? "Shrink the text box" : "Expand the text box"}
+              >
+                {composerExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+              </Button>
+              <Button size="sm" className="h-9 px-3" onClick={() => void send()} disabled={sending || !draft.trim()} title="Send text">
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              </Button>
+            </div>
           </div>
         </div>
       ) : (

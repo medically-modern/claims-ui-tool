@@ -9,7 +9,7 @@
  * disabled with the reason, rather than hidden — the layout is the target.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Check, Loader2, MessageSquare, NotebookPen, Phone, Send } from "lucide-react";
+import { Check, Loader2, MessageSquare, NotebookPen, Phone } from "lucide-react";
 import { toast } from "sonner";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { addSubscriptionNote, writeOrderStamps } from "@/api/setSubscriptionPatient";
@@ -199,16 +199,7 @@ export function PatientRail({ p, since }: { p: LiveSubscriptionPatient; since: S
         )}
       </div>
 
-      {/* The box under the list matches the tab: a text to send, or a note to add. */}
-      {tab === "texts" && (
-        <div className="border-t bg-muted/40 px-3 py-2.5">
-          <div className="flex items-center gap-2">
-            <input className="w-full flex-1 rounded-lg border border-input bg-card px-3 py-2 text-[13px] disabled:opacity-60" placeholder="Write a text…" disabled aria-label="Write a text"
-              title="Sending isn't wired yet — the gateway has no send route. Texts go out from RingCentral for now." />
-            <Button size="sm" disabled className="h-9 gap-1.5" title="Sending isn't wired yet — the gateway has no send route"><Send className="h-3.5 w-3.5" /> Send text</Button>
-          </div>
-        </div>
-      )}
+      {/* Texts carry their own composer inside TextsTab; only Notes needs a box here. */}
       {tab === "notes" && (
         <div className="border-t bg-muted/40 px-3 py-2.5">
           <div className="flex items-center gap-2">
