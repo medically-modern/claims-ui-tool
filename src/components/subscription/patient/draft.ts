@@ -30,6 +30,14 @@ export interface ProfileDraft {
   infusionSet2Qty: string;
   mnExpiry: string;
   visitDate: string;
+  // Auth requirements — editable so a payer change can be reconciled on the
+  // profile (Brandon, 2026-09-28).
+  sensorsAuthStatus: string;
+  suppliesAuthStatus: string;
+  sensorsAuthId: string;
+  infusionAuthId: string;
+  cartridgeAuthId: string;
+  priorAuthReq: string;
 }
 
 /** Fields that write to Monday, in saveSubscriptionPatient's FIELD_MAP names. */
@@ -37,6 +45,7 @@ export const SAVED_FIELDS: ReadonlyArray<Exclude<keyof ProfileDraft, "visitDate"
   "phone", "address", "doctorAddress", "canText", "primaryInsurance", "memberId1", "secondaryInsurance", "memberId2",
   "nextOrderDate", "subscriptionType", "orderFrequency", "sensorsType", "cgmQty", "suppliesType", "cartridgeQty",
   "infusionSet1", "infusionSet1Qty", "infusionSet2", "infusionSet2Qty", "mnExpiry",
+  "sensorsAuthStatus", "suppliesAuthStatus", "sensorsAuthId", "infusionAuthId", "cartridgeAuthId", "priorAuthReq",
 ];
 
 export function draftFrom(p: LiveSubscriptionPatient): ProfileDraft {
@@ -62,6 +71,12 @@ export function draftFrom(p: LiveSubscriptionPatient): ProfileDraft {
     infusionSet2Qty: p.infusionSet2Qty ?? "",
     mnExpiry: (p.mnExpiry ?? "").slice(0, 10),
     visitDate: "",
+    sensorsAuthStatus: p.sensorsAuthStatus ?? "",
+    suppliesAuthStatus: p.suppliesAuthStatus ?? "",
+    sensorsAuthId: p.sensorsAuthId ?? "",
+    infusionAuthId: p.infusionAuthId ?? "",
+    cartridgeAuthId: p.cartridgeAuthId ?? "",
+    priorAuthReq: p.priorAuthReq ?? "",
   };
 }
 

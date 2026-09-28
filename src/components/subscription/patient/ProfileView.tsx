@@ -24,6 +24,10 @@ const PRIMARY_PAYERS = PAYER_OPTIONS.filter((p) => p !== "All payers");
 const SECONDARY_PAYERS = ["None", "NY Medicaid", "Medicare Supplement", "Other"];
 const SUBSCRIPTIONS = ["Supplies", "Sensors", "Sensors & Supplies"];
 const FREQUENCIES = ["30-Days", "60-Days", "75-Days", "90-Days"];
+// The Subscription board's own Auth Status labels (both the Sensors and Supplies
+// columns carry the same set) and Prior Auth Req? labels.
+const AUTH_STATUS_OPTIONS = ["No Auth Needed", "Auth Valid", "Required", "Evaluate", "Submitted", "Auth. Expiring", "Auth. Expired", "Denied", "Not Serving"];
+const PRIOR_AUTH_OPTIONS = ["Evaluate", "No", "Yes"];
 const SENSORS = ["Not Serving", "Dexcom G7", "Dexcom G7 15-Day", "Dexcom G6", "FreeStyle Libre 3 Plus", "FreeStyle Libre 2 Plus", "FreeStyle Libre 14-Day", "Guardian 4", "Simplera Sync", "Instinct"];
 const PUMPS = ["Not Serving", "Mobi", "t:slim", "iLet", "Minimed 780G"];
 // Spelled exactly as the board spells them (verified 2026-07-31); Monday
@@ -48,13 +52,6 @@ function yn(v: string): { text: string; tone?: "good" } {
   if (/^(yes|true|1|v)$/i.test(v)) return { text: "Yes", tone: "good" };
   if (/^(no|false|0)$/i.test(v)) return { text: "No" };
   return { text: v };
-}
-
-function authTone(s: string): "good" | "warn" | "bad" | undefined {
-  if (!s) return undefined;
-  if (/valid|no auth|not serving/i.test(s)) return "good";
-  if (/expired|denied/i.test(s)) return "bad";
-  return "warn";
 }
 
 /** Days between two yyyy-mm-dd, positive when b is after a. */
@@ -173,7 +170,7 @@ export function ProfileView({
         </Section>
 
         {/* ── Medical necessity & auth ── */}
-        <Section title="Medical necessity & auth">
+        <Section title="Medical necessity & auth" right={<span className="text-[11px] text-muted-foreground">auth requirements editable · saves to the Subscription board</span>}>
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             <Fact label="Medical records" tone={mrTone}>
               {mrLabel}
@@ -201,15 +198,18 @@ export function ProfileView({
               )}
             </div>
             <Fact label="Diagnosis">{p.diagnosis}</Fact>
-            <Fact label="Sensors auth" tone={authTone(p.sensorsAuthStatus)}>
-              {p.sensorsAuthStatus}{p.sensorsAuthEnd && <div className="text-[11px] font-normal text-muted-foreground">to {usDate(p.sensorsAuthEnd)}</div>}
-            </Fact>
-            <Fact label="Supplies auth" tone={authTone(p.suppliesAuthStatus)}>
-              {p.suppliesAuthStatus}{p.suppliesAuthEnd && <div className="text-[11px] font-normal text-muted-foreground">to {usDate(p.suppliesAuthEnd)}</div>}
-            </Fact>
-            <Fact label="Infusion set auth ID"><span className="font-mono text-[12px]">{p.infusionAuthId}</span></Fact>
-            <Fact label="Cartridge auth ID"><span className="font-mono text-[12px]">{p.cartridgeAuthId}</span></Fact>
-            <Fact label="Sensors auth ID"><span className="font-mono text-[12px]">{p.sensorsAuthId}</span></Fact>
+            <div className="min-w-0">
+              <EditSelect label="Sensors auth" value={draft.sensorsAuthStatus} onChange={(v) => setField("sensorsAuthStatus", v)} options={AUTH_STATUS_OPTIONS} blank="—" />
+              {p.sensorsAuthEnd && <div className="mt-1 text-[11px] text-muted-foreground">to {usDate(p.sensorsAuthEnd)}</div>}
+            </div>
+            <div className="min-w-0">
+              <EditSelect label="Supplies auth" value={draft.suppliesAuthStatus} onChange={(v) => setField("suppliesAuthStatus", v)} options={AUTH_STATUS_OPTIONS} blank="—" />
+              {p.suppliesAuthEnd && <div className="mt-1 text-[11px] text-muted-foreground">to {usDate(p.suppliesAuthEnd)}</div>}
+            </div>
+            <EditSelect label="Prior auth req?" value={draft.priorAuthReq} onChange={(v) => setField("priorAuthReq", v)} options={PRIOR_AUTH_OPTIONS} blank="—" />
+            <EditField label="Infusion set auth ID" value={draft.infusionAuthId} onChange={(v) => setField("infusionAuthId", v)} />
+            <EditField label="Cartridge auth ID" value={draft.cartridgeAuthId} onChange={(v) => setField("cartridgeAuthId", v)} />
+            <EditField label="Sensors auth ID" value={draft.sensorsAuthId} onChange={(v) => setField("sensorsAuthId", v)} />
           </div>
           <div className="mt-4">
             <Eyebrow className="mb-2">Medical necessity documents</Eyebrow>
