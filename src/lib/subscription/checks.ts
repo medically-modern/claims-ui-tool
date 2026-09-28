@@ -427,7 +427,19 @@ export function deriveAuthorization(i: CheckInputs, group: PayerGroup, firstOrde
     });
     let baseline: Checkpoint;
     switch (dvs.kind) {
-      case "needed":  baseline = { ...columnAuth(labels), dvsNeeded: true, medicaidDvs: true }; break;
+      // DVS not run yet for this order. Mirror the standing auth column EXCEPT
+      // never let it read green: the column can lag a payer switch (Yavier moved
+      // Fidelis→Medicaid and Supplies Auth still said "No Auth Needed"), and a
+      // Medicaid order that still needs its DVS is not clear to order. Downgrade
+      // a green column to the actionable amber, keep a real denial red (Brandon,
+      // 2026-09-28).
+      case "needed": {
+        const col = columnAuth(labels);
+        baseline = col.tone === "ok"
+          ? { tone: "warn", label: "DVS needed", detail: "Medicaid order due — run a DVS for this order (the standing auth status may be stale after a payer change)", dvsNeeded: true, medicaidDvs: true }
+          : { ...col, dvsNeeded: true, medicaidDvs: true };
+        break;
+      }
       case "running": baseline = { tone: "pending", awaiting: true, label: dvs.label, medicaidDvs: true }; break;
       case "cleared": baseline = { tone: "ok",  label: dvs.label, medicaidDvs: true }; break;
       // Payment Incorrect: the claim paid, just not the amount billed. Light
