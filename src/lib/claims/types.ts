@@ -215,6 +215,11 @@ export interface Claim {
    *  Null when the column is blank on Monday; the backend defaults to 12
    *  in that case so historical rows behave like before the column existed. */
   placeOfService?: "Home" | "Office" | null;
+  /** Diagnosis code (ICD-10) — the Claims Board "Diagnosis" dropdown
+   *  (dropdown_mm7myb9f), falling back to the retired status column
+   *  (color_mky2gpz5) for rows created before the 2026-09-28 switch.
+   *  Null when neither column is set. */
+  diagnosis?: string | null;
   /** Monday group id this item sits in (e.g. group_mm332zns for Medicaid
    *  Outstanding). Used by bucket filters that need to exclude or include
    *  rows based on group placement, not just Primary Status. */

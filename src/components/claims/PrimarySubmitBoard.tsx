@@ -35,6 +35,7 @@ import { setPlaceOfService } from "@/api/setPlaceOfService";
 import { setPrimaryStatus } from "@/api/setPrimaryStatus";
 import {
   setClaimParentStatus,
+  setClaimParentDropdown,
   setClaimParentText,
   setClaimParentDate,
   setClaimSubitemStatus,
@@ -62,20 +63,24 @@ const QUEUE_META: Record<QueueKey, { label: string; icon: React.ReactNode; descr
   awaiting: { label: "Awaiting Acceptance", icon: <Hourglass className="h-4 w-4" />, description: "Submitted to the payer (or Stedi) but no 'Payer Accepted' 277 yet. Stays here until the payer acknowledges, then graduates to Outstanding / ERA Review on the main Claims page." },
 };
 
-// Mirrored from Monday Claims Board column color_mky2gpz5 (33 labels).
-// Refresh via scripts/refresh-monday-schema.sh after any column edit.
-// Monday has a couple of label duplicates (e.g. "E10.649" appears at both
-// indices 17 and 106) — we dedupe via Set when rendering. The dropdown
+// Mirrored from the Monday Claims Board "Diagnosis" dropdown column
+// dropdown_mm7myb9f (39 labels). The old status column color_mky2gpz5 is
+// retired — reads fall back to it for older rows, writes go to the
+// dropdown by label. Refresh via scripts/refresh-monday-schema.sh after
+// any column edit. Monday has a couple of label duplicates (e.g. "E10.649"
+// appears at both ids 18 and 107) — we dedupe via Set when rendering. The dropdown
 // already includes the row's active value at render time, so a code we
 // don't list still appears for the row it's on.
 const DIAGNOSIS_OPTIONS = [
-  "E08.43",
-  "E10.10", "E10.22", "E10.29", "E10.311", "E10.3393", "E10.3559",
+  "E08.43", "E08.65",
+  "E10.10", "E10.22", "E10.29", "E10.311", "E10.3293", "E10.3319",
+  "E10.3393", "E10.3553", "E10.3559",
   "E10.40", "E10.42", "E10.649", "E10.65", "E10.69", "E10.8", "E10.9",
-  "E11.21", "E11.22", "E11.29", "E11.3292", "E11.40", "E11.42",
+  "E11.21", "E11.22", "E11.29", "E11.3292", "E11.3299", "E11.40", "E11.42",
   "E11.45", "E11.49", "E11.59", "E11.649", "E11.65", "E11.69",
   "E11.8", "E11.9",
   "E13.65", "E13.9",
+  "E16.2",
   "O24.111",
 ];
 const PAYER_OPTIONS = [
@@ -863,7 +868,7 @@ function ClaimCard({
               onUpdate({ diagnosis: v });
               if (c.monday_item_id) {
                 writeWithRevert(
-                  setClaimParentStatus(c.monday_item_id, CLAIM_PARENT_COL.diagnosis, v),
+                  setClaimParentDropdown(c.monday_item_id, CLAIM_PARENT_COL.diagnosis, [v]),
                   () => onUpdate({ diagnosis: prev }),
                   "Diagnosis",
                 );

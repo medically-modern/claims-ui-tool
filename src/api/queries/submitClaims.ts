@@ -20,7 +20,14 @@ const COL = {
   PRIMARY_STATUS: "color_mkxmywtb",
   CLAIM_TYPE: "color_mm2nvk1p",
   PRIMARY_PAYOR: "color_mkxmhypt",
-  DIAGNOSIS: "color_mky2gpz5",
+  // Diagnosis moved to a dropdown on the Claims Board (2026-09-28). The
+  // backend reads the dropdown at submit, so this is what we read and
+  // write. Dropdowns return the label in `text` (value is {"ids": [...]}
+  // — never map by index; the dropdown ids differ from the old status
+  // indices). Rows created before the switch may only have the retired
+  // status column populated, so the mapper falls back to it.
+  DIAGNOSIS: "dropdown_mm7myb9f",
+  DIAGNOSIS_LEGACY: "color_mky2gpz5", // "Diagnosis (retired)" — read-only fallback
   DOS: "date_mkwr7spz",
   DOB: "text_mkp3y5ax",
   MEMBER_ID: "text_mktat89m",
@@ -301,7 +308,10 @@ function mapItemToThreadClaim(item: MondayItem): ThreadClaim {
       member_id: textOf(item, COL.MEMBER_ID),
     },
     payer: textOf(item, COL.PRIMARY_PAYOR),
-    diagnosis: textOf(item, COL.DIAGNOSIS) || undefined,
+    diagnosis:
+      textOf(item, COL.DIAGNOSIS) ||
+      textOf(item, COL.DIAGNOSIS_LEGACY) ||
+      undefined,
     dos: textOf(item, COL.DOS),
     icn: textOf(item, COL.PAYER_CLAIM_NUMBER) || undefined,
     payor_id: textOf(item, COL.PAYOR_ID) || undefined,

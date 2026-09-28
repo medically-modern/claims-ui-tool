@@ -66,6 +66,17 @@ export function setClaimParentStatus(
   return writeOne(CLAIMS_BOARD_ID, itemId, columnId, { label }, true);
 }
 
+/** Dropdown (multi-label) column write on a parent item — value is the
+ *  list of human labels. Auto-creates any label that doesn't exist on
+ *  the column yet. Empty array clears the cell. */
+export function setClaimParentDropdown(
+  itemId: string,
+  columnId: string,
+  labels: string[],
+): Promise<void> {
+  return writeOne(CLAIMS_BOARD_ID, itemId, columnId, { labels }, true);
+}
+
 /** Text column write — plain string. Empty string is allowed and
  *  clears the cell. */
 export function setClaimParentText(
@@ -147,7 +158,11 @@ export const CLAIM_PARENT_COL = {
   // parent, manual override for a Stedi-routed test, etc.).
   payor_id:        "text_mm1gcz3y",
   dos:             "date_mkwr7spz",
-  diagnosis:       "color_mky2gpz5",
+  // Diagnosis is a dropdown as of 2026-09-28 (the old status column
+  // color_mky2gpz5 is retitled "Diagnosis (retired)" and no longer
+  // written). Write via setClaimParentDropdown — the status {label}
+  // shape is rejected by dropdown columns.
+  diagnosis:       "dropdown_mm7myb9f",
   place_of_service:"color_mm3fk3qv",
   claim_type:      "color_mm2nvk1p",
   // Parent-level Authorization text. Holds the comma-joined union of

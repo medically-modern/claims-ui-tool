@@ -53,7 +53,11 @@ const COL = {
   // Home -> 12 (DME shipped, default), Office -> 11 (clinical visit).
   // The backend's 837 builder reads this; blank defaults to Home/12.
   PLACE_OF_SERVICE: "color_mm3fk3qv",
-  DIAGNOSIS: "color_mky2gpz5",
+  // Diagnosis moved to a dropdown on the Claims Board (2026-09-28); the
+  // retired status column is kept only as a read fallback for rows that
+  // predate the switch. Both ids land in PARENT_COLUMN_IDS below.
+  DIAGNOSIS: "dropdown_mm7myb9f",
+  DIAGNOSIS_LEGACY: "color_mky2gpz5",
   PRIMARY_PAID: "numeric_mm115q76",
   PR_AMOUNT: "numeric_mkxmc2rh",
   NOTES: "long_text_mkzrx7ke",
@@ -593,6 +597,9 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     payorId: txt(item, COL.PAYOR_ID) || null,
     insuranceType: "", // not currently tracked as a separate Monday column
     memberId: txt(item, COL.MEMBER_ID),
+    // Dropdown label, falling back to the retired status label so older
+    // items still show their diagnosis.
+    diagnosis: txt(item, COL.DIAGNOSIS) || txt(item, COL.DIAGNOSIS_LEGACY) || null,
     claimSentDate: isoOrNull(txt(item, COL.CLAIM_SENT_DATE)),
     primaryStatus: mapPrimaryStatus(txt(item, COL.PRIMARY_STATUS)),
     status277: mapStatus277(txt(item, COL.S277_STATUS)),
