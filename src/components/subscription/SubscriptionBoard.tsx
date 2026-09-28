@@ -2482,7 +2482,7 @@ function OverviewTable({
   const showActions = actionMode === "ready";
   const grid = showOrderType ? OVERVIEW_GRID_TYPE : showActions ? OVERVIEW_GRID : OVERVIEW_GRID_NOACTION;
   return (
-    <div className="text-[13px] overflow-x-auto">
+    <div className="text-[13px] max-h-[calc(100vh-215px)] overflow-auto">
       {/* sticky: keep the five check headings visible while scrolling.
           Opaque bg (not bg-muted/60) so rows don't ghost through when stuck. */}
       <div className={cn(grid, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[15px] font-bold tracking-normal text-slate-700 items-end")}>
@@ -2605,7 +2605,7 @@ function BlockedTable({
   onSort: (k: OverviewSortKey) => void;
 }) {
   return (
-    <div className="text-[13px] overflow-x-auto">
+    <div className="text-[13px] max-h-[calc(100vh-215px)] overflow-auto">
       <div className={cn(BLOCKED_GRID, "sticky top-0 z-20 rounded-t-lg border-b bg-slate-100 px-4 py-3 text-[15px] font-bold tracking-normal text-slate-700 items-end")}>
         <div><SortableLabel label="Patient"        k="name"             sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
         <div><SortableLabel label="Order"          k="nextOrderDate"    sortKey={sortKey} sortDir={sortDir} onClick={onSort} /></div>
