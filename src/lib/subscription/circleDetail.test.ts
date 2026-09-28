@@ -32,7 +32,7 @@ describe("describeCircle", () => {
   it("Eligibility — last checked + suggested primary with a match", () => {
     const d = describeCircle("benefits", { tone: "ok", label: "Active" }, tara, TODAY);
     expect(d.facts.find((f) => f.label === "Last checked")?.value).toBe("Sep 12, 2026 · 8d ago");
-    expect(d.facts.find((f) => f.label === "Suggested Primary")).toEqual({ label: "Suggested Primary", value: "Medicaid", tone: undefined, mark: "ok" });
+    expect(d.facts.find((f) => f.label === "Suggested Primary")).toEqual({ label: "Suggested Primary", value: "Medicaid", tone: undefined, mark: undefined });
     expect(d.action).toBe("pause");
   });
   it("Eligibility — mismatch reads as ✗", () => {

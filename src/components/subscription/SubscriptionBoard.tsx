@@ -348,7 +348,14 @@ function CircleEditPopover({
             <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
               {PHASE_LABELS[kind]} — {patient.name}
             </div>
-            <div className="mt-0.5 text-[14px] font-semibold">{d.headline}</div>
+            {/* The headline carries the circle's verdict color, so an Inactive /
+                denied / failed status reads red and stands out (Brandon,
+                2026-09-28). */}
+            <div className={cn("mt-0.5 font-semibold",
+              check.tone === "bad" ? "text-[15px] font-bold text-rose-700"
+              : check.tone === "warn" ? "text-[14px] text-amber-700"
+              : check.tone === "ok" ? "text-[14px] text-emerald-700"
+              : "text-[14px]")}>{d.headline}</div>
           </div>
 
           {d.facts.length > 0 && (
