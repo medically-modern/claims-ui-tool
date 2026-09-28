@@ -38,9 +38,6 @@ export interface ProfileDraft {
   infusionAuthId: string;
   cartridgeAuthId: string;
   priorAuthReq: string;
-  // Board's "Insurance Change?" flag — set to "No" from the profile to mark the
-  // post-payer-change review reconciled (Brandon, 2026-09-28).
-  insuranceChange: string;
 }
 
 /** Fields that write to Monday, in saveSubscriptionPatient's FIELD_MAP names. */
@@ -49,7 +46,6 @@ export const SAVED_FIELDS: ReadonlyArray<Exclude<keyof ProfileDraft, "visitDate"
   "nextOrderDate", "subscriptionType", "orderFrequency", "sensorsType", "cgmQty", "suppliesType", "cartridgeQty",
   "infusionSet1", "infusionSet1Qty", "infusionSet2", "infusionSet2Qty", "mnExpiry",
   "sensorsAuthStatus", "suppliesAuthStatus", "sensorsAuthId", "infusionAuthId", "cartridgeAuthId", "priorAuthReq",
-  "insuranceChange",
 ];
 
 export function draftFrom(p: LiveSubscriptionPatient): ProfileDraft {
@@ -81,7 +77,6 @@ export function draftFrom(p: LiveSubscriptionPatient): ProfileDraft {
     infusionAuthId: p.infusionAuthId ?? "",
     cartridgeAuthId: p.cartridgeAuthId ?? "",
     priorAuthReq: p.priorAuthReq ?? "",
-    insuranceChange: p.insuranceChange ?? "",
   };
 }
 

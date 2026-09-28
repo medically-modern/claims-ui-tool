@@ -103,6 +103,9 @@ export const SUB_COL = {
   cob_check:              "color_mm6vpy5a",
   suggested_primary:      "dropdown_mm5yx3sm",
   insurance_change:       "color_mm2p8v3m",
+  // Human diff behind Insurance Change? — written by the backend on every
+  // eligibility check ("" when No).
+  insurance_change_detail: "long_text_mm5ycbr2",
   patient_insurance_response: "color_mm3k4z79",
   patient_order_response:     "color_mm3kjykc",
   patient_help_message:       "long_text_mm3xnb6k",
@@ -324,6 +327,7 @@ export interface LiveSubscriptionPatient extends SubscriptionPatient {
   cobCheck: string;
   suggestedPrimary: string;
   insuranceChange: string;
+  insuranceChangeDetail: string;
   correspondenceReviewed: string;
   confirmOverride: string;
   authOverride: string;
@@ -618,6 +622,7 @@ function mapItem(
     cobCheck:            get(item, SUB_COL.cob_check),
     suggestedPrimary:    get(item, SUB_COL.suggested_primary),
     insuranceChange:     get(item, SUB_COL.insurance_change),
+    insuranceChangeDetail: get(item, SUB_COL.insurance_change_detail),
     correspondenceReviewed: get(item, SUB_COL.correspondence_reviewed),
     confirmOverride:     get(item, SUB_COL.confirm_override),
     authOverride:        get(item, SUB_COL.auth_override),
