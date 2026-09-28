@@ -73,7 +73,6 @@ interface NavTo {
     | "outstandingClaims"
     | "outstandingInvoices"
     | "eraReview"
-    | "invoiceReview"
     | "paid";
   eftStatus?: "not-started";
 }

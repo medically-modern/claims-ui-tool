@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,19 +84,16 @@ type SubmitBucket = "confirm" | "insurance" | "patient" | "awaiting";
 //                        Submit > Patient bucket and land here.
 //   eraReview          - secondary ERA received from the payer; needs
 //                        operator sign-off before declaring Paid.
-//   invoiceReview      - patient marked the invoice as paid; needs
-//                        operator verification that the full amount
-//                        cleared before declaring Patient Paid &
-//                        Closed. Currently routed from status =
-//                        "Patient Paid" (the Mark Paid button on
-//                        Patient stage 2 lands them here).
-//   paid               - terminal Paid And Closed.
+//   paid               - terminal Paid And Closed. Patient payments
+//                        land here directly: once the patient pays
+//                        (status "Patient Paid"), the board auto-
+//                        promotes the row to Paid on Monday — no
+//                        operator confirmation step.
 type ReviewBucket =
   | "patientQuestions"
   | "outstandingClaims"
   | "outstandingInvoices"
   | "eraReview"
-  | "invoiceReview"
   | "paid";
 type AnyBucket = SubmitBucket | ReviewBucket;
 
@@ -159,8 +156,7 @@ export interface SecClaim {
    * undefined means no link generated yet; button renders disabled. */
   payLinkUrl?: string;
   // Patient payment confirmation (Josh's Stripe automation -> Monday).
-  // Populated on Invoice Review rows after the patient pays. Surfaced
-  // in InvoiceReviewBody as a verification panel + See Payment link.
+  // Populated after the patient pays. Kept on the row for reference.
   patientPaidAmount?: number;   // numeric_mm3q2vpb
   patientPaidDate?: string;     // date_mm3qxwjs (ISO YYYY-MM-DD)
   stripeChargeId?: string;      // text_mm3qsjdf — drives the See Payment link
@@ -649,8 +645,7 @@ function bucketOf(c: SecClaim): AnyBucket | null {
   //   Stage 2 (Review > Outstanding Invoices) — invoice sent, awaiting payment.
   //                                             rawSecondaryStatus ∈ {Outstanding,
   //                                             Sent to Patient, ...}
-  //   Stage 3 (Review > Invoice Review)       — patient marked it paid; needs
-  //                                             operator verification (status =
+  //   Stage 3 (Review > Paid)                 — patient paid (status =
   //                                             "Patient Paid", handled below).
   // The split is what lets "after sending, it shouldn't show up on the
   // Submit board anymore" actually work — pre-split, every patient row
@@ -669,12 +664,12 @@ function bucketOf(c: SecClaim): AnyBucket | null {
     if (c.sendInvoiceTriggered) return "outstandingInvoices";
     return "patient";
   }
-  // Patient marked the invoice paid. Land them in Invoice Review for
-  // the operator to verify the full amount cleared before declaring
-  // terminal Paid. Mark Paid (Patient stage 2) writes secondaryStatus
-  // = "Patient Paid" on Monday; deriveStatus maps that to the frontend
-  // status "Patient Paid", which is what this branch fires on.
-  if (c.status === "Patient Paid") return "invoiceReview";
+  // Patient paid the invoice (Josh's Stripe webhook writes Secondary
+  // Status = "Review" / "Patient Paid"; deriveStatus maps both to the
+  // frontend status "Patient Paid"). No operator sign-off step — the
+  // row goes straight to Paid. The board's auto-settle effect writes
+  // the terminal "Paid" label to Monday in the background.
+  if (c.status === "Patient Paid") return "paid";
   // Awaiting Acceptance — mirrors the primary bucket. Submitted via
   // Stedi but the payer hasn't acknowledged with a clean 277 yet.
   // Graduates to "outstandingClaims" once status277 = "Payer Accepted".
@@ -734,12 +729,6 @@ const BUCKET_META: Record<AnyBucket, { label: string; icon: React.ReactNode; ton
     tone: "text-info-soft-foreground",
     description: "Secondary ERA received; verify CARC/RARC + bank deposit, then Mark Posted.",
   },
-  invoiceReview: {
-    label: "Invoice Review",
-    icon: <FileSearch className="h-4 w-4" />,
-    tone: "text-info-soft-foreground",
-    description: "Patient marked the invoice paid. Verify the full amount cleared before declaring Paid & Closed.",
-  },
   paid:        { label: "Paid",             icon: <CheckCircle2 className="h-4 w-4" />, tone: "text-success-soft-foreground" },
 };
 
@@ -749,16 +738,14 @@ const MODE_BUCKETS: Record<SecondaryMode, AnyBucket[]> = {
   // been 837'd and is in 277 limbo — same mental cohort as "things I
   // just submitted, watching the response."
   submit: ["confirm", "insurance", "patient", "awaiting"],
-  // Review splits Outstanding into two flows (claims vs invoices) and
-  // adds Invoice Review as a sign-off step before terminal Paid. ERA
-  // Review remains the insurance side; Invoice Review is the patient
-  // side equivalent.
+  // Review splits Outstanding into two flows (claims vs invoices). ERA
+  // Review is the insurance-side sign-off step; the patient side has no
+  // equivalent — a paid invoice lands directly in Paid.
   review: [
     "patientQuestions",
     "outstandingClaims",
     "outstandingInvoices",
     "eraReview",
-    "invoiceReview",
     "paid",
   ],
 };
@@ -866,7 +853,7 @@ export function SecondaryBoard({
       confirm: 0, insurance: 0, patient: 0, awaiting: 0,
       outstandingClaims: 0, outstandingInvoices: 0,
       patientQuestions: 0,
-      eraReview: 0, invoiceReview: 0, paid: 0,
+      eraReview: 0, paid: 0,
     };
     for (const c of claims) {
       const b = bucketOf(c);
@@ -1215,53 +1202,91 @@ export function SecondaryBoard({
    */
   async function markPatientPaid(c: SecClaim) {
     if (!c.mondayItemId) return;
-    // Patient flow Mark Paid — the verify step inside Invoice Review (or
-    // direct payment confirmation from Outstanding Invoices). We flip
-    // Monday's Secondary Status to 'Paid' (the terminal label) so
-    // bucketOf routes to the Paid bucket instead of looping back to
-    // invoiceReview, and move the row visually to Paid And Closed.
-    //
+    const previousStatus = c.status;
+    // Manual Mark Paid from Outstanding Invoices (patient paid out of
+    // band — check, cash, phone). Flip Monday's Secondary Status to
+    // 'Paid' (the terminal label) and move the row to Paid And Closed.
     updateClaim(c.id, { status: "Secondary Paid" });
     try {
-      await setSecondaryStatusAndMove(
-        c.mondayItemId,
-        "Paid",
-        "group_mkxsng4r",  // Paid And Closed
-      );
-      // Cross-board propagation: Subscription "Secondary Claim Paid?"
-      // -> Fully Paid + clear the outstanding PR amount. Background
-      // task on the backend; failures land in Railway logs and the
-      // operator gets a soft toast (the Secondary Board flip above
-      // already succeeded either way).
-      if (isMarkSecondaryPaidConfigured()) {
-        try {
-          await apiMarkSecondaryPaid(c.mondayItemId);
-        } catch (syncErr) {
-          toast({
-            title: "Subscription sync didn't fire",
-            description:
-              `${c.patientName} is Paid on the Secondary Board, but the ` +
-              `Subscription Board may still show Outstanding. ` +
-              `(${(syncErr as Error).message})`,
-          });
-        }
-      }
+      await settlePatientPayment(c);
       toast({ title: `Marked paid: ${c.patientName}`, description: "Row moved to Paid." });
-      // Invalidate before refetch — the persisted localStorage cache
-      // would otherwise serve the stale "Patient Paid" status when
-      // refetchSecondary returns from network slower than React Query
-      // serves cache. Invalidation marks the query dirty; refetch
-      // forces fresh data from Monday. Without this, Confirm Payment
-      // appeared to do nothing on the UI (row stuck in Invoice Review)
-      // even though the Monday write succeeded.
-      void queryClient.invalidateQueries({ queryKey: ALL_SECONDARY_CLAIMS_QUERY_KEY });
-      void refetchSecondary();
     } catch (e) {
       // Roll back optimistic flip so the operator can retry
-      updateClaim(c.id, { status: "Patient Paid" });
+      updateClaim(c.id, { status: previousStatus });
       toast({ title: "Couldn't update Monday", description: (e as Error).message });
     }
   }
+
+  /**
+   * Shared settle step for a patient-side payment: write the terminal
+   * "Paid" label + Paid And Closed group on Monday, then fire the
+   * backend Secondary Mark Paid endpoint so the Subscription Board's
+   * "Secondary Claim Paid?" flips to Fully Paid. Used by the manual
+   * Mark Paid button (Outstanding Invoices) and by the auto-settle
+   * effect below (Stripe payments). Throws if the Monday write fails;
+   * a subscription-sync failure only toasts.
+   */
+  async function settlePatientPayment(c: SecClaim) {
+    if (!c.mondayItemId) return;
+    await setSecondaryStatusAndMove(
+      c.mondayItemId,
+      "Paid",
+      "group_mkxsng4r",  // Paid And Closed
+    );
+    // Cross-board propagation: Subscription "Secondary Claim Paid?"
+    // -> Fully Paid + clear the outstanding PR amount. Background
+    // task on the backend; failures land in Railway logs and the
+    // operator gets a soft toast (the Secondary Board flip above
+    // already succeeded either way).
+    if (isMarkSecondaryPaidConfigured()) {
+      try {
+        await apiMarkSecondaryPaid(c.mondayItemId);
+      } catch (syncErr) {
+        toast({
+          title: "Subscription sync didn't fire",
+          description:
+            `${c.patientName} is Paid on the Secondary Board, but the ` +
+            `Subscription Board may still show Outstanding. ` +
+            `(${(syncErr as Error).message})`,
+        });
+      }
+    }
+    // Invalidate before refetch — the persisted localStorage cache
+    // would otherwise serve the stale "Patient Paid" status when
+    // refetchSecondary returns from network slower than React Query
+    // serves cache. Invalidation marks the query dirty; refetch
+    // forces fresh data from Monday.
+    void queryClient.invalidateQueries({ queryKey: ALL_SECONDARY_CLAIMS_QUERY_KEY });
+    void refetchSecondary();
+  }
+
+  // Auto-settle patient payments. When the patient pays through the
+  // Stripe pay link, Josh's webhook writes Secondary Status = "Review"
+  // (or "Patient Paid") on Monday, which derives to the frontend
+  // status "Patient Paid". There used to be an Invoice Review bucket
+  // where the operator clicked Confirm Payment to promote that to the
+  // terminal "Paid" label; that step is gone — the row already sits in
+  // the Paid bucket (bucketOf) and this effect does the Monday write +
+  // Subscription Board sync the button used to do. Each Monday item is
+  // attempted once per page load so a failed write doesn't hammer the
+  // API on every refetch.
+  const autoSettledRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!liveAvailable) return;
+    for (const c of claims) {
+      if (c.status !== "Patient Paid" || !c.mondayItemId) continue;
+      if (autoSettledRef.current.has(c.mondayItemId)) continue;
+      autoSettledRef.current.add(c.mondayItemId);
+      updateClaim(c.id, { status: "Secondary Paid" });
+      void settlePatientPayment(c).catch((e) => {
+        console.warn(
+          `[SecondaryBoard] auto-settle failed for ${c.patientName} `
+            + `(${c.mondayItemId}):`,
+          e,
+        );
+      });
+    }
+  }, [claims, liveAvailable]); // eslint-disable-line react-hooks/exhaustive-deps
   /**
    * Operator approves the secondary ERA and posts it. This is the
    * mandatory review step before a row leaves the active queue. Writes
@@ -1580,10 +1605,10 @@ export function SecondaryBoard({
           // Paid still shows the full ERA Review detail body (incl.
           // Bank Info strip) on row expand.
           //
-          // Insurance, Patient, Outstanding Invoices, and Invoice
-          // Review buckets fall through to the SecondaryRow card
-          // layout below because their workflows need patient-side
-          // controls (Preview Link, Send Invoice, Mark Paid).
+          // Insurance, Patient, and Outstanding Invoices buckets fall
+          // through to the SecondaryRow card layout below because
+          // their workflows need patient-side controls (Preview Link,
+          // Send Invoice, Mark Paid).
           <SecondaryClaimsTable
             rows={visible}
             expanded={expanded}
@@ -1642,8 +1667,7 @@ function SecondaryRow({
     b === "outstandingClaims" || b === "outstandingInvoices"
                             ? "border-l-info" :
     b === "insurance"       ? "border-l-warning-soft-foreground" :
-    b === "eraReview" || b === "invoiceReview"
-                            ? "border-l-info" :
+    b === "eraReview"       ? "border-l-info" :
                               "border-l-primary";
 
   const totalCoins = c.lines.reduce((s, l) => s + (l.coinsuranceCopay ?? 0), 0);
@@ -1724,18 +1748,13 @@ function SecondaryRow({
           {b === "insurance" && (
             <SubmitSecondaryBody c={c} onUpdate={onUpdate} onSubmit={onSubmitSecondary} />
           )}
-          {/* SendToPatientBody serves THREE buckets — the body itself
+          {/* SendToPatientBody serves TWO buckets — the body itself
               switches between Stage 1 (Send Invoice) and Stage 2
               (Mark Paid) based on rawSecondaryStatus, and Preview
-              Link is always visible. So patient (stage 1) AND
-              outstandingInvoices (stage 2) AND invoiceReview (after
-              Mark Paid was clicked) all render this same component:
+              Link is always visible:
                 patient              -> Preview Link + Send Invoice
-                outstandingInvoices  -> Preview Link + Mark Paid
-                invoiceReview        -> Preview Link + Mark Paid (read-only-ish,
-                                        operator verifies and can re-fire payment
-                                        flow if needed) */}
-          {(b === "patient" || b === "outstandingInvoices" || b === "invoiceReview") && (
+                outstandingInvoices  -> Preview Link + Mark Paid */}
+          {(b === "patient" || b === "outstandingInvoices") && (
             <SendToPatientBody
               c={c}
               onUpdate={onUpdate}
@@ -2928,49 +2947,6 @@ function SendToPatientBody({
         </div>
       )}
 
-      {/* Invoice Review payment verification panel — only renders in
-          the invoiceReview bucket when Josh's coins-form-payment /
-          Stripe automation has written back the patient payment
-          details. Operator uses this + the See Payment button (which
-          opens the Stripe charge in Stripe's dashboard) to verify
-          the payment is real before clicking Confirm Payment. */}
-      {bucket === "invoiceReview" && (c.patientPaidAmount || c.patientPaidDate || c.stripeChargeId) && (
-        <div className="rounded-lg border bg-emerald-50/40 px-3 py-2 ring-1 ring-emerald-200/60">
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-              Patient Payment Received
-            </div>
-            <div className="flex items-center gap-4 text-xs">
-              <span>
-                <span className="text-muted-foreground">Amount </span>
-                <span className="font-semibold tabular-nums text-emerald-700">
-                  {c.patientPaidAmount != null ? $(c.patientPaidAmount) : "—"}
-                </span>
-              </span>
-              <span>
-                <span className="text-muted-foreground">Paid date </span>
-                <span className="font-medium tabular-nums">
-                  {c.patientPaidDate ? fmt(c.patientPaidDate) : "—"}
-                </span>
-              </span>
-              {c.stripeChargeId && (
-                <span title={`Stripe Charge ID: ${c.stripeChargeId}`}>
-                  <span className="text-muted-foreground">Stripe </span>
-                  <span className="font-mono text-[10px] text-foreground">
-                    {c.stripeChargeId.length > 16 ? `${c.stripeChargeId.slice(0, 14)}…` : c.stripeChargeId}
-                  </span>
-                </span>
-              )}
-            </div>
-          </div>
-          {c.patientPaidAmount != null && Math.abs(c.patientPaidAmount - youOwe) > 0.01 && (
-            <div className="mt-1 text-[11px] text-amber-700">
-              ⚠ Paid amount ({$(c.patientPaidAmount)}) doesn't match patient-owes ({$(youOwe)}). Verify before confirming.
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Items table — Ins. paid split into Deductible + Co-ins/Copay */}
       <div className="rounded-lg border bg-background">
         <div className="grid grid-cols-[1.6fr_0.7fr_0.7fr_0.8fr_0.9fr_0.8fr] gap-2 border-b bg-muted/30 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -3024,49 +3000,24 @@ function SendToPatientBody({
           (app primary blue, matches the Uploaded Docs to Payer
           button on ClaimDetail). */}
       <div className="flex items-center justify-end gap-2">
-        {/* Invoice-flow primary action button:
-            - patient / outstandingInvoices buckets -> Preview Link (opens
-              the patient-facing checkout URL so ops can sanity-check or
-              re-send out of band).
-            - invoiceReview bucket -> See Payment (opens the completed
-              Stripe charge in Stripe's dashboard so ops can verify the
-              actual payment landed before clicking Confirm Payment). */}
-        {bucket === "invoiceReview" ? (
-          <Button
-            size="sm"
-            disabled={!c.stripeChargeId}
-            onClick={() => {
-              if (!c.stripeChargeId) return;
-              const url = `https://dashboard.stripe.com/payments/${encodeURIComponent(c.stripeChargeId)}`;
-              window.open(url, "_blank", "noopener,noreferrer");
-            }}
-            title={
-              c.stripeChargeId
-                ? `Open Stripe charge ${c.stripeChargeId} in a new tab`
-                : "No Stripe Charge ID on this row yet — Josh's payment webhook hasn't fired or it didn't write back."
-            }
-            className="h-8"
-          >
-            <ExternalLink className="mr-1 h-3.5 w-3.5" /> See Payment
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            disabled={!c.payLinkUrl}
-            onClick={() => {
-              if (!c.payLinkUrl) return;
-              window.open(c.payLinkUrl, "_blank", "noopener,noreferrer");
-            }}
-            title={
-              c.payLinkUrl
-                ? "Open the patient's invoice link in a new tab"
-                : "No Pay Link URL on this row yet — populate the Monday column first."
-            }
-            className="h-8"
-          >
-            <ExternalLink className="mr-1 h-3.5 w-3.5" /> Preview Link
-          </Button>
-        )}
+        {/* Preview Link — opens the patient-facing checkout URL so ops
+            can sanity-check or re-send out of band. */}
+        <Button
+          size="sm"
+          disabled={!c.payLinkUrl}
+          onClick={() => {
+            if (!c.payLinkUrl) return;
+            window.open(c.payLinkUrl, "_blank", "noopener,noreferrer");
+          }}
+          title={
+            c.payLinkUrl
+              ? "Open the patient's invoice link in a new tab"
+              : "No Pay Link URL on this row yet — populate the Monday column first."
+          }
+          className="h-8"
+        >
+          <ExternalLink className="mr-1 h-3.5 w-3.5" /> Preview Link
+        </Button>
 
         {(c.rawSecondaryStatus ?? "Submit") === "Submit" ? (
           // Stage 1 — invoice not yet sent. Send Invoice flips Secondary
@@ -3086,8 +3037,6 @@ function SendToPatientBody({
           //   undefined       → legacy fallback (Mark Paid visible
           //                     for rows that predate the SMS Status
           //                     column on Monday)
-          // Outside Outstanding Invoices (e.g. Invoice Review) Mark
-          // Paid renders normally regardless of smsStatus.
           <>
             {bucket === "outstandingInvoices" && c.smsStatus && (
               <SmsStatusBadge status={c.smsStatus} />
@@ -3106,14 +3055,10 @@ function SendToPatientBody({
              *     invoice OR Monday confirmed it; wait for SMS Delivered
              *     before allowing Mark Paid
              *   status !== "Sent to Patient" → past the patient-pay
-             *     flow (Patient Paid for Invoice Review, etc.); render
-             *     Mark Paid normally
+             *     flow; render Mark Paid normally
              */}
             {(c.status !== "Sent to Patient" || c.smsStatus === "Delivered") && (
-              <MarkPaidButton
-                onClick={async () => { await onMarkPaid(); }}
-                label={bucket === "invoiceReview" ? "Confirm Payment" : undefined}
-              />
+              <MarkPaidButton onClick={async () => { await onMarkPaid(); }} />
             )}
             {c.status === "Sent to Patient" && c.smsStatus !== "Delivered" && (
               <span
@@ -3768,22 +3713,13 @@ function SendInvoiceButton({ onClick }: { onClick: () => Promise<void> }) {
 // plus a brief success flash before the row drops out of the bucket.
 function MarkPaidButton({
   onClick,
-  label,
 }: {
   onClick: () => Promise<void>;
-  /** Override the default "Mark Paid" label. Used by the Invoice
-   *  Review bucket which shows "Confirm Payment" — semantically a
-   *  verification step (the patient already paid; the operator is
-   *  acknowledging Stripe → Monday). */
-  label?: string;
 }) {
   const [state, setState] = useState<"idle" | "marking" | "marked">("idle");
-  const idleLabel    = label ?? "Mark Paid";
-  // Active-state copy matches the noun — "Confirming…" / "Confirmed"
-  // when the bucket is Invoice Review, "Marking…" / "Marked Paid"
-  // otherwise. Keeps the spinner copy aligned with the button intent.
-  const activeLabel  = label === "Confirm Payment" ? "Confirming…" : "Marking…";
-  const doneLabel    = label === "Confirm Payment" ? "Confirmed"   : "Marked Paid";
+  const idleLabel    = "Mark Paid";
+  const activeLabel  = "Marking…";
+  const doneLabel    = "Marked Paid";
   async function handleClick() {
     if (state !== "idle") return;
     setState("marking");

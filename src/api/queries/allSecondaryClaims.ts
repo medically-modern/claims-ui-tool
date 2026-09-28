@@ -121,9 +121,8 @@ const COL = {
   PAY_LINK_URL: "text_mm3qag2c",
   // Patient payment confirmation columns — written by Josh's
   // coins-form-payment / Stripe automation when the patient checkout
-  // completes. Surfaced in the Invoice Review bucket so the operator
-  // can verify the actual payment amount + date before clicking
-  // Confirm Payment.
+  // completes. Kept on the row for reference; the board auto-promotes
+  // the row to Paid once these land (no operator confirmation step).
   PATIENT_PAID_AMOUNT: "numeric_mm3q2vpb",
   PATIENT_PAID_DATE:   "date_mm3qxwjs",
   // Stripe Charge ID — also written by Josh's automation. The
@@ -370,8 +369,9 @@ export function deriveStatus(
       return "Bad Debt";
     case "Review":
       // Josh's coins-form-payment webhook flips Secondary Status to
-      // 'Review' when the patient pays the invoice — same operator-
-      // verification step as 'Patient Paid'. Without this branch
+      // 'Review' when the patient pays the invoice — same meaning as
+      // 'Patient Paid' (the board routes both straight to Paid and
+      // auto-writes the terminal 'Paid' label). Without this branch
       // Review-status rows fell into the default-case below and got
       // routed back to 'Sent to Patient' / Outstanding Invoices,
       // which is where they sat before payment.
@@ -684,8 +684,9 @@ export async function fetchAllSecondaryClaims(opts?: {
 
   if (opts?.includeAll) return all;
 
-  // 'Patient Paid' isn't terminal — it's the verify step the Invoice
-  // Review bucket exists for. 'Secondary Paid' isn't filtered either:
+  // 'Patient Paid' isn't filtered — the board routes it into the Paid
+  // bucket and auto-promotes it to 'Paid' on Monday. 'Secondary Paid'
+  // isn't filtered either:
   // it IS the Paid bucket's content — filtering it here meant the Paid
   // tile was permanently 0 even though paid rows existed on Monday
   // (the filter runs client-side after the full-board fetch, so

@@ -52,7 +52,7 @@ export const SEND_INVOICE_GROUP = "group_mm3ba7x1";
 // to ERA Review — i.e. nothing moved and the operator can just retry.
 // The other order is dangerous: Patient + <old status> with the old
 // status still "Review" derives to Patient Paid and the row would
-// surface in Invoice Review with no pay link.
+// be auto-settled as Paid before the patient was ever invoiced.
 const BILL_TO_PATIENT_VALUES: Record<string, unknown> = {
   [SECONDARY_STATUS_COL]: { label: "Submit" },
   [SUBMISSION_TYPE_COL]:  { label: "Patient" },

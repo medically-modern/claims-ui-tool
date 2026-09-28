@@ -512,8 +512,7 @@ const Claims = () => {
       | "outstandingClaims"
       | "outstandingInvoices"
       | "eraReview"
-      | "invoiceReview"
-      | "paid";
+        | "paid";
     eftStatus?: "all" | "not-started" | "submitted" | "accepted" | "rejected";
   } | null>(null);
   // Sub-tab within the Late ERA bucket. "check" = needs an active claim

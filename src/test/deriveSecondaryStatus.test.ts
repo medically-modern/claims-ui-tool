@@ -25,10 +25,11 @@ describe("deriveStatus — Bill to Patient routing", () => {
     // Send Invoice clicked → Outstanding (bucketOf then uses sendInvoiceTriggered)
     expect(deriveStatus("Patient", "Outstanding", 0, "2026-06-30", true))
       .toBe("Sent to Patient");
-    // Patient paid via Stripe → Josh's webhook writes Review
+    // Patient paid via Stripe → Josh's webhook writes Review; the
+    // board routes this straight to Paid and auto-writes "Paid"
     expect(deriveStatus("Patient", "Review", 0, "2026-06-30", true))
       .toBe("Patient Paid");
-    // Operator confirmed payment → terminal Paid
+    // Auto-settle landed → terminal Paid
     expect(deriveStatus("Patient", "Paid", 0, "2026-06-30", true))
       .toBe("Secondary Paid");
     expect(deriveStatus("Patient", "Bad Debt", 0, "2026-06-30", true))
