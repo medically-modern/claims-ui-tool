@@ -330,3 +330,18 @@ describe("First orders — nothing holds them", () => {
     expect(d.auth.dvsNeeded).toBe(true);
   });
 });
+
+describe("Insurance-change review flags", () => {
+  it("no review flags on a clean commercial reorder", () => {
+    expect(run({}).flags.map((f) => f.id)).toEqual([]);
+  });
+  it("raises insurance-changed when Insurance Change? is Yes", () => {
+    expect(run({ insuranceChange: "Yes" }).flags.map((f) => f.id)).toContain("insurance-changed");
+  });
+  it("raises medicaid-sensors when Medicaid still serves sensors", () => {
+    expect(run({ primaryInsurance: "Medicaid", subscriptionType: "Sensors & Supplies" }).flags.map((f) => f.id)).toContain("medicaid-sensors");
+  });
+  it("no medicaid-sensors once serving is Supplies only", () => {
+    expect(run({ primaryInsurance: "Medicaid", subscriptionType: "Supplies" }).flags.map((f) => f.id)).not.toContain("medicaid-sensors");
+  });
+});

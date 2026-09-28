@@ -150,7 +150,7 @@ export interface RuleDef {
   source: string;
 }
 
-export type PatientFlagId = "oop-unknown" | "gp-unknown";
+export type PatientFlagId = "oop-unknown" | "gp-unknown" | "insurance-changed" | "medicaid-sensors";
 
 export interface PatientFlag {
   id: PatientFlagId;

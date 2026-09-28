@@ -9,7 +9,7 @@
  * Editing: the draft lives in the page; nothing is written to Monday until
  * Save, which writes only the fields that changed (setSubscriptionPatient).
  */
-import { ExternalLink, FileText, Loader2, Mail, RefreshCw, Upload } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, FileText, Loader2, Mail, RefreshCw, Upload } from "lucide-react";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import type { PatientFile } from "@/api/queries/patientFiles";
 import { Button } from "@/components/ui/button";
@@ -90,9 +90,48 @@ export function ProfileView({
   const elig = p.active;
   const eligTone = /^active$/i.test(elig) ? "good" : /inactive|failed|advantage/i.test(elig) ? "bad" : undefined;
   const reorder = reorderState(p);
+  // Post-payer-change review (Brandon, 2026-09-28). Keyed off the draft so it
+  // reacts as the operator fixes things: switching Subscription to Supplies
+  // clears the serving conflict, and Mark reconciled clears the change banner.
+  const insChanged = /^yes$/i.test(draft.insuranceChange);
+  const medicaidSensors = /medicaid/i.test(draft.primaryInsurance || "") && /sensor/i.test(draft.subscriptionType || "");
 
   return (
     <div className="space-y-4">
+      {/* ── Re-check after an insurance change ── */}
+      {(insChanged || medicaidSensors) && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-semibold text-amber-900">
+                {insChanged ? "Insurance changed — re-check before ordering" : "Serving conflict — re-check"}
+              </div>
+              {medicaidSensors && (
+                <div className="mt-1.5 rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[12px] font-medium text-rose-800">
+                  Medicaid is supplies-only, but Subscription is “{draft.subscriptionType || p.subscriptionType}”. Switch it to Supplies below — sensors can’t be served on Medicaid.
+                </div>
+              )}
+              <ul className="mt-2 space-y-0.5 text-[12px] text-amber-900">
+                <li>• Re-verify the Sensors &amp; Supplies auth requirements (editable in Medical necessity &amp; auth).</li>
+                <li>• Confirm serving is right for the new payer (Medicaid = supplies only).</li>
+                <li>• Confirm Member ID matches the new payer.</li>
+                <li>• Re-run eligibility for the new plan.</li>
+              </ul>
+              {insChanged && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button size="sm" variant="outline" className="h-8 border-amber-400 bg-white text-[12px] text-amber-900 hover:bg-amber-100"
+                    onClick={() => setField("insuranceChange", "No")}>
+                    <Check className="mr-1.5 h-3.5 w-3.5" /> Mark reconciled
+                  </Button>
+                  <span className="text-[11px] text-amber-700">clears the flag on Save to Monday</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Subscription overview ── */}
       <Section title="Subscription overview" accent>
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4">

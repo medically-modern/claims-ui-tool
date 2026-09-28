@@ -24,7 +24,7 @@ import { deriveMr } from "./mrCheck";
 import { readSignal } from "./confirmationSignals";
 import { lastOrderDay } from "@/lib/comms/sinceOrder";
 import { sinceLastOrder } from "./circleDetail";
-import { dvsState } from "./dvs";
+import { dvsState, isMedicaid } from "./dvs";
 import { renderAuth } from "./authStatus";
 import {
   confirmPolicy, eligibilityIsFresh, fmtUsd, isFirstOrder, parseMoney,
@@ -594,6 +594,27 @@ export function deriveChecks(i: CheckInputs): DerivedChecks {
     mr: deriveMedicalRecords(i, firstOrder),
     firstOrder,
     payerGroup: group.id,
-    flags: confirmation.flags,
+    flags: [...confirmation.flags, ...insuranceReviewFlags(i)],
   };
+}
+
+/**
+ * Flags raised by a payer change — the row-level half of the "re-check after an
+ * insurance change" review (Brandon, 2026-09-28). `insurance-changed` mirrors
+ * the board's Insurance Change? column: a payer switch since the last order
+ * means the auth, serving, member ID and eligibility all belong to the old plan
+ * until re-verified. `medicaid-sensors` is a hard serving conflict — Medicaid is
+ * supplies-only, so a subscription that still includes Sensors can't be served
+ * and needs the Subscription switched to Supplies. It stands on its own, whether
+ * or not the change flag is set.
+ */
+export function insuranceReviewFlags(i: CheckInputs): PatientFlag[] {
+  const out: PatientFlag[] = [];
+  if (/^yes$/i.test(i.insuranceChange)) {
+    out.push({ id: "insurance-changed", label: "Insurance changed", detail: "Payer changed since the last order — re-check auth requirements, serving, Member ID, and re-run eligibility before ordering." });
+  }
+  if (isMedicaid(i.primaryInsurance) && /sensor/i.test(i.subscriptionType)) {
+    out.push({ id: "medicaid-sensors", label: "Medicaid + sensors", detail: `Medicaid is supplies-only, but Subscription is "${i.subscriptionType}". Switch it to Supplies — sensors can't be served on Medicaid.` });
+  }
+  return out;
 }

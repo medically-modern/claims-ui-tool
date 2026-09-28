@@ -102,6 +102,7 @@ const FIELD_MAP: Record<string, Field> = {
   canText:              { col: SUB_COL.can_text, mut: "status" },
   // Insurance
   primaryInsurance:     { col: SUB_COL.primary_insurance, mut: "status" },
+  insuranceChange:      { col: SUB_COL.insurance_change, mut: "status" },
   memberId1:            { col: SUB_COL.member_id_1, mut: "simple" },
   secondaryInsurance:   { col: SUB_COL.secondary_insurance, mut: "status" },
   memberId2:            { col: SUB_COL.member_id_2, mut: "simple" },
