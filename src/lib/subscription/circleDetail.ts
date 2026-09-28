@@ -176,10 +176,11 @@ export function describeCircle(kind: CheckpointKind, c: Checkpoint, p: P, today:
         label: "Suggested Primary",
         value: sp ? `${sp}${match === false ? " · mismatch" : ""}` : "none returned",
         tone: match === false ? "bad" : sp ? undefined : "muted",
-        // No green check when the suggested primary matches the payer on file:
-        // it read as an all-clear next to an Inactive eligibility (Brandon,
-        // 2026-09-28). Only a mismatch gets a mark — the red X that flags it.
-        mark: match === false ? "bad" : undefined,
+        // A matching suggested primary gets the green check — except when the
+        // eligibility itself is red (Inactive / Failed), where a green check
+        // reads as an all-clear next to a red verdict (Brandon, 2026-09-28).
+        // A mismatch always gets the red X.
+        mark: match === false ? "bad" : match === true && c.tone !== "bad" ? "ok" : undefined,
       });
       if (p.cobCheck && !/^ok$/i.test(p.cobCheck)) facts.push({ label: "COB", value: p.cobCheck, tone: "bad" });
       if (p.lastEligibilityError && c.tone !== "ok") facts.push({ label: "Stedi said", value: p.lastEligibilityError, tone: "bad" });
