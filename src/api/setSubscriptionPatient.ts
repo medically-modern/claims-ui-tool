@@ -38,6 +38,15 @@ async function writeStatus(itemId: string, columnId: string, label: string) {
   });
 }
 
+/** Dropdown columns take {labels: [...]}; the status {label} shape is rejected.
+ *  Empty clears the column. The label must already exist on the column. */
+async function writeDropdown(itemId: string, columnId: string, label: string) {
+  await mondayQuery(STATUS_MUT, {
+    itemId, boardId: String(SUBSCRIPTION_BOARD_ID), columnId,
+    value: JSON.stringify(label ? { labels: [label] } : { labels: [] }),
+  });
+}
+
 const READ_COL = `query ReadCol($itemId: [ID!], $colId: [String!]) { items(ids: $itemId) { column_values(ids: $colId) { id value } } }`;
 /**
  * Location columns can't take plain text — Monday needs {lat, lng, address}.
@@ -76,7 +85,7 @@ async function writeLocation(itemId: string, columnId: string, address: string, 
  */
 type Field = {
   col: string;
-  mut: "simple" | "status" | "location";
+  mut: "simple" | "status" | "dropdown" | "location";
 };
 const FIELD_MAP: Record<string, Field> = {
   // Demographics
@@ -117,7 +126,7 @@ const FIELD_MAP: Record<string, Field> = {
   pauseReason:          { col: SUB_COL.pause_reason, mut: "status" },
   deadReason:           { col: SUB_COL.dead_reason, mut: "status" },
   // Clinical
-  diagnosis:            { col: SUB_COL.diagnosis, mut: "status" },
+  diagnosis:            { col: SUB_COL.diagnosis, mut: "dropdown" },
   mnExpiry:             { col: SUB_COL.mn_expiry, mut: "simple" },
   // Auth
   sensorsAuthStatus:    { col: SUB_COL.sensors_auth_status, mut: "status" },
@@ -173,6 +182,7 @@ export async function saveSubscriptionPatient(
         const cfg = FIELD_MAP[field];
         if (!cfg) throw new Error(`No Monday column wired for field '${field}'`);
         if (cfg.mut === "status") await writeStatus(mondayItemId, cfg.col, value);
+        else if (cfg.mut === "dropdown") await writeDropdown(mondayItemId, cfg.col, value);
         else if (cfg.mut === "location") await writeLocation(mondayItemId, cfg.col, value, coords?.[field]);
         else                       await writeSimple(mondayItemId, cfg.col, value);
       }

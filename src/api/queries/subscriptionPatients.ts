@@ -153,7 +153,9 @@ export const SUB_COL = {
   last_patient_contact: "text_mm5frhe9",
   // Clinical
   mn_expiry:        "date_mkp09gra",
-  diagnosis:        "color_mkxrxv9w",
+  // Diagnosis moved to a dropdown (Brandon, 2026-09-28). The old status
+  // column color_mkxrxv9w is no longer read.
+  diagnosis:        "dropdown_mm7d2p2h",
   mn_docs:          "file_mkp0vm0a",
   // Auth
   sensors_auth_status:  "color_mm25t997",
