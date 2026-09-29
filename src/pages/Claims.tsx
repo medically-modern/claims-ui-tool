@@ -138,7 +138,7 @@ function groupProductRows<T extends { product: string }>(items: T[]): [T[], T[]]
 
 type BoardKey = "primary" | "secondary" | "cashflow" | "playbook" | "eft" | "bank";
 type ModeKey = "submit" | "review";
-type CategoryKey = "era" | "late" | "denied" | "outstanding" | "paid" | "all";
+type CategoryKey = "era" | "late" | "denied" | "outstanding" | "paid" | "all" | "everything";
 
 // Medicaid Outstanding group (= "Paid but didn't hit bank yet"). Claims
 // living here have been pre-filled with projected eMedNY values on 837
@@ -365,6 +365,11 @@ function inPaid(c: Claim) {
   if (c.groupId === MEDICAID_OUTSTANDING_GROUP_ID) return true;
   return false;
 }
+/** Every claim on the board, whatever its state — the "All" tile, so the
+ *  operator can search for anything in one place. */
+function inEverything(_c: Claim) {
+  return true;
+}
 function inAllOpen(c: Claim) {
   // Union of the four named bucket predicates so the All Open count
   // equals ERA Review + Late + Denials + Outstanding exactly. The
@@ -384,6 +389,7 @@ const CATEGORY_FILTERS: Record<CategoryKey, (c: Claim) => boolean> = {
   paid: inPaid,
   
   all: inAllOpen,
+  everything: inEverything,
 };
 
 function rowCta(c: Claim): string {
@@ -407,6 +413,7 @@ const CATEGORY_COLUMNS: Record<CategoryKey, ColumnKey[]> = {
   paid:       ["patient", "dos", "products", "payer", "sent", "estPay", "paid", "pr", "difference", "action"],
   
   all:        ["patient", "dos", "products", "payer", "sent", "age", "primary", "s277", "claimStatus", "estPay", "paid", "pr", "difference", "issue", "nextAction", "action"],
+  everything: ["patient", "dos", "products", "payer", "sent", "age", "primary", "s277", "claimStatus", "estPay", "paid", "pr", "difference", "issue", "nextAction", "action"],
 };
 
 const COLUMN_LABELS: Record<ColumnKey, { label: string; align?: "right" }> = {
@@ -1068,6 +1075,7 @@ const Claims = () => {
     outstanding: MOCK_CLAIMS.filter(inOutstanding).length,
     paid: MOCK_CLAIMS.filter(inPaid).length,
     all: MOCK_CLAIMS.filter(inAllOpen).length,
+    everything: MOCK_CLAIMS.length,
   }), [MOCK_CLAIMS]);
 
   const eraStats = useMemo(() => {
@@ -1153,6 +1161,19 @@ const Claims = () => {
       estPay,
       paid,
       unpaid: estPay - paid,
+    };
+  }, [MOCK_CLAIMS]);
+
+  const everythingStats = useMemo(() => {
+    const open = MOCK_CLAIMS.filter(inAllOpen).length;
+    const paid = MOCK_CLAIMS.filter(inPaid).length;
+    return {
+      count: MOCK_CLAIMS.length,
+      open,
+      paid,
+      other: MOCK_CLAIMS.length - open - paid,
+      estPay: MOCK_CLAIMS.reduce((s, c) => s + c.estPay, 0),
+      paidAmt: MOCK_CLAIMS.reduce((s, c) => s + c.primaryPaid, 0),
     };
   }, [MOCK_CLAIMS]);
 
@@ -1333,8 +1354,10 @@ const Claims = () => {
           <PrimarySubmitBoard navTo={inboxNavTo} />
         ) : (
           <>
-            {/* Clickable summary tiles for all 6 categories */}
-            <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {/* Clickable summary tiles — row 1: the three action queues;
+                row 2: Outstanding, Paid, All Open, All. */}
+            <section className="space-y-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <SummaryTile
                 active={category === "era"}
                 onClick={() => setCategory("era")}
@@ -1379,6 +1402,8 @@ const Claims = () => {
                   { label: "Oldest DOS", value: denialStats.oldest ? fmtDate(denialStats.oldest) : "—" },
                 ]}
               />
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
               <SummaryTile
                 active={category === "outstanding"}
                 onClick={() => setCategory("outstanding")}
@@ -1417,6 +1442,22 @@ const Claims = () => {
                   { label: "Unpaid amount", value: fmtMoney0(allStats.unpaid) },
                 ]}
               />
+              <SummaryTile
+                active={category === "everything"}
+                onClick={() => setCategory("everything")}
+                tone="info"
+                icon={<Search className="h-5 w-5" />}
+                label="All"
+                value={String(everythingStats.count)}
+                lines={[
+                  { label: "Open", value: String(everythingStats.open) },
+                  { label: "Paid", value: String(everythingStats.paid) },
+                  { label: "Other", value: String(everythingStats.other) },
+                  { label: "Est. pay", value: fmtMoney0(everythingStats.estPay) },
+                  { label: "Paid amount", value: fmtMoney0(everythingStats.paidAmt) },
+                ]}
+              />
+            </div>
             </section>
 
             {/* Filters */}
@@ -2484,6 +2525,7 @@ function EmptyState({ category }: { category: CategoryKey }) {
     paid: "No paid claims to show yet.",
     
     all: "No open claims match your filters.",
+    everything: "No claims match your search.",
   };
   return (
     <div className="px-6 py-16 text-center">
