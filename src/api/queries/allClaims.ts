@@ -104,6 +104,7 @@ const COL = {
   BANK_PAYMENT_METHOD: "color_mm3jh0x2",
   BANK_PAYER_ORIG_ID: "text_mm3jpw1b",
   BANK_EFT_DATE: "date_mm3je93r",
+  HIT_BANK: "color_mm7n1jjp",
   // Raw remittance trace (TRN segment) — already populated by the ERA
   // writeback. Surfaced in the Bank Info strip as the Trace # field
   // because the X12 TRN trace appears in every Chase / TD ACH addenda
@@ -618,6 +619,7 @@ export function mapMondayItemToClaim(item: MondayItem): Claim {
     bankPayerOriginatorId: txt(item, COL.BANK_PAYER_ORIG_ID) || null,
     bankEftDate: isoOrNull(txt(item, COL.BANK_EFT_DATE)),
     bankTraceNumber: txt(item, COL.RAW_REMITTANCE_TRACE) || null,
+    hitBank: txt(item, COL.HIT_BANK) || null,
     estPay,
     primaryPaid,
     prAmount,

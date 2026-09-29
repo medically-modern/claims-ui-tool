@@ -91,6 +91,7 @@ const COL = {
   BANK_PAYMENT_METHOD: "color_mm3jpg86",
   BANK_PAYER_ORIG_ID: "text_mm3jz59k",
   BANK_EFT_DATE: "date_mm3jq5zk",
+  HIT_BANK: "color_mm7njxgm",
   // Remittance Trace Number (TRN segment of the 835). Reused from the
   // existing raw_remittance_trace column on the duplicated board —
   // same id as primary because the column was inherited at board
@@ -616,6 +617,7 @@ export function mapMondayItemToSecClaim(item: MondayItem): SecClaim {
     bankPayerOriginatorId: txt(item, COL.BANK_PAYER_ORIG_ID) || null,
     bankEftDate: isoDateOrEmpty(txt(item, COL.BANK_EFT_DATE)) || null,
     bankTraceNumber: txt(item, COL.RAW_REMITTANCE_TRACE) || null,
+    hitBank: txt(item, COL.HIT_BANK) || null,
     payLinkUrl: txt(item, COL.PAY_LINK_URL) || undefined,
     patientPaidAmount: num(item, COL.PATIENT_PAID_AMOUNT) || undefined,
     patientPaidDate: isoDateOrEmpty(txt(item, COL.PATIENT_PAID_DATE)) || undefined,

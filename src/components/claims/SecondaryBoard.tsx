@@ -246,6 +246,8 @@ export interface SecClaim {
    *  can actually Ctrl+F in the bank statement. */
   bankDepositTotal?: number | null;
   bankPaymentMethod?: string | null;
+  /** "Hit Bank?" (color_mm7njxgm) — Yes / Mismatch / blank. */
+  hitBank?: string | null;
   bankPayerOriginatorId?: string | null;
   bankEftDate?: string | null;
   bankTraceNumber?: string | null;

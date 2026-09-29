@@ -172,6 +172,10 @@ export interface Claim {
    *  TD. Reused from the existing raw_remittance_trace column
    *  (text_mm1gz8ss); not new on Monday. */
   bankTraceNumber?: string | null;
+  /** "Hit Bank?" (color_mm7n1jjp) — "Yes" once the deposit is confirmed
+   *  in our bank account, "Mismatch" when the deposit didn't tie out,
+   *  blank while we wait. Drives the Cash Flow "Paid, not in bank" tile. */
+  hitBank?: string | null;
   estPay: number;
   primaryPaid: number;
   prAmount: number;

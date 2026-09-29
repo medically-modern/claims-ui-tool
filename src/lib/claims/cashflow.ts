@@ -12,6 +12,11 @@
 //     (Submit Claim / Forwarded / Submitted) awaiting ERA
 //   - "expectedSecondaryPatient"   → secondary type=Patient, awaiting payment
 //   - "highRisk"     → non-Medicaid primary no ERA, 21+ days old
+//   - "notInBankLate" → paid (ERA pay date passed) but the deposit still
+//     isn't confirmed in the bank (Hit Bank? != Yes) more than
+//     NOT_IN_BANK_GRACE_BUSINESS_DAYS business days after the pay date.
+//     Inside the grace window the claim stays in "soonEra" (Finalized,
+//     not Paid) — a deposit a day or two behind the ERA is normal.
 //   - "settled"      → already paid (paid date in the past)
 //   - "out"          → pre-submission, write-off, terminal — not inflow
 //
@@ -107,6 +112,7 @@ export type CashFlowBucket =
   | "futurePump"
   | "highRiskDenials"
   | "highRiskLate"
+  | "notInBankLate"
   | "settled"
   | "out";
 
@@ -115,6 +121,54 @@ const SOON_HORIZON_DAYS = 7;
  *  Older than this and we treat it as stuck / High Risk. */
 const EXPECTED_AGE_LIMIT_DAYS = 21;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// ── Hit Bank? gate (2026-09-29) ──────────────────────────────────────────────
+// A paid date in the past used to mean "settled". Now the money only
+// counts as landed once Hit Bank? = Yes. Go-forward only: pay dates
+// before the gate went live keep the old behaviour so historical claims
+// (Hit Bank? blank) don't flood the new tile.
+export const HIT_BANK_GATE_START = "2026-09-29";
+/** Business days after the pay date before a still-unconfirmed deposit
+ *  is a problem. Within this window it's normal ACH lag. */
+export const NOT_IN_BANK_GRACE_BUSINESS_DAYS = 3;
+
+/** Whole business days (Mon–Fri) from `fromIso` to `today`. */
+export function businessDaysSince(fromIso: string, today: Date): number {
+  const d = parseLocalDate(fromIso);
+  if (!Number.isFinite(d.getTime())) return 0;
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let n = 0;
+  while (d < end) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) n += 1;
+  }
+  return n;
+}
+
+/** True when a paid claim's money is still waiting on bank confirmation. */
+export function awaitingBank(opts: {
+  hitBank?: string | null;
+  payDate?: string | null;
+  amount?: number | null;
+  method?: string | null;
+}): boolean {
+  if (!opts.payDate) return false;
+  if ((opts.hitBank || "").trim() === "Yes") return false;
+  if (opts.payDate.slice(0, 10) < HIT_BANK_GATE_START) return false;
+  if ((opts.method || "").trim().toUpperCase() === "NON") return false;
+  if (opts.amount != null && opts.amount <= 0) return false;
+  return true;
+}
+
+/** Bucket for a claim whose pay date has passed but whose deposit isn't
+ *  confirmed: Finalized-not-Paid inside the grace window, the dedicated
+ *  not-in-bank bucket after it. */
+function unconfirmedBucket(payDate: string, today: Date): CashFlowBucket {
+  return businessDaysSince(payDate, today) > NOT_IN_BANK_GRACE_BUSINESS_DAYS
+    ? "notInBankLate"
+    : "soonEra";
+}
 
 // Pre-submission / terminal primary statuses that aren't part of cash
 // flow projection. Note: "Future Claim" is handled separately below —
@@ -161,7 +215,17 @@ export function classifyForCashFlow(claim: Claim, today: Date): CashFlowBucket {
   if (claim.primaryPaidDate) {
     const paidMs = new Date(claim.primaryPaidDate).getTime();
     if (Number.isFinite(paidMs)) {
-      if (paidMs <= todayMs) return "settled";
+      if (paidMs <= todayMs) {
+        const bankDate = claim.bankEftDate || claim.primaryPaidDate;
+        if (awaitingBank({
+          hitBank: claim.hitBank, payDate: bankDate,
+          amount: claim.primaryPaid, method: claim.bankPaymentMethod,
+        })) {
+          const b = unconfirmedBucket(bankDate, today);
+          return b === "soonEra" && isPureMedicaid(claim.primaryPayor) ? "soonMedicaid" : b;
+        }
+        return "settled";
+      }
       const daysAway = Math.ceil((paidMs - todayMs) / MS_PER_DAY);
       if (daysAway > SOON_HORIZON_DAYS) {
         // Future ERA more than 7 days out → still scheduled inflow, but
@@ -236,6 +300,20 @@ export function classifyForCashFlowSecondary(
 ): CashFlowBucket {
   const todayMs = today.getTime();
 
+  // Patient paid through Stripe: the payout still has to hit the bank.
+  if (
+    claim.patientPaidDate &&
+    (claim.status === "Patient Paid" || claim.status === "Secondary Paid") &&
+    !claim.secondaryPayDate
+  ) {
+    return awaitingBank({
+      hitBank: claim.hitBank, payDate: claim.patientPaidDate,
+      amount: claim.patientPaidAmount ?? null,
+    })
+      ? unconfirmedBucket(claim.patientPaidDate, today)
+      : "out";
+  }
+
   // Settled / closed-out states first.
   if (
     claim.status === "Patient Paid" ||
@@ -248,7 +326,16 @@ export function classifyForCashFlowSecondary(
   if (claim.secondaryPayDate) {
     const paidMs = new Date(claim.secondaryPayDate).getTime();
     if (Number.isFinite(paidMs)) {
-      if (paidMs <= todayMs) return "settled";
+      if (paidMs <= todayMs) {
+        const bankDate = claim.bankEftDate || claim.secondaryPayDate;
+        if (awaitingBank({
+          hitBank: claim.hitBank, payDate: bankDate,
+          amount: claim.secondaryPaid ?? null, method: claim.bankPaymentMethod,
+        })) {
+          return unconfirmedBucket(bankDate, today);
+        }
+        return "settled";
+      }
       // ERA received with future pay date → Soon (ERA received).
       return "soonEra";
     }
@@ -519,6 +606,9 @@ export function expectedInflowAmount(
  * primary passed down (c.remaining).
  */
 export function expectedInflowAmountSecondary(claim: SecClaim): number {
+  if (claim.patientPaidDate && !claim.secondaryPayDate && claim.patientPaidAmount) {
+    return claim.patientPaidAmount;
+  }
   if (claim.secondaryPayDate && claim.secondaryPaid != null) {
     return claim.secondaryPaid;
   }
@@ -557,6 +647,8 @@ export interface CashFlowEntry {
    *  in amber with an "est." prefix so the operator can tell which
    *  numbers are historical-average projections vs. real estPay. */
   estimated?: boolean;
+  /** Hit Bank? value on the claim (Yes / Mismatch / blank). */
+  hitBank?: string | null;
 }
 
 export interface BucketStat {
@@ -595,6 +687,15 @@ export interface CashFlowStats {
   highRisk: BucketStat;
   highRiskDenials: BucketStat;
   highRiskLate: BucketStat;
+
+  // Paid, not in bank — pay date passed more than 3 business days ago and
+  // the deposit still isn't confirmed (Hit Bank? != Yes).
+  notInBank: BucketStat;
+  notInBankPrimary: BucketStat;
+  notInBankSecondary: BucketStat;
+  notInBankMismatch: BucketStat;
+  notInBankOver7: BucketStat;
+  notInBankPumps: BucketStat;
 
   // Per-tile pump-claim breakdown. A claim counts as a pump claim when
   // any service line has HCPCS E0784. Pumps run $4k-$6k per claim so
@@ -668,6 +769,7 @@ function entryFromPrimary(
     amount,
     kind: "primary",
     estimated,
+    hitBank: c.hitBank ?? null,
   };
 }
 
@@ -681,9 +783,10 @@ function entryFromSecondary(c: SecClaim, amount: number): CashFlowEntry {
     // The secondary's own send date if we have it; otherwise the
     // primary's send date as a fallback so the column isn't empty.
     claimSentDate: c.secondarySentDate || c.primarySentDate || null,
-    payDate: c.secondaryPayDate || null,
+    payDate: c.secondaryPayDate || c.patientPaidDate || null,
     amount,
     kind: "secondary",
+    hitBank: c.hitBank ?? null,
   };
 }
 
@@ -720,6 +823,20 @@ export function computeCashFlow(
     futurePump: emptyStat(),
     highRiskDenials: emptyStat(),
     highRiskLate: emptyStat(),
+    notInBankLate: emptyStat(),
+  };
+  const notInBankPrimary = emptyStat();
+  const notInBankSecondary = emptyStat();
+  const notInBankMismatch = emptyStat();
+  const notInBankOver7 = emptyStat();
+  const notInBankPumps = emptyStat();
+  const trackNotInBank = (entry: CashFlowEntry, isPump: boolean) => {
+    addToStat(entry.kind === "primary" ? notInBankPrimary : notInBankSecondary, entry);
+    if ((entry.hitBank || "").trim() === "Mismatch") addToStat(notInBankMismatch, entry);
+    if (entry.payDate && businessDaysSince(entry.payDate, today) > 7) {
+      addToStat(notInBankOver7, entry);
+    }
+    if (isPump) addToStat(notInBankPumps, entry);
   };
 
   // Pump-claim counters per tile. Primaries only — secondaries don't
@@ -745,6 +862,7 @@ export function computeCashFlow(
     // primaryTotal therefore also includes them so the Primary slice
     // on the Total Open tile breaks down consistently.
     addToStat(primaryTotal, entry);
+    if (bucket === "notInBankLate") trackNotInBank(entry, claimHasPump(c));
     if (claimHasPump(c)) {
       if (bucket === "soonEra" || bucket === "soonMedicaid") {
         addToStat(soonPumps, entry);
@@ -769,6 +887,7 @@ export function computeCashFlow(
     const entry = entryFromSecondary(c, amount);
     addToStat(buckets[bucket], entry);
     addToStat(secondaryTotal, entry);
+    if (bucket === "notInBankLate") trackNotInBank(entry, false);
     // Note: no pump aggregation for secondaries. See comment above.
   }
 
@@ -791,7 +910,9 @@ export function computeCashFlow(
   // totalOpenPumps stays commercial-only (matches what the Pump
   // claims breakdown row counts elsewhere); Medicare pump rentals
   // already have their own dedicated Future Medicare Pumps tile.
-  const totalOpen = mergeStats(soon, expected, highRisk, buckets.futurePump);
+  const totalOpen = mergeStats(
+    soon, expected, highRisk, buckets.futurePump, buckets.notInBankLate,
+  );
   const totalOpenPumps = mergeStats(soonPumps, expectedPumps, highRiskPumps);
 
   return {
@@ -811,6 +932,12 @@ export function computeCashFlow(
     highRisk,
     highRiskDenials: buckets.highRiskDenials,
     highRiskLate: buckets.highRiskLate,
+    notInBank: buckets.notInBankLate,
+    notInBankPrimary,
+    notInBankSecondary,
+    notInBankMismatch,
+    notInBankOver7,
+    notInBankPumps,
     totalOpenPumps,
     soonPumps,
     expectedPumps,

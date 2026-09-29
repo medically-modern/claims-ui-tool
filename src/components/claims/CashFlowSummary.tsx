@@ -1,5 +1,5 @@
-// Top-of-page cash flow summary. Four tiles: Total Open, Soon, Expected,
-// High Risk. Spans both Primary and Secondary claims. Each breakdown row
+// Top-of-page cash flow summary. Six tiles: Total Open, Soon, Expected,
+// Future Medicare Pumps, High Risk, Paid not in bank. Spans both Primary and Secondary claims. Each breakdown row
 // is a button — clicking it expands an inline detail panel directly
 // below the tile grid (Name / DOS / Pay date / Amount per claim).
 // Clicking the same row again collapses it.
@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { TrendingUp, Calendar, Clock, AlertTriangle, Info, X, Activity } from "lucide-react";
+import { TrendingUp, Calendar, Clock, AlertTriangle, Info, X, Activity, Landmark } from "lucide-react";
 import { computeCashFlow, type BucketStat, type CashFlowEntry } from "@/lib/claims/cashflow";
 import { fmtDate, fmtMoney } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
@@ -87,7 +87,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
           <Tile
             tone="info"
             icon={<TrendingUp className="h-5 w-5" />}
@@ -140,7 +140,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
               {
                 label: "Finalized, not Paid",
                 stat: stats.soonEra,
-                description: "ERA in hand with a future EFT pay date within 7 days.",
+                description: "ERA in hand with an EFT pay date in the next 7 days, or paid in the last 3 business days and not yet confirmed in the bank.",
               },
               {
                 label: "Medicaid (next Thursday)",
@@ -252,6 +252,45 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             ]}
             tooltipText="Anything that's blocking expected inflow: denials (payer rejected, needs rework) plus claims submitted 21+ days ago with no ERA (Late). Both groups need operator action before the money lands."
             onToggle={(label, stat, desc) => toggleBucket("High risk", label, stat, desc)}
+          />
+          <Tile
+            tone="orange"
+            icon={<Landmark className="h-5 w-5" />}
+            label="Paid, not in bank"
+            amount={stats.notInBank.total}
+            count={stats.notInBank.count}
+            subtitle="EFT date 3+ business days ago, Hit Bank? not Yes"
+            activeKey={active?.key}
+            breakdown={[
+              {
+                label: "Primary",
+                stat: stats.notInBankPrimary,
+                description: "Primary claims paid by the payer whose deposit still isn't confirmed in the bank.",
+              },
+              {
+                label: "Secondary",
+                stat: stats.notInBankSecondary,
+                description: "Secondary insurance and patient (Stripe) payments whose deposit still isn't confirmed in the bank.",
+              },
+              {
+                label: "Over 7 business days",
+                stat: stats.notInBankOver7,
+                description: "Deposit expected more than 7 business days ago — likely wrong account, returned ACH, or a lost check.",
+              },
+              {
+                label: "Mismatch",
+                stat: stats.notInBankMismatch,
+                description: "Deposit found but the amount didn't tie out to the ERA (Hit Bank? = Mismatch).",
+              },
+              {
+                label: "Pump claims",
+                stat: stats.notInBankPumps,
+                emphasis: true,
+                description: "Commercial pump claims paid but not yet in the bank.",
+              },
+            ]}
+            tooltipText="The payer says it paid (ERA pay date has passed) but the deposit hasn't been confirmed in our bank more than 3 business days later. Deposits inside the 3-day window stay in Soon › Finalized, not Paid. Go-forward from 9/29/2026."
+            onToggle={(label, stat, desc) => toggleBucket("Paid, not in bank", label, stat, desc)}
           />
         </div>
 
@@ -424,7 +463,7 @@ function DetailPanel({
 // Tile
 // =============================================================================
 
-type Tone = "info" | "success" | "neutral" | "danger" | "violet";
+type Tone = "info" | "success" | "neutral" | "danger" | "violet" | "orange";
 
 const TONE_CLASSES: Record<Tone, { icon: string; ring: string }> = {
   info:    { icon: "bg-blue-100 text-blue-700",      ring: "" },
@@ -432,6 +471,7 @@ const TONE_CLASSES: Record<Tone, { icon: string; ring: string }> = {
   neutral: { icon: "bg-amber-100 text-amber-800",    ring: "" },
   danger:  { icon: "bg-rose-100 text-rose-700",      ring: "" },
   violet:  { icon: "bg-violet-100 text-violet-700",  ring: "" },
+  orange:  { icon: "bg-orange-100 text-orange-700",  ring: "" },
 };
 
 interface BreakdownRow {
