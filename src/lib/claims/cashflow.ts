@@ -649,6 +649,13 @@ export interface CashFlowEntry {
   estimated?: boolean;
   /** Hit Bank? value on the claim (Yes / Mismatch / blank). */
   hitBank?: string | null;
+  /** Bank Payment Method (ACH / CHK / FWT / NON), or "Stripe" for a
+   *  patient pay-link payment. */
+  method?: string | null;
+  /** What to find the deposit by: 835 trace / check #, or Stripe charge id. */
+  reference?: string | null;
+  /** Date the money should have landed (Bank EFT Date, else pay date). */
+  bankDate?: string | null;
 }
 
 export interface BucketStat {
@@ -770,6 +777,9 @@ function entryFromPrimary(
     kind: "primary",
     estimated,
     hitBank: c.hitBank ?? null,
+    method: c.bankPaymentMethod ?? null,
+    reference: c.bankTraceNumber ?? null,
+    bankDate: c.bankEftDate || c.primaryPaidDate || null,
   };
 }
 
@@ -787,6 +797,9 @@ function entryFromSecondary(c: SecClaim, amount: number): CashFlowEntry {
     amount,
     kind: "secondary",
     hitBank: c.hitBank ?? null,
+    method: c.bankPaymentMethod || (c.stripeChargeId ? "Stripe" : null),
+    reference: c.bankTraceNumber || c.stripeChargeId || null,
+    bankDate: c.bankEftDate || c.secondaryPayDate || c.patientPaidDate || null,
   };
 }
 
@@ -833,7 +846,7 @@ export function computeCashFlow(
   const trackNotInBank = (entry: CashFlowEntry, isPump: boolean) => {
     addToStat(entry.kind === "primary" ? notInBankPrimary : notInBankSecondary, entry);
     if ((entry.hitBank || "").trim() === "Mismatch") addToStat(notInBankMismatch, entry);
-    if (entry.payDate && businessDaysSince(entry.payDate, today) > 7) {
+    if (entry.bankDate && businessDaysSince(entry.bankDate, today) > 7) {
       addToStat(notInBankOver7, entry);
     }
     if (isPump) addToStat(notInBankPumps, entry);
