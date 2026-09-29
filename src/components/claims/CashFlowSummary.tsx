@@ -6,10 +6,16 @@
 
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/hooks/use-toast";
+import { markHitBank, isHitBankMarkConfigured, type HitBankLabel } from "@/api/markHitBank";
+import { ALL_CLAIMS_QUERY_KEY } from "@/hooks/useAllClaims";
+import { ALL_SECONDARY_CLAIMS_QUERY_KEY } from "@/hooks/useAllSecondaryClaims";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { TrendingUp, Calendar, Clock, AlertTriangle, Info, X, Activity, Landmark } from "lucide-react";
-import { computeCashFlow, type BucketStat, type CashFlowEntry } from "@/lib/claims/cashflow";
+import { computeCashFlow, businessDaysSince, type BucketStat, type CashFlowEntry } from "@/lib/claims/cashflow";
 import { fmtDate, fmtMoney } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
 import type { SecClaim } from "@/components/claims/SecondaryBoard";
@@ -35,7 +41,12 @@ interface ActiveBucket {
   title: string;
   description?: string;
   stat: BucketStat;
+  /** Render the bank-confirmation columns + In bank / Mismatch actions
+   *  (Paid, not in bank tile). */
+  bank?: boolean;
 }
+
+const NOT_IN_BANK_TILE = "Paid, not in bank";
 
 export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
   const stats = useMemo(
@@ -55,7 +66,13 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
     setActive((prev) =>
       prev?.key === key
         ? null
-        : { key, title: `${tile} — ${label}`, description, stat },
+        : {
+            key,
+            title: label === "All" ? tile : `${tile} — ${label}`,
+            description,
+            stat,
+            bank: tile === NOT_IN_BANK_TILE,
+          },
     );
   }
 
@@ -127,6 +144,8 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
               },
             ]}
             onToggle={(label, stat, desc) => toggleBucket("Total open", label, stat, desc)}
+            onSelectAll={() => toggleBucket("Total open", "All", stats.totalOpen)}
+            allActive={active?.key === "Total open::All"}
           />
           <Tile
             tone="success"
@@ -156,6 +175,8 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             ]}
             tooltipText="Claims with the EFT pay date within 7 days, OR pure-Medicaid awaiting ERA whose eMedNY settle date is within 7 days. Spans both Primary and Secondary."
             onToggle={(label, stat, desc) => toggleBucket("Soon", label, stat, desc)}
+            onSelectAll={() => toggleBucket("Soon", "All", stats.soon)}
+            allActive={active?.key === "Soon::All"}
           />
           <Tile
             tone="neutral"
@@ -205,6 +226,8 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             ]}
             tooltipText="Non-Medicaid primaries awaiting ERA within their normal turnaround window, pure-Medicaid more than a week from their eMedNY settle date, and secondaries (Forwarded/Insurance/Patient) still awaiting payment."
             onToggle={(label, stat, desc) => toggleBucket("Expected", label, stat, desc)}
+            onSelectAll={() => toggleBucket("Expected", "All", stats.expected)}
+            allActive={active?.key === "Expected::All"}
           />
           <Tile
             tone="violet"
@@ -223,6 +246,8 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             ]}
             tooltipText="Medicare pump rentals scheduled for future months but not yet billed. These claims sit in 'Future Claim' on the Claims Board until the next monthly cycle. Separated out so the open-A/R tiles aren't dominated by far-future rental cycles."
             onToggle={(label, stat, desc) => toggleBucket("Future Medicare Pumps", label, stat, desc)}
+            onSelectAll={() => toggleBucket("Future Medicare Pumps", "All", stats.futurePump)}
+            allActive={active?.key === "Future Medicare Pumps::All"}
           />
           <Tile
             tone="danger"
@@ -252,11 +277,13 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             ]}
             tooltipText="Anything that's blocking expected inflow: denials (payer rejected, needs rework) plus claims submitted 21+ days ago with no ERA (Late). Both groups need operator action before the money lands."
             onToggle={(label, stat, desc) => toggleBucket("High risk", label, stat, desc)}
+            onSelectAll={() => toggleBucket("High risk", "All", stats.highRisk)}
+            allActive={active?.key === "High risk::All"}
           />
           <Tile
             tone="orange"
             icon={<Landmark className="h-5 w-5" />}
-            label="Paid, not in bank"
+            label={NOT_IN_BANK_TILE}
             amount={stats.notInBank.total}
             count={stats.notInBank.count}
             subtitle="EFT date 3+ business days ago, Hit Bank? not Yes"
@@ -291,6 +318,8 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             ]}
             tooltipText="The payer says it paid (ERA pay date has passed) but the deposit hasn't been confirmed in our bank more than 3 business days later. Deposits inside the 3-day window stay in Soon › Finalized, not Paid. Go-forward from 9/29/2026."
             onToggle={(label, stat, desc) => toggleBucket("Paid, not in bank", label, stat, desc)}
+            onSelectAll={() => toggleBucket("Paid, not in bank", "All", stats.notInBank)}
+            allActive={active?.key === "Paid, not in bank::All"}
           />
         </div>
 
@@ -335,6 +364,10 @@ function DetailPanel({
   }
 
   const estimatedCount = sorted.filter((e) => e.estimated).length;
+
+  if (active.bank) {
+    return <BankDetailPanel active={active} entries={sorted} onClose={onClose} />;
+  }
 
   return (
     <Card className="mt-3 p-4">
@@ -501,6 +534,8 @@ function Tile({
   breakdown,
   onToggle,
   activeKey,
+  onSelectAll,
+  allActive,
 }: {
   label: string;
   amount: number;
@@ -513,10 +548,21 @@ function Tile({
   breakdown?: BreakdownRow[];
   onToggle: (label: string, stat: BucketStat, description?: string) => void;
   activeKey?: BucketKey;
+  /** Click anywhere on the tile (outside a breakdown row) to list every
+   *  claim in it below the grid. */
+  onSelectAll?: () => void;
+  allActive?: boolean;
 }) {
   const t = TONE_CLASSES[tone];
   const body = (
-    <Card className="p-4">
+    <Card
+      className={cn(
+        "p-4",
+        onSelectAll && count > 0 && "cursor-pointer transition-shadow hover:shadow-md",
+        allActive && "ring-2 ring-primary",
+      )}
+      onClick={onSelectAll && count > 0 ? onSelectAll : undefined}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className={cn("flex h-9 w-9 items-center justify-center rounded-md", t.icon)}>
           {icon}
@@ -626,5 +672,162 @@ function Tile({
       <TooltipTrigger asChild>{body}</TooltipTrigger>
       <TooltipContent className="max-w-xs text-xs">{tooltipText}</TooltipContent>
     </Tooltip>
+  );
+}
+
+// =============================================================================
+// Paid, not in bank — drill-down with the bank details needed to find the
+// deposit, plus manual In bank / Mismatch overrides (Josh's daily
+// QuickBooks match normally sets Hit Bank?).
+// =============================================================================
+
+function BankDetailPanel({
+  active,
+  entries,
+  onClose,
+}: {
+  active: ActiveBucket;
+  entries: CashFlowEntry[];
+  onClose: () => void;
+}) {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [done, setDone] = useState<Record<string, string>>({});
+  const today = useMemo(() => new Date(), []);
+  const canMark = isHitBankMarkConfigured();
+
+  const rows = useMemo(
+    () =>
+      entries
+        .map((e) => ({
+          e,
+          days: e.bankDate ? businessDaysSince(e.bankDate, today) : null,
+        }))
+        .sort((a, b) => (b.days ?? -1) - (a.days ?? -1)),
+    [entries, today],
+  );
+
+  async function mark(e: CashFlowEntry, label: HitBankLabel) {
+    const k = `${e.kind}-${e.id}`;
+    setBusy((b) => ({ ...b, [k]: true }));
+    try {
+      await markHitBank(e.kind, [e.mondayItemId], label);
+      setDone((d) => ({ ...d, [k]: label }));
+      toast({
+        title: label === "Yes" ? `In bank: ${e.name}` : `Mismatch: ${e.name}`,
+        description: label === "Yes" ? "Moved to Paid And Closed." : "Stays in Paid, but NOT in Bank.",
+      });
+      void qc.invalidateQueries({ queryKey: e.kind === "primary" ? ALL_CLAIMS_QUERY_KEY : ALL_SECONDARY_CLAIMS_QUERY_KEY });
+    } catch (err) {
+      toast({ title: "Couldn't update Hit Bank?", description: (err as Error).message });
+    } finally {
+      setBusy((b) => ({ ...b, [k]: false }));
+    }
+  }
+
+  return (
+    <Card className="mt-3 p-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">{active.title}</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            <span className="font-medium">
+              {entries.length.toLocaleString()} claim{entries.length === 1 ? "" : "s"}
+            </span>
+            <span className="mx-1">·</span>
+            <span className="tabular-nums">{money(active.stat.total)}</span>
+            <span className="mx-1">·</span>
+            <span>Payer paid, deposit not confirmed in the bank. Oldest first.</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close details"
+          className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+          No claims in this bucket right now.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              <tr className="border-b">
+                <th className="py-1.5 pr-3 text-left font-medium">Name</th>
+                <th className="py-1.5 pr-3 text-left font-medium">Payor</th>
+                <th className="py-1.5 pr-3 text-left font-medium">Method</th>
+                <th className="py-1.5 pr-3 text-left font-medium">Trace / check #</th>
+                <th className="py-1.5 pr-3 text-left font-medium">EFT date</th>
+                <th className="py-1.5 pr-3 text-right font-medium">Bus. days</th>
+                <th className="py-1.5 pr-3 text-left font-medium">Hit Bank?</th>
+                <th className="py-1.5 pr-3 text-right font-medium">Amount</th>
+                <th className="py-1.5 text-right font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ e, days }) => {
+                const k = `${e.kind}-${e.id}`;
+                const hb = done[k] ?? e.hitBank ?? "";
+                return (
+                  <tr key={k} className={cn("border-b last:border-0", done[k] === "Yes" && "opacity-50")}>
+                    <td className="py-2 pr-3">
+                      <button type="button" className="text-left font-medium text-foreground hover:underline" onClick={() => navigate(`/claims/${e.id}`)}>
+                        {e.name}
+                      </button>
+                      {e.kind === "secondary" && (
+                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Secondary</div>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-muted-foreground">{e.payor}</td>
+                    <td className="py-2 pr-3 text-muted-foreground">{e.method || "—"}</td>
+                    <td className="py-2 pr-3 font-mono text-[11px] text-muted-foreground">{e.reference || "—"}</td>
+                    <td className="py-2 pr-3 tabular-nums text-muted-foreground">{fmtDate(e.bankDate ?? null)}</td>
+                    <td className={cn("py-2 pr-3 text-right tabular-nums", days != null && days > 7 ? "font-semibold text-rose-700" : "text-muted-foreground")}>
+                      {days ?? "—"}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {hb === "Mismatch" ? (
+                        <span className="rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-800">Mismatch</span>
+                      ) : hb === "Yes" ? (
+                        <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800">Yes</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums font-medium text-foreground">{fmtMoney(e.amount)}</td>
+                    <td className="py-2 text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button size="sm" className="h-7 px-2 text-xs" disabled={!canMark || busy[k] || hb === "Yes"} onClick={() => void mark(e, "Yes")}>
+                          In bank
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={!canMark || busy[k] || hb !== ""} onClick={() => void mark(e, "Mismatch")}>
+                          Mismatch
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2">
+                <td className="py-2 pr-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" colSpan={7}>
+                  Total ({entries.length.toLocaleString()} claim{entries.length === 1 ? "" : "s"})
+                </td>
+                <td className="py-2 pr-3 text-right tabular-nums font-bold text-foreground">{fmtMoney(active.stat.total)}</td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
