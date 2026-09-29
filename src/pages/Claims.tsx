@@ -76,6 +76,7 @@ import { toast } from "@/hooks/use-toast";
 import type { ServiceLine } from "@/lib/claims/types";
 import { DenialAnalysisTable } from "@/components/claims/DenialAnalysisTable";
 import { EftEnrollmentTable } from "@/components/claims/EftEnrollmentTable";
+import { BankConfirmationTable } from "@/components/claims/BankConfirmationTable";
 import { SubscriptionBoard } from "@/components/subscription/SubscriptionBoard";
 import type { HeaderNavItem } from "@/components/claims/AppHeader";
 import { usePrefetchSubscription } from "@/hooks/subscription/usePrefetchSubscription";
@@ -135,7 +136,7 @@ function groupProductRows<T extends { product: string }>(items: T[]): [T[], T[]]
   return [r0, r1];
 }
 
-type BoardKey = "primary" | "secondary" | "cashflow" | "playbook" | "eft";
+type BoardKey = "primary" | "secondary" | "cashflow" | "playbook" | "eft" | "bank";
 type ModeKey = "submit" | "review";
 type CategoryKey = "era" | "late" | "denied" | "outstanding" | "paid" | "all";
 
@@ -1246,6 +1247,7 @@ const Claims = () => {
               <TabsTrigger value="cashflow">Cash Flow</TabsTrigger>
               <TabsTrigger value="playbook">Denial Analysis Playbook</TabsTrigger>
               <TabsTrigger value="eft">EFT Enrollment</TabsTrigger>
+              <TabsTrigger value="bank">Bank Confirmation</TabsTrigger>
             </TabsList>
           </Tabs>
           <ActionItemsInbox
@@ -1301,7 +1303,9 @@ const Claims = () => {
           </Tabs>
         )}
 
-        {board === "eft" ? (
+        {board === "bank" ? (
+          <BankConfirmationTable />
+        ) : board === "eft" ? (
           <EftEnrollmentTable navTo={inboxNavTo} />
         ) : board === "playbook" ? (
           <DenialAnalysisTable />

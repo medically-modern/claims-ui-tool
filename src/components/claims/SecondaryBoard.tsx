@@ -31,6 +31,7 @@ import {
   fireQuestionAnswered,
   clearSmsStatus,
 } from "@/api/setSecondaryStatus";
+import { routePaidGroup, describePaidGroup } from "@/api/routePaidGroup";
 import {
   markSecondaryPaid as apiMarkSecondaryPaid,
   isMarkSecondaryPaidConfigured,
@@ -1223,11 +1224,15 @@ export function SecondaryBoard({
     //
     updateClaim(c.id, { status: "Secondary Paid" });
     try {
-      await setSecondaryStatusAndMove(
-        c.mondayItemId,
-        "Paid",
-        "group_mkxsng4r",  // Paid And Closed
-      );
+      // Status first, then the Hit Bank gate picks the group:
+      // "Paid, but NOT in Bank" until the Stripe payout is confirmed.
+      await setSecondaryStatus(c.mondayItemId, "Paid");
+      let routedTo: string | undefined;
+      try {
+        routedTo = (await routePaidGroup(c.mondayItemId, "secondary")).group_id;
+      } catch (moveErr) {
+        console.warn("[markPatientPaid] group routing failed:", moveErr);
+      }
       // Cross-board propagation: Subscription "Secondary Claim Paid?"
       // -> Fully Paid + clear the outstanding PR amount. Background
       // task on the backend; failures land in Railway logs and the
@@ -1246,7 +1251,10 @@ export function SecondaryBoard({
           });
         }
       }
-      toast({ title: `Marked paid: ${c.patientName}`, description: "Row moved to Paid." });
+      toast({
+        title: `Marked paid: ${c.patientName}`,
+        description: `Row moved to ${describePaidGroup(routedTo)}.`,
+      });
       // Invalidate before refetch — the persisted localStorage cache
       // would otherwise serve the stale "Patient Paid" status when
       // refetchSecondary returns from network slower than React Query
@@ -1267,10 +1275,10 @@ export function SecondaryBoard({
    * mandatory review step before a row leaves the active queue. Writes
    * to Monday in one call:
    *   - Secondary Status -> "Paid" (replaces "Review" set on ERA arrival)
-   *   - Group move:
-   *       CHK payment method -> group_mm3qkck6 "Paid but need to EFT"
-   *       (operator still needs to enroll the payer for EFT)
-   *       Anything else      -> group_mkxsng4r "Paid And Closed"
+   *   - Group move via the Hit Bank gate (routePaidGroup):
+   *       CHK from a non-EFT'd payer -> "Paid but need to EFT"
+   *       Hit Bank? = Yes / $0       -> "Paid And Closed"
+   *       otherwise                  -> "Paid, but NOT in Bank"
    *
    * Optimistic local flip + refetch on success so the bucket transition
    * is instant. If the Monday write fails, the optimistic flip rolls
@@ -1278,17 +1286,21 @@ export function SecondaryBoard({
    */
   async function markPosted(c: SecClaim) {
     if (!c.mondayItemId) return;
-    const method = (c.bankPaymentMethod || "").trim().toUpperCase();
-    const isCheck = method === "CHK";
-    const groupId = isCheck ? "group_mm3qkck6" : "group_mkxsng4r";
     updateClaim(c.id, { status: "Secondary Paid" });
     try {
-      await setSecondaryStatusAndMove(c.mondayItemId, "Paid", groupId);
+      await setSecondaryStatus(c.mondayItemId, "Paid");
+      let routedTo: string | undefined;
+      try {
+        routedTo = (await routePaidGroup(c.mondayItemId, "secondary")).group_id;
+      } catch (moveErr) {
+        console.warn("[markPosted] group routing failed:", moveErr);
+      }
       toast({
         title: `Posted: ${c.patientName}`,
-        description: isCheck
-          ? "Moved to Paid but need to EFT — enroll payer for EFT next."
-          : "Moved to Paid And Closed.",
+        description:
+          routedTo === "group_mm3qkck6"
+            ? "Moved to Paid but need to EFT — enroll payer for EFT next."
+            : `Moved to ${describePaidGroup(routedTo)}.`,
       });
       void refetchSecondary();
     } catch (e) {
