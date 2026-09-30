@@ -1098,6 +1098,11 @@ function RealizationView({ data }: { data: MonthlyFinancialsPayload }) {
                 const isSum = ["Adjusted Est. Pay", "Collected — total", "TRUE realization", "Remaining ("]
                   .some((l) => label.startsWith(l));
                 const isPct = r.values.some((v) => v.endsWith("%"));
+                // The Remaining breakdown is two views of the same total: the four
+                // rows above (in flight / denied / partial / pipeline) sum to it,
+                // and so do the two below (still collecting / lost). A dotted rule
+                // marks where the second view starts (Brandon, 2026-09-30).
+                const isSplit = /^·?\s*still collecting/i.test(label);
                 return (
                   <Fragment key={r.row}>
                     {gapRows > 0 && (
@@ -1109,6 +1114,7 @@ function RealizationView({ data }: { data: MonthlyFinancialsPayload }) {
                       <td className={cn("py-1.5 pr-3 sm:pr-6", STICKY_COL,
                         isSub && "pl-5 italic text-slate-400",
                         isSum && "font-semibold border-t border-slate-300",
+                        isSplit && "border-t border-dotted border-slate-400",
                         !isSub && !isSum && "font-medium")}>
                         {label}
                       </td>
@@ -1117,6 +1123,7 @@ function RealizationView({ data }: { data: MonthlyFinancialsPayload }) {
                           i === runningIdx && MTD_CELL,
                           isSub && "italic text-slate-400",
                           isSum && "font-semibold border-t border-slate-300",
+                          isSplit && "border-t border-dotted border-slate-400",
                           !isSub && isPct && "italic text-slate-600")}>
                           {v || "—"}
                         </td>
