@@ -13,7 +13,7 @@
  * view, so nothing about the patient is more than a glance away.
  */
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CalendarClock, FileText, Loader2, Package, PauseCircle, Pencil, RotateCcw, Save, User, UserX } from "lucide-react";
+import { ArrowLeft, CalendarClock, FileText, Loader2, Package, PauseCircle, Pencil, RotateCcw, Save, Split, User, UserX } from "lucide-react";
 import { toast } from "sonner";
 import type { LiveSubscriptionPatient } from "@/api/queries/subscriptionPatients";
 import { runEligibilityCheck, saveSubscriptionPatient } from "@/api/setSubscriptionPatient";
@@ -33,6 +33,7 @@ import { ProfileView } from "./ProfileView";
 import { OrdersView } from "./OrdersView";
 import { PatientRail } from "./PatientRail";
 import { InactiveDialog } from "./InactiveDialog";
+import { SplitProfileDialog } from "./SplitProfileDialog";
 import { lastOrderDay } from "@/lib/comms/sinceOrder";
 import { draftFrom, draftPatch, isDirty, type ProfileDraft } from "./draft";
 import { usDate } from "./atoms";
@@ -176,6 +177,8 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
   const [blockOpen, setBlockOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
   const [inactiveOpen, setInactiveOpen] = useState(false);
+  const [splitOpen, setSplitOpen] = useState(false);
+  const canSplit = (p.subscriptionType || "").trim() === "Sensors & Supplies";
   const onBlockDone = (msg: string) => { toast.success(msg); void invalidate(); };
 
   return (
@@ -225,6 +228,14 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
                 unread — so there is no "advance" button; overrides live on
                 each circle, reviewing lives on the rail (Brandon, 2026-09-20). */}
             <div className="flex shrink-0 items-center gap-1.5 self-center">
+              {/* Split a Sensors & Supplies patient into two subscriptions
+                  (Brandon, 2026-09-29). */}
+              {canSplit && (
+                <Button size="sm" className="h-8 gap-1.5 bg-blue-600 text-[12px] text-white hover:bg-blue-700" onClick={() => setSplitOpen(true)}
+                  title="Split into two profiles: this one Sensors only, a new one Supplies only">
+                  <Split className="h-3.5 w-3.5" /> Split Profile
+                </Button>
+              )}
               {blocked ? (
                 <>
                   <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]" onClick={() => setCheckInOpen(true)} title="Log the check-in, unblock, or move to Not Active"><CalendarClock className="h-3.5 w-3.5" /> Check in</Button>
@@ -303,6 +314,7 @@ export function PatientPage({ patient, onBack, initialView = "profile" }: {
       <BlockDialog patient={blockOpen ? lane : null} open={blockOpen} onClose={() => setBlockOpen(false)} onDone={onBlockDone} />
       <CheckInDialog patient={checkInOpen ? lane : null} open={checkInOpen} onClose={() => setCheckInOpen(false)} onDone={onBlockDone} />
       <InactiveDialog patient={inactiveOpen ? p : null} open={inactiveOpen} onClose={() => setInactiveOpen(false)} />
+      {canSplit && <SplitProfileDialog patient={p} open={splitOpen} onClose={() => setSplitOpen(false)} />}
     </div>
   );
 }
