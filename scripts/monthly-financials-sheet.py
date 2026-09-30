@@ -483,6 +483,7 @@ def compute_realization(token, dos_year, dos_month):
         pr_c = (num(pcv.get(C_RAW_PR)) or num(pcv.get(C_PR_AMT))) if adjudicated else 0.0
         pr_total += pr_c
         est_c = line_ratevar = line_denial = line_data = 0.0
+        line_over = line_unadj = 0.0
         for sub in c.get("subitems") or []:
             cv = {v["id"]: (v["text"] or "") for v in sub["column_values"]}
             if cv.get(S_HCPC, "").strip().upper() not in KNOWN_CODES:
@@ -494,6 +495,10 @@ def compute_realization(token, dos_year, dos_month):
             if paid_l > 0 or pr_l > 0 or carc:
                 line_data += 1
                 short_l = max(0.0, est_l - paid_l - pr_l)
+                # Paid (+PR) ABOVE our estimate on a line: the payer allowed
+                # more than we estimated. Nets against rate variance so the
+                # extra money doesn't leave the Remaining breakdown short.
+                line_over += max(0.0, paid_l + pr_l - est_l)
                 if short_l >= 0.01:
                     # A denial-class CARC on the line = payer refused part
                     # of it (collectible / appealable). Otherwise the payer
@@ -503,27 +508,46 @@ def compute_realization(token, dos_year, dos_month):
                         line_denial += short_l
                     else:
                         line_ratevar += short_l
+            else:
+                # No ERA data on this line yet while other lines on the claim
+                # have it — the line itself is still unadjudicated.
+                line_unadj += est_l
         r_est += est_c
-        # Components of the primary-side gap. non_ratevar_short = the
-        # legit (collectible-in-principle) part of this claim's gap.
+        # Components of this claim's gap. Every dollar of
+        #   est_c - rate variance - primary paid - PR
+        # lands in exactly ONE of: in flight / denied $0 / partial denial,
+        # and the PR goes to the downstream pipeline — so the four rows add
+        # up to Remaining (Brandon 2026-09-30: they didn't; overpaid lines and
+        # half-adjudicated claims fell through). Rate variance is NET: an
+        # overpayment is negative variance.
+        # non_ratevar_short = the legit (collectible-in-principle) part.
         non_ratevar_short = 0.0
         if not adjudicated:
             rp_unadj += est_c
             non_ratevar_short = est_c
         elif paid <= 0:
-            zero_short = max(0.0, est_c - pr_c)
-            rp_zero += zero_short
-            non_ratevar_short = zero_short
-        else:
-            claim_short = max(0.0, est_c - paid - pr_c)
-            if line_data:
-                rp_ratevar += line_ratevar
-                rp_denial += line_denial
-                non_ratevar_short = line_denial
+            zero_short = est_c - pr_c
+            if zero_short >= 0:
+                rp_zero += zero_short
+                non_ratevar_short = zero_short
             else:
-                # no line-level ERA data (older claims) — default to rate
-                # variance, the benign bucket
-                rp_ratevar += claim_short
+                rp_ratevar += zero_short          # PR above estimate
+        elif line_data:
+            rv_net = line_ratevar - line_over
+            rp_ratevar += rv_net
+            gap = est_c - rv_net - paid - pr_c    # claim-level, primary side
+            rest = gap - line_denial - line_unadj
+            # rest > 0: the claim paid less than its lines show (offset /
+            # recoupment) — short-paid, so it belongs with partial denials.
+            # rest < 0: claim totals above line totals — more net variance.
+            rp_unadj += line_unadj
+            rp_denial += line_denial + max(0.0, rest)
+            rp_ratevar += min(0.0, rest)
+            non_ratevar_short = line_unadj + line_denial + max(0.0, rest)
+        else:
+            # no line-level ERA data (older claims) — default the gap to
+            # rate variance, the benign bucket (negative = overpaid)
+            rp_ratevar += est_c - paid - pr_c
         if gave_up:
             raw_lost += non_ratevar_short
     r_sec, r_pt = pull_secondary_collections(
@@ -532,14 +556,23 @@ def compute_realization(token, dos_year, dos_month):
     # what secondary + patient already paid (capped at the total gap);
     # everything else is primary-side (unadjudicated, underpaid, denied).
     remaining = max(0.0, r_est - (r_coll + r_sec + r_pt))
-    rem_sec = min(remaining, max(0.0, pr_total - r_sec - r_pt))
-    rem_prim = remaining - rem_sec
+    rem_sec = max(0.0, pr_total - r_sec - r_pt)
+    rem_prim = max(0.0, remaining - rem_sec)
     # True realization: back the rate variance out of the denominator,
     # then split the legit shortfall into lost (gave-up groups) vs still
     # collecting (everything else, incl. the secondary/patient pipeline).
     legit_remaining = max(0.0, (r_est - rp_ratevar) - (r_coll + r_sec + r_pt))
     lost = min(raw_lost, legit_remaining)
     still = legit_remaining - lost
+    # Tie-out: the four reason rows must add up to Remaining. They can only
+    # miss when secondary/patient collections exceed the PR the primary ERAs
+    # established (the pipeline floors at 0) — log it loudly if so.
+    parts = rp_unadj + rp_zero + rp_denial + rem_sec
+    tie = round(parts - legit_remaining, 2)
+    if abs(tie) >= 0.01:
+        print(f"WARNING Realization {r_first:%b %Y}: in flight + denied + partial + "
+              f"pipeline = {parts:.2f} but Remaining = {legit_remaining:.2f} "
+              f"(off by {tie:+.2f})")
     return dict(month=r_first.strftime("%b %Y"), est=round(r_est, 2),
                 collected=round(r_coll, 2), secondary=r_sec, patient=r_pt,
                 rem_prim=round(rem_prim, 2), rem_sec=round(rem_sec, 2),
