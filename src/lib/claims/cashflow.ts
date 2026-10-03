@@ -30,6 +30,7 @@
 //     passed down)
 
 import type { Claim } from "./types";
+import { HIT_BANK_GATE_ENABLED } from "./hitBankGate";
 import type { SecClaim } from "@/components/claims/SecondaryBoard";
 
 // Pure Medicaid only — variants like "Fidelis Medicaid" or "United Medicaid"
@@ -153,6 +154,7 @@ export function awaitingBank(opts: {
   amount?: number | null;
   method?: string | null;
 }): boolean {
+  if (!HIT_BANK_GATE_ENABLED) return false;
   if (!opts.payDate) return false;
   if ((opts.hitBank || "").trim() === "Yes") return false;
   if (opts.payDate.slice(0, 10) < HIT_BANK_GATE_START) return false;

@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The not-in-bank tile only renders with the Hit Bank gate on.
+vi.mock("@/lib/claims/hitBankGate", () => ({ HIT_BANK_GATE_ENABLED: true }));
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

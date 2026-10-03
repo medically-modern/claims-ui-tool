@@ -13,6 +13,7 @@
 // backend's hit-bank webhook / sweep closes it when the deposit lands.
 
 import { mondayQuery } from "./monday";
+import { HIT_BANK_GATE_ENABLED } from "@/lib/claims/hitBankGate";
 
 const API_BASE  = import.meta.env.VITE_API_BASE_URL as string | undefined;
 const ADMIN_KEY = import.meta.env.VITE_ADMIN_API_KEY as string | undefined;
@@ -67,7 +68,9 @@ export async function routePaidGroup(
       console.warn("[routePaidGroup] backend unreachable; falling back:", e);
     }
   }
-  const groupId = NOT_IN_BANK_GROUP[board];
+  // Fallback: with the gate off, close the row as before; with it on,
+  // park it until the deposit is confirmed.
+  const groupId = HIT_BANK_GATE_ENABLED ? NOT_IN_BANK_GROUP[board] : PAID_AND_CLOSED_GROUP;
   await mondayQuery(MOVE_GROUP_MUT, { itemId: mondayItemId, groupId });
   return { item_id: mondayItemId, moved: true, group_id: groupId, reason: "fallback" };
 }

@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// These cases exercise the gate itself, so force it on regardless of the
+// shipped switch.
+vi.mock("./hitBankGate", () => ({ HIT_BANK_GATE_ENABLED: true }));
 import { classifyForCashFlow, classifyForCashFlowSecondary, computeCashFlow, businessDaysSince } from "./cashflow";
 import type { Claim } from "./types";
 import type { SecClaim } from "@/components/claims/SecondaryBoard";
