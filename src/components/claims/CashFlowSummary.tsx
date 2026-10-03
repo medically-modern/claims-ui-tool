@@ -15,6 +15,7 @@ import { ALL_SECONDARY_CLAIMS_QUERY_KEY } from "@/hooks/useAllSecondaryClaims";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { TrendingUp, Calendar, Clock, AlertTriangle, Info, X, Activity, Landmark } from "lucide-react";
+import { HIT_BANK_GATE_ENABLED } from "@/lib/claims/hitBankGate";
 import { computeCashFlow, businessDaysSince, type BucketStat, type CashFlowEntry } from "@/lib/claims/cashflow";
 import { fmtDate, fmtMoney } from "@/lib/claims/logic";
 import type { Claim } from "@/lib/claims/types";
@@ -280,6 +281,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             onSelectAll={() => toggleBucket("High risk", "All", stats.highRisk)}
             allActive={active?.key === "High risk::All"}
           />
+          {HIT_BANK_GATE_ENABLED && (
           <Tile
             tone="orange"
             icon={<Landmark className="h-5 w-5" />}
@@ -321,6 +323,7 @@ export function CashFlowSummary({ claims, secondaryClaims = [] }: Props) {
             onSelectAll={() => toggleBucket("Paid, not in bank", "All", stats.notInBank)}
             allActive={active?.key === "Paid, not in bank::All"}
           />
+          )}
         </div>
 
         {active && (
